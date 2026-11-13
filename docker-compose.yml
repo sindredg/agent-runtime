@@ -86,6 +86,14 @@ services:
     command: [python, -m, runtime.worker]
     environment:
       DATABASE_URL: *database-url
+      # The fake provider unless .env says otherwise. The compose variables
+      # have their own names, so an ANTHROPIC_API_KEY exported in the shell
+      # never reaches the stack by accident.
+      ANTHROPIC_BASE_URL: ${PROVIDER_BASE_URL:-http://fake-provider:8000}
+      ANTHROPIC_API_KEY: ${PROVIDER_API_KEY:-not-a-real-key}
+      MODEL: ${PROVIDER_MODEL:-hello}
+      # In memory for now: a job's workspace is gone when the worker stops.
+      WORKSPACE_ROOT: /tmp/workspaces
     healthcheck:
       # Healthy while the liveness file was touched in the last 15 seconds.
       test:

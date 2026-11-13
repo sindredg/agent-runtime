@@ -80,3 +80,11 @@ def migrated_database_url(stack_database_url: str) -> Iterator[str]:
     with temporary_database(stack_database_url) as url:
         alembic(url, "upgrade", "head")
         yield url
+
+
+@pytest.fixture
+def database_url(stack_database_url: str) -> Iterator[str]:
+    """A migrated database for one test, for tests that need the tables to themselves."""
+    with temporary_database(stack_database_url) as url:
+        alembic(url, "upgrade", "head")
+        yield url

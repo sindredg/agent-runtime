@@ -19,6 +19,7 @@ from runtime.store.engine import sqlalchemy_url
 from runtime.store.jobs import (
     InvalidTransition,
     Job,
+    add_tokens_used,
     claim_job,
     claim_statement,
     create_job,
@@ -28,8 +29,6 @@ from runtime.store.jobs import (
 from runtime.store.payload import InvalidPayload, check_json
 from runtime.store.status import TRANSITIONS, JobStatus
 from runtime.store.steps import StepConflict, StepKind, append_step, read_steps
-
-from .conftest import alembic, temporary_database
 
 S = JobStatus
 DEADLINE = datetime.now(UTC) + timedelta(hours=1)
@@ -77,14 +76,6 @@ async def add_step(
         payload=payload or {},
         lease_epoch=1,
     )
-
-
-@pytest.fixture
-def database_url(stack_database_url: str) -> Any:
-    """A migrated database for one test. Claim tests need the jobs table to themselves."""
-    with temporary_database(stack_database_url) as url:
-        alembic(url, "upgrade", "head")
-        yield url
 
 
 # Jobs
@@ -601,3 +592,17 @@ def test_update_status_refuses_running(migrated_database_url: str) -> None:
 def test_update_status_of_an_unknown_job_is_rejected(migrated_database_url: str) -> None:
     with pytest.raises(InvalidTransition):
         in_transaction(migrated_database_url, lambda c: update_status(c, uuid4(), S.CANCELLED))
+
+
+def test_add_tokens_used_adds_to_the_count(migrated_database_url: str) -> None:
+    async def body(conn: AsyncConnection) -> Job | None:
+        job = await new_job(conn)
+        await add_tokens_used(conn, job.id, 40)
+        await add_tokens_used(conn, job.id, 2)
+        with pytest.raises(ValueError, match="negative"):
+            await add_tokens_used(conn, job.id, -1)
+        return await get_job(conn, job.id)
+
+    job = in_transaction(migrated_database_url, body)
+    assert job is not None
+    assert job.tokens_used == 42

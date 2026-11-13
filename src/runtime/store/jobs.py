@@ -126,6 +126,15 @@ async def claim_job(
     return None if row is None else _job(row)
 
 
+async def add_tokens_used(conn: AsyncConnection, job_id: UUID, tokens: int) -> None:
+    """Add to the job's token count. Call it in the transaction that records the usage."""
+    if tokens < 0:
+        raise ValueError("tokens must not be negative")
+    await conn.execute(
+        update(jobs).where(jobs.c.id == job_id).values(tokens_used=jobs.c.tokens_used + tokens)
+    )
+
+
 async def update_status(
     conn: AsyncConnection, job_id: UUID, new_status: JobStatus, *, error: str | None = None
 ) -> Job:

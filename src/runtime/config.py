@@ -1,8 +1,10 @@
 """Settings read from environment variables."""
 
 import os
+import socket
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 
 
 class ConfigError(Exception):
@@ -29,6 +31,20 @@ def _positive_int(env: Mapping[str, str], name: str, default: int) -> int:
     return value
 
 
+def _positive_float(env: Mapping[str, str], name: str, default: float) -> float:
+    text = env.get(name, "")
+    if not text:
+        return default
+    try:
+        value = float(text)
+    except ValueError:
+        value = 0.0
+    # `not value > 0` also refuses NaN.
+    if not value > 0 or value == float("inf"):
+        raise ConfigError(f"{name} must be a positive number, got {text!r}")
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class ProviderConfig:
     """Which provider to call and how.
@@ -51,4 +67,30 @@ class ProviderConfig:
             base_url=env.get("ANTHROPIC_BASE_URL") or None,
             model=_required(env, "MODEL"),
             max_tokens=_positive_int(env, "MAX_TOKENS", 16_000),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerConfig:
+    database_url: str
+    provider: ProviderConfig
+    # Appears as `lease_owner` on the jobs this worker holds.
+    worker_id: str
+    # Each job gets the directory `<workspace_root>/<job id>`.
+    workspace_root: Path
+    # Seconds between two looks for a job when none was found.
+    poll_interval: float
+    # Touched every few seconds; the container health check reads its age.
+    alive_file: Path
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> WorkerConfig:
+        env = os.environ if env is None else env
+        return cls(
+            database_url=_required(env, "DATABASE_URL"),
+            provider=ProviderConfig.from_env(env),
+            worker_id=env.get("WORKER_ID") or f"{socket.gethostname()}-{os.getpid()}",
+            workspace_root=Path(env.get("WORKSPACE_ROOT") or "/tmp/workspaces"),  # noqa: S108
+            poll_interval=_positive_float(env, "POLL_INTERVAL_SECONDS", 1.0),
+            alive_file=Path(env.get("WORKER_ALIVE_FILE") or "/tmp/worker.alive"),  # noqa: S108
         )
