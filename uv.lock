@@ -17,6 +17,8 @@ dependencies = [
     { name = "anthropic" },
     { name = "asyncpg" },
     { name = "fastapi" },
+    { name = "httpx2" },
+    { name = "pydantic" },
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "uvicorn" },
 ]
@@ -25,7 +27,6 @@ dependencies = [
 dev = [
     { name = "asyncpg-stubs" },
     { name = "fake-provider" },
-    { name = "httpx2" },
     { name = "hypothesis" },
     { name = "mypy" },
     { name = "pre-commit" },
@@ -40,6 +41,8 @@ requires-dist = [
     { name = "anthropic", specifier = "==2.8.0" },
     { name = "asyncpg", specifier = "==0.32.0" },
     { name = "fastapi", specifier = "==0.162.6" },
+    { name = "httpx2", specifier = "==2.16.0" },
+    { name = "pydantic", specifier = "==2.14.3" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = "==2.1.8" },
     { name = "uvicorn", specifier = "==0.54.0" },
 ]
@@ -48,7 +51,6 @@ requires-dist = [
 dev = [
     { name = "asyncpg-stubs", specifier = "==0.32.0" },
     { name = "fake-provider", editable = "services/fake_provider" },
-    { name = "httpx2", specifier = "==2.16.0" },
     { name = "hypothesis", specifier = "==6.170.15" },
     { name = "mypy", specifier = "==2.4.1" },
     { name = "pre-commit", specifier = "==4.7.0" },
