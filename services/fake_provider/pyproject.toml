@@ -5,6 +5,8 @@ description = "Scripted stand-in for the model provider, used by tests and load 
 requires-python = "==3.15.*"
 dependencies = [
     "fastapi==0.162.6",
+    # Scenario files are validated with it. FastAPI installs it anyway.
+    "pydantic==2.14.3",
     "uvicorn==0.54.0",
 ]
 

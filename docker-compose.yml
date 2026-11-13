@@ -108,6 +108,9 @@ services:
   fake-provider:
     <<: *runtime
     command: [uvicorn, fake_provider.app:app, --host, 0.0.0.0, --port, "8000"]
+    ports:
+      # Published on localhost only, so tests can read its request log.
+      - "127.0.0.1:${FAKE_PROVIDER_PORT:-8001}:8000"
     healthcheck: *http-healthcheck
 
 volumes:

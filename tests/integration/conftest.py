@@ -42,6 +42,12 @@ async def _admin(database_url: str, statement: str) -> None:
 
 
 @pytest.fixture(scope="session")
+def fake_provider_url() -> str:
+    """The compose stack's fake provider, published on localhost."""
+    return os.environ.get("FAKE_PROVIDER_URL", "http://127.0.0.1:8001")
+
+
+@pytest.fixture(scope="session")
 def stack_database_url() -> str:
     """The database the compose stack migrated."""
     return os.environ.get("DATABASE_URL", DEFAULT_DATABASE_URL)

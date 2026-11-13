@@ -225,12 +225,14 @@ version = "0.0.0"
 source = { editable = "services/fake_provider" }
 dependencies = [
     { name = "fastapi" },
+    { name = "pydantic" },
     { name = "uvicorn" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = "==0.162.6" },
+    { name = "pydantic", specifier = "==2.14.3" },
     { name = "uvicorn", specifier = "==0.54.0" },
 ]
 

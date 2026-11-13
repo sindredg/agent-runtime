@@ -68,7 +68,7 @@ select = ["E", "W", "F", "I", "B", "UP", "SIM", "ASYNC", "S", "RUF"]
 
 [tool.mypy]
 strict = true
-files = ["src", "tests", "migrations", "services/fake_provider/src"]
+files = ["src", "tests", "migrations", "scripts", "services/fake_provider/src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
