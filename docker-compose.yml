@@ -97,6 +97,8 @@ services:
       MODEL: ${PROVIDER_MODEL:-hello}
       # In memory for now: a job's workspace is gone when the worker stops.
       WORKSPACE_ROOT: /tmp/workspaces
+      # Seconds a claim holds a job. A job whose lease ran out is taken over.
+      LEASE_SECONDS: ${LEASE_SECONDS:-30}
     healthcheck:
       # Healthy while the liveness file was touched in the last 15 seconds.
       test:

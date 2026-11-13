@@ -1,6 +1,7 @@
 """The worker's outer loop: it keeps going through failures and stops when told."""
 
 import asyncio
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -60,6 +61,7 @@ def run_work(stop_after: float) -> None:
                     settings=SETTINGS,
                     worker_id="w",
                     poll_interval=0.01,
+                    lease=timedelta(seconds=7),
                     stop=stop,
                 )
         finally:
@@ -93,7 +95,9 @@ def test_a_job_that_cannot_be_finished_does_not_stop_the_loop(
         async def __aexit__(self, *error: object) -> None:
             return None
 
-    async def claim(conn: object, *, worker_id: str) -> FakeJob | None:
+    async def claim(conn: object, *, worker_id: str, lease: timedelta) -> FakeJob | None:
+        # The configured lease reaches the claim.
+        assert lease == timedelta(seconds=7)
         if len(claimed) == 3:
             return None
         claimed.append(f"job-{len(claimed)}")

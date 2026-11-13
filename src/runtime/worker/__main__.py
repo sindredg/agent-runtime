@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import signal
+from datetime import timedelta
 
 from runtime.config import WorkerConfig
 from runtime.logs import configure_logging
@@ -46,6 +47,7 @@ async def run(config: WorkerConfig) -> None:
                     settings,
                     worker_id=config.worker_id,
                     poll_interval=config.poll_interval,
+                    lease=timedelta(seconds=config.lease_seconds),
                     stop=stop,
                 )
             )

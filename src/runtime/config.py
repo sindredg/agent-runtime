@@ -82,6 +82,9 @@ class WorkerConfig:
     poll_interval: float
     # Touched every few seconds; the container health check reads its age.
     alive_file: Path
+    # How long a claim holds a job. A job whose lease ran out is taken over
+    # by the next worker that looks for one.
+    lease_seconds: float
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> WorkerConfig:
@@ -93,6 +96,7 @@ class WorkerConfig:
             workspace_root=Path(env.get("WORKSPACE_ROOT") or "/tmp/workspaces"),  # noqa: S108
             poll_interval=_positive_float(env, "POLL_INTERVAL_SECONDS", 1.0),
             alive_file=Path(env.get("WORKER_ALIVE_FILE") or "/tmp/worker.alive"),  # noqa: S108
+            lease_seconds=_positive_float(env, "LEASE_SECONDS", 30.0),
         )
 
 

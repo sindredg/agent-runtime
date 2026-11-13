@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from datetime import timedelta
 from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -42,6 +43,7 @@ async def work(
     *,
     worker_id: str,
     poll_interval: float,
+    lease: timedelta,
     stop: asyncio.Event,
 ) -> None:
     """Claim and run jobs one at a time until `stop` is set.
@@ -52,7 +54,7 @@ async def work(
     while not stop.is_set():
         try:
             async with engine.begin() as conn:
-                job = await claim_job(conn, worker_id=worker_id)
+                job = await claim_job(conn, worker_id=worker_id, lease=lease)
         except Exception:
             # The database may be restarting. Keep the worker up and try again.
             log.exception("claim failed")

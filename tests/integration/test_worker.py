@@ -539,6 +539,7 @@ def test_work_loop_runs_queued_jobs_oldest_first_and_stops_when_told(stack: Stac
                 stack.settings(),
                 worker_id="loop-worker",
                 poll_interval=0.05,
+                lease=timedelta(seconds=30),
                 stop=stop,
             )
         )
