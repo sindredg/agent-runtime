@@ -10,7 +10,7 @@ import json
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
@@ -32,6 +32,8 @@ from runtime.store.steps import StepKind, append_step, read_steps
 class Api:
     client: httpx2.AsyncClient
     engine: AsyncEngine
+    # Comment lines seen on event streams, such as keep-alives.
+    comments: list[str] = field(default_factory=list)
 
     async def new_job(self) -> Job:
         """A job that is `running`, as if a worker had claimed it."""
@@ -46,7 +48,9 @@ class Api:
         assert job is not None
         return job
 
-    async def add_steps(self, job: Job, first: int, count: int) -> None:
+    async def add_steps(
+        self, job: Job, first: int, count: int, payload: dict[str, Any] | None = None
+    ) -> None:
         """Append `count` steps starting at seq `first`, each in its own transaction."""
         for seq in range(first, first + count):
             async with self.engine.begin() as conn:
@@ -55,7 +59,7 @@ class Api:
                     job_id=job.id,
                     seq=seq,
                     kind=StepKind.MODEL_REQUEST,
-                    payload={"n": seq},
+                    payload={"n": seq} if payload is None else payload,
                     lease_epoch=1,
                 )
 
@@ -75,16 +79,22 @@ class Api:
             assert response.status_code == 200
             assert response.headers["content-type"].startswith("text/event-stream")
             fields: dict[str, str] = {}
-            async for line in response.aiter_lines():
-                if line.startswith(":"):
-                    continue
-                if line:
-                    key, _, value = line.partition(": ")
-                    fields[key] = value
-                    continue
-                event_id = int(fields["id"]) if "id" in fields else None
-                yield event_id, fields["event"], json.loads(fields["data"])
-                fields = {}
+            buffer = ""
+            # Split at line feeds only, as the event stream format says.
+            # aiter_lines would also split at U+2028 inside the data.
+            async for chunk in response.aiter_text():
+                buffer += chunk
+                *lines, buffer = buffer.split("\n")
+                for line in lines:
+                    if line.startswith(":"):
+                        self.comments.append(line)
+                    elif line:
+                        key, _, value = line.partition(": ")
+                        fields[key] = value
+                    elif fields:
+                        event_id = int(fields["id"]) if "id" in fields else None
+                        yield event_id, fields["event"], json.loads(fields["data"])
+                        fields = {}
 
 
 @asynccontextmanager
@@ -187,6 +197,17 @@ def test_submit_applies_the_configured_defaults(database_url: str) -> None:
         {"prompt": "nul \x00 inside"},
         {"prompt": "go", "files": {"a.txt": "lone surrogate \ud800"}},
         {"prompt": "lone surrogate \ud800", "surprise": 1},
+        # Larger than the column can hold, and values that only look like numbers.
+        {"prompt": "go", "token_budget": 2**63},
+        {"prompt": "go", "token_budget": "500"},
+        {"prompt": "go", "token_budget": 5.0},
+        {"prompt": "go", "timeout_seconds": True},
+        # File sets that could not all be written.
+        {"prompt": "go", "files": {"a": "1", "a/b": "2"}},
+        {"prompt": "go", "files": {"a": "1", "./a": "2"}},
+        {"prompt": "go", "files": {"a/": "1"}},
+        {"prompt": "go", "files": {"n" * 3_000_000: "1"}},
+        {"prompt": "x" * 1_000_001},
     ],
 )
 def test_submit_refuses_with_422_and_stores_nothing(
@@ -206,6 +227,15 @@ def test_submit_refuses_with_422_and_stores_nothing(
     assert response.status_code == 422
     assert response.json()["detail"]
     assert any_job is None
+
+
+def test_the_largest_token_budget_the_column_holds_is_accepted(database_url: str) -> None:
+    async def body(api: Api) -> httpx2.Response:
+        return await api.client.post("/jobs", json={"prompt": "go", "token_budget": 2**63 - 1})
+
+    response = api_test(database_url, body)
+    assert response.status_code == 201
+    assert response.json()["token_budget"] == 2**63 - 1
 
 
 # GET /jobs/{id}
@@ -269,6 +299,34 @@ def test_steps_are_returned_in_order_with_after_and_limit(database_url: str) -> 
     assert [step["seq"] for step in got["limit"]["steps"]] == [2, 3]
     assert got["past"] == {"steps": []}
     assert got["bad"] == 422
+
+
+def test_a_seq_larger_than_the_column_holds_is_422_not_500(database_url: str) -> None:
+    async def body(api: Api) -> dict[str, int]:
+        job = await api.new_job()
+        get = api.client.get
+        too_big, largest = {"after": 2**31}, {"after": 2**31 - 1}
+        return {
+            "steps over": (await get(f"/jobs/{job.id}/steps", params=too_big)).status_code,
+            "steps at": (await get(f"/jobs/{job.id}/steps", params=largest)).status_code,
+            "events over": (await get(f"/jobs/{job.id}/events", params=too_big)).status_code,
+            "header over": (
+                await get(f"/jobs/{job.id}/events", headers={"Last-Event-ID": str(2**31)})
+            ).status_code,
+            "header junk": (
+                await get(f"/jobs/{job.id}/events", headers={"Last-Event-ID": "abc"})
+            ).status_code,
+            "negative": (await get(f"/jobs/{job.id}/steps", params={"after": -1})).status_code,
+        }
+
+    assert api_test(database_url, body) == {
+        "steps over": 422,
+        "steps at": 200,
+        "events over": 422,
+        "header over": 422,
+        "header junk": 422,
+        "negative": 422,
+    }
 
 
 # GET /jobs/{id}/events
@@ -374,3 +432,40 @@ def test_healthz(database_url: str) -> None:
         return await api.client.get("/healthz")
 
     assert api_test(database_url, body).json() == {"status": "ok"}
+
+
+def test_event_stream_carries_text_with_unicode_line_separators_intact(database_url: str) -> None:
+    """U+2028, U+2029 and U+0085 inside a payload must not break an event apart.
+
+    A client that splits lines the way Python does would cut a raw U+2028
+    out of the middle of the data. The stream sends it as an escape.
+    """
+    text = "one\u2028two\u2029three\u0085four \U0001f600"
+
+    async def body(api: Api) -> tuple[list[Any], str]:
+        job = await api.new_job()
+        await api.add_steps(job, 1, 1, {"text": text})
+        await api.finish(job)
+        raw = (await api.client.get(f"/jobs/{job.id}/events")).text
+        return await api.events(job.id), raw
+
+    events, raw = api_test(database_url, body)
+    assert events[0][2]["payload"] == {"text": text}
+    assert raw.isascii()
+    assert len(raw.splitlines()) == len(raw.split("\n")) - 1
+
+
+def test_a_quiet_event_stream_sends_keep_alive_comments(database_url: str) -> None:
+    async def body(api: Api) -> tuple[list[Any], list[str]]:
+        job = await api.new_job()
+        reading = asyncio.create_task(api.events(job.id))
+        await asyncio.sleep(0.5)
+        await api.add_steps(job, 1, 1)
+        await api.finish(job)
+        return await reading, api.comments
+
+    events, comments = api_test(database_url, body, keep_alive=0.1)
+    assert comments
+    assert set(comments) == {": keep-alive"}
+    # The comments did not disturb the events around them.
+    assert [(event_id, name) for event_id, name, _ in events] == [(1, "step"), (None, "end")]

@@ -10,7 +10,7 @@ import asyncpg
 import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
@@ -427,7 +427,7 @@ json_values = st.recursive(
 
 
 def numbers_as_floats(value: Any) -> Any:
-    """jsonb does not keep int apart from float (2.0 is read back as 2), so compare as floats."""
+    """jsonb has no int or float type (1e22 is read back as an int), so compare as floats."""
     if isinstance(value, bool):
         return value
     if isinstance(value, int | float):
@@ -635,3 +635,26 @@ def test_read_progress_returns_status_and_steps_from_one_statement(
     assert got["all"] == (JobStatus.QUEUED, got["steps"])
     assert got["after"] == (JobStatus.QUEUED, got["steps"][1:2])
     assert got["past"] == (JobStatus.QUEUED, [])
+
+
+def test_read_progress_sends_one_statement(migrated_database_url: str) -> None:
+    """Status and steps must come from one snapshot, so it has to be one statement."""
+
+    async def body(engine: AsyncEngine) -> list[str]:
+        async with engine.begin() as conn:
+            job = await new_job(conn)
+            await add_step(conn, job.id, 1)
+        statements: list[str] = []
+
+        def record(conn: Any, cursor: Any, statement: str, *rest: Any) -> None:
+            statements.append(statement)
+
+        event.listen(engine.sync_engine, "before_cursor_execute", record)
+        async with engine.connect() as conn:
+            assert await read_progress(conn, job.id) is not None
+        return statements
+
+    statements = with_engine(migrated_database_url, body)
+    assert len(statements) == 1
+    assert "jobs" in statements[0]
+    assert "steps" in statements[0]

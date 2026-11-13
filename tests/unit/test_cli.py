@@ -135,14 +135,26 @@ def test_api_url_comes_from_the_flag_then_the_environment_then_the_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("RUNTIME_API_URL", raising=False)
-    assert build_parser().parse_args(["status", "x"]).api_url == DEFAULT_API_URL
+    assert build_parser().parse_args(["status", JOB_ID]).api_url == DEFAULT_API_URL
     monkeypatch.setenv("RUNTIME_API_URL", "http://env:1")
-    assert build_parser().parse_args(["status", "x"]).api_url == "http://env:1"
-    parsed = build_parser().parse_args(["--api-url", "http://flag:2", "status", "x"])
+    assert build_parser().parse_args(["status", JOB_ID]).api_url == "http://env:1"
+    parsed = build_parser().parse_args(["--api-url", "http://flag:2", "status", JOB_ID])
     assert parsed.api_url == "http://flag:2"
 
 
-@pytest.mark.parametrize("argv", [[], ["submit"], ["status"], ["logs"], ["dance", "x"]])
+@pytest.mark.parametrize(
+    "argv",
+    [
+        [],
+        ["submit"],
+        ["status"],
+        ["logs"],
+        ["dance", "x"],
+        # A job id goes into the URL. Only a UUID is accepted.
+        ["status", "../healthz"],
+        ["logs", "not-a-uuid", "--follow"],
+    ],
+)
 def test_bad_usage_exits_with_2(argv: list[str], capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit) as stopped:
         main(argv)
@@ -267,7 +279,94 @@ def test_an_api_that_cannot_be_reached_exits_with_2() -> None:
     assert "cannot reach the API" in err.getvalue()
 
 
+def test_a_step_with_unicode_line_separators_is_one_event() -> None:
+    """U+2028, U+2029 and U+0085 are line ends to Python, not to an event stream."""
+    text = "one\u2028two\u2029three\u0085four"
+    tricky = step(1, "tool_result", {"tool_use_id": "t", "content": text, "is_error": False})
+    body = (
+        f"id: 1\nevent: step\ndata: {json.dumps(tricky, ensure_ascii=False)}\n\n"
+        'event: end\ndata: {"status": "succeeded"}\n\n'
+    )
+
+    def api(request: httpx2.Request) -> httpx2.Response:
+        if request.url.path.endswith("/events"):
+            return httpx2.Response(200, headers={"content-type": "text/event-stream"}, text=body)
+        return httpx2.Response(200, json=job("succeeded"))
+
+    out, err = io.StringIO(), io.StringIO()
+    code = main(["logs", JOB_ID, "--follow"], out=out, err=err, transport=httpx2.MockTransport(api))
+    assert (code, err.getvalue()) == (0, "")
+    first = out.getvalue().split("\n")[0]
+    assert first.startswith("   1  tool_result     ok one")
+    assert "four" in first
+
+
+@pytest.mark.parametrize(
+    "events",
+    [
+        "event: step\ndata: not json\n\n",
+        'event: step\ndata: {"seq": 1}\n\n',
+        "event: end\ndata: {}\n\n",
+        'event: end\ndata: ["succeeded"]\n\n',
+    ],
+)
+def test_a_stream_with_unexpected_data_exits_with_2_without_a_traceback(events: str) -> None:
+    def api(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, headers={"content-type": "text/event-stream"}, text=events)
+
+    out, err = io.StringIO(), io.StringIO()
+    code = main(["logs", JOB_ID, "--follow"], out=out, err=err, transport=httpx2.MockTransport(api))
+    assert code == 2
+    assert err.getvalue().startswith("runtime: unexpected data")
+    assert "Traceback" not in err.getvalue()
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        httpx2.Response(200, text="<html>not the API</html>"),
+        httpx2.Response(200, json=["a", "list"]),
+        httpx2.Response(200, json={"status": "ok"}),
+        httpx2.Response(302, headers={"location": "http://elsewhere/"}),
+    ],
+    ids=["html", "list", "other-object", "redirect"],
+)
+def test_an_answer_that_is_not_a_job_exits_with_2(response: httpx2.Response) -> None:
+    out, err = io.StringIO(), io.StringIO()
+    transport = httpx2.MockTransport(lambda request: response)
+    code = main(["status", JOB_ID], out=out, err=err, transport=transport)
+    assert code == 2
+    assert err.getvalue().startswith("runtime: ")
+
+
+@pytest.mark.parametrize("text", ['{"prompt": NaN}', '{"prompt": "\\ud800"}'])
+def test_a_job_file_that_cannot_be_sent_exits_with_2(tmp_path: Path, text: str) -> None:
+    path = tmp_path / "job.json"
+    path.write_text(text)
+    api = StubApi()
+    code, out, err = run("submit", str(path), api=api)
+    assert (code, out) == (2, "")
+    assert err.startswith("runtime: ")
+
+
+def test_an_api_url_that_is_not_a_url_exits_with_2() -> None:
+    out, err = io.StringIO(), io.StringIO()
+    code = main(["--api-url", "http://[::1", "status", JOB_ID], out=out, err=err)
+    assert code == 2
+    assert "cannot reach the API" in err.getvalue()
+
+
 # Step lines
+
+
+def test_terminal_control_codes_are_not_printed() -> None:
+    hostile = "\x1b[2K\x1b[1Agone\x1b]0;title\x07 done"
+    line = format_step(
+        step(4, "tool_result", {"tool_use_id": "t", "content": hostile, "is_error": False})
+    )
+    assert "\x1b" not in line
+    assert "\x07" not in line
+    assert line == "   4  tool_result     ok ?[2K?[1Agone?]0;title? done"
 
 
 def test_error_and_failed_tool_steps_are_marked() -> None:

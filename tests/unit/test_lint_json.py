@@ -26,7 +26,17 @@ def test_valid_files_pass(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    "text", ['{"a": 1,}', "{'a': 1}", "", '{"a": 1, "a": 2}', '{"a": {"b": 1, "b": 1}}']
+    "text",
+    [
+        '{"a": 1,}',
+        "{'a': 1}",
+        "",
+        '{"a": 1, "a": 2}',
+        '{"a": {"b": 1, "b": 1}}',
+        '{"a": NaN}',
+        '{"a": [Infinity]}',
+        '{"a": -Infinity}',
+    ],
 )
 def test_a_broken_file_fails_and_is_named(tmp_path: Path, text: str) -> None:
     good, bad = tmp_path / "good.json", tmp_path / "bad.json"

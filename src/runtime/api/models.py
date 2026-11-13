@@ -21,9 +21,11 @@ class JobSubmission(JobSpec):
     """
 
     # Left out, the API's configured default is used.
-    token_budget: int | None = Field(default=None, ge=1)
+    # strict: JSON `true` or "500" is not a number here. The upper bound is
+    # the largest value the column holds.
+    token_budget: int | None = Field(default=None, ge=1, le=2**63 - 1, strict=True)
     # The job's deadline is this many seconds after submission.
-    timeout_seconds: int | None = Field(default=None, ge=1, le=MAX_TIMEOUT_SECONDS)
+    timeout_seconds: int | None = Field(default=None, ge=1, le=MAX_TIMEOUT_SECONDS, strict=True)
 
     def spec(self) -> dict[str, Any]:
         """The part that is stored as the job's spec."""

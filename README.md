@@ -62,12 +62,14 @@ make clean
 
 | Field | Required | Meaning |
 |---|---|---|
-| `prompt` | yes | The first user message |
-| `system` | no | System prompt |
+| `prompt` | yes | The first user message. Not empty. |
+| `system` | no | System prompt. Not empty if given. |
 | `model` | no | Model id. Default: the worker's `MODEL`. With the fake provider it names a scenario. |
-| `files` | no | Text files written into the job's workspace before it starts: relative path to content. 1 MiB in total. |
-| `token_budget` | no | Stored with the job. Not enforced yet. |
-| `timeout_seconds` | no | Sets the job's deadline. Not enforced yet. |
+| `files` | no | Text files written into the job's workspace before it starts: relative path to content. 1 MiB in total, paths included. Paths are plain relative paths: no `..`, no `./`, no trailing `/`, and no path that is also a directory of another. |
+| `token_budget` | no | At least 1. Stored with the job. Not enforced yet. |
+| `timeout_seconds` | no | 1 to 604800 (one week). Sets the job's deadline. Not enforced yet. |
+
+Any other field is refused.
 
 The agent has one tool, `read_file`, which reads a text file of up to 64 KiB
 from the job's workspace.
@@ -88,7 +90,7 @@ filled in when that test has run. None has.
 | Throughput scales with workers | Not measured |
 | Every job stays inside its token budget and deadline, and can be cancelled | Not built |
 | A tool cannot leave its sandbox | Not built |
-| Bad tool output does not break a job | Not built |
+| Bad tool output does not break a job | Partly built, not proven. A tool call that fails becomes an error result and the job goes on. The output cap and the tool timeout are not built. |
 
 ## Design
 
@@ -131,10 +133,12 @@ Individual checks:
 | `uv run pytest` | Unit tests |
 | `uv run pytest tests/integration` | Integration tests (needs `make up`) |
 | `uv run yamllint --strict .` | Lint YAML |
-| `uv run pre-commit install` | Run the same checks before each commit |
+| `uv run python scripts/lint_json.py <files>` | Check JSON syntax |
+| `uv run pre-commit install` | Run lint, format, type, JSON and YAML checks before each commit. It does not run tests. |
 
-The contract test compares the fake provider with the Claude API. It makes
-four small paid requests and is run by hand:
+The contract test compares the fake provider with the Claude API. It sends
+four small requests to the Claude API, one of which is refused on purpose, and
+is run by hand. It has not been run yet:
 
 ```sh
 make up

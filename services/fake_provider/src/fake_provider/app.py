@@ -17,15 +17,29 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from fake_provider.messages import build_message, encode_sse, estimate_tokens, stream_events
 from fake_provider.requests import RequestError, check_request, turn_index
 from fake_provider.scenario import Scenario, load_scenarios
 
-# The log keeps the newest entries and drops older ones, so a long load run
-# cannot fill the memory.
+# The log keeps the newest entries and drops older ones. The cap is on the
+# number of requests, not on their size.
 REQUEST_LOG_SIZE = 10_000
+
+
+def _json(content: Any, status: int = 200, headers: dict[str, str] | None = None) -> Response:
+    """A JSON response that always encodes.
+
+    json.dumps escapes everything outside ASCII, so text that is not valid
+    Unicode, which a request can carry, does not break the answer.
+    """
+    return Response(
+        content=json.dumps(content),
+        status_code=status,
+        media_type="application/json",
+        headers=headers,
+    )
 
 
 def default_scenarios() -> dict[str, Scenario]:
@@ -43,14 +57,14 @@ def create_app(scenarios: dict[str, Scenario] | None = None) -> FastAPI:
     log: deque[dict[str, Any]] = deque(maxlen=REQUEST_LOG_SIZE)
     counter = iter(range(1, 2**62))
 
-    def error(status: int, kind: str, message: str, request_id: str) -> JSONResponse:
-        return JSONResponse(
-            status_code=status,
-            content={
+    def error(status: int, kind: str, message: str, request_id: str) -> Response:
+        return _json(
+            {
                 "type": "error",
                 "error": {"type": kind, "message": message},
                 "request_id": request_id,
             },
+            status,
         )
 
     def answer(body: Any, headers: Any) -> tuple[str, int, dict[str, Any]]:
@@ -88,7 +102,8 @@ def create_app(scenarios: dict[str, Scenario] | None = None) -> FastAPI:
         request_id = f"req_fake_{seq:08d}"
         try:
             body = json.loads(await request.body())
-        except ValueError:
+        # RecursionError: JSON nested deeper than the parser's limit.
+        except ValueError, RecursionError:
             body = None
         metadata = body.get("metadata") if isinstance(body, dict) else None
         entry: dict[str, Any] = {
@@ -108,7 +123,7 @@ def create_app(scenarios: dict[str, Scenario] | None = None) -> FastAPI:
         entry.update(status=200, scenario=name, turn=turn, response_id=message["id"])
 
         if not body.get("stream"):
-            return JSONResponse(message, headers={"request-id": request_id})
+            return _json(message, headers={"request-id": request_id})
 
         def events() -> Iterator[bytes]:
             for event, data in stream_events(message):
@@ -121,9 +136,9 @@ def create_app(scenarios: dict[str, Scenario] | None = None) -> FastAPI:
         )
 
     @app.get("/_fake/requests")
-    async def read_requests(user_id: str | None = None) -> list[dict[str, Any]]:
+    async def read_requests(user_id: str | None = None) -> Response:
         """The request log, oldest first. `user_id` filters on `metadata.user_id`."""
-        return [entry for entry in log if user_id is None or entry["user_id"] == user_id]
+        return _json([entry for entry in log if user_id is None or entry["user_id"] == user_id])
 
     @app.delete("/_fake/requests", status_code=204)
     async def clear_requests() -> None:

@@ -48,6 +48,10 @@ def test_explicit_stop_reason_is_kept() -> None:
         scenario({"content": [TEXT], "delay": 5}),
         scenario({"content": [{**TEXT, "txet": "typo"}]}),
         scenario({"content": [TEXT]}, turn=1),
+        # Python's parser reads these. They are not JSON.
+        scenario({"content": [TOOL]}).replace('"a.txt"', "NaN"),
+        scenario({"content": [TOOL]}).replace('"a.txt"', "[Infinity]"),
+        scenario({"content": [TOOL]}).replace('"a.txt"', '{"n": 1e999}'),
     ],
 )
 def test_refuses(text: str) -> None:

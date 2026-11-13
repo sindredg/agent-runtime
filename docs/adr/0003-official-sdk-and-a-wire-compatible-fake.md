@@ -44,8 +44,8 @@ request, and tests read that log as the record of what was really sent.
   when the client or the fake changes. At the time of this record it has not
   been run.
 - The fake checks requests only as far as it is written to: required fields,
-  and a `tool_result` for every `tool_use`. A request it accepts can still be
-  refused by the API.
+  and that tool calls and tool results pair up one to one. A request it
+  accepts can still be refused by the API.
 - Scripted answers do not depend on tool output. A scenario cannot show that
   the model would have reacted to a result.
 - The fake has one mode, healthy. Slow, rate-limited and unavailable modes are

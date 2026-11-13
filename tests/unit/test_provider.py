@@ -13,7 +13,7 @@ import pytest
 
 from fake_provider.messages import encode_sse, stream_events
 from runtime.provider.base import ModelRequest, ModelResponse, ProviderError
-from runtime.provider.messages import AnthropicProvider
+from runtime.provider.messages import CLAUDE_API_URL, AnthropicProvider
 
 REQUEST = ModelRequest(
     model="m", max_tokens=100, messages=[{"role": "user", "content": "hi"}], user_id="job-1"
@@ -129,3 +129,60 @@ def test_a_connection_failure_is_retryable() -> None:
         complete(handler)
     assert raised.value.retryable is True
     assert raised.value.status is None
+
+
+def stream_error(kind: str) -> bytes:
+    body = {"type": "error", "error": {"type": kind, "message": "nope"}}
+    return encode_sse("error", body)
+
+
+@pytest.mark.parametrize(
+    ("kind", "retryable"),
+    [
+        ("overloaded_error", True),
+        ("api_error", True),
+        ("rate_limit_error", True),
+        ("invalid_request_error", False),
+    ],
+)
+def test_an_error_event_inside_a_started_stream_is_classified_by_its_type(
+    kind: str, retryable: bool
+) -> None:
+    """The HTTP status was 200. The error arrives as an event after some output."""
+    with pytest.raises(ProviderError) as raised:
+        complete(lambda request: sse([*STREAM[:3], stream_error(kind)]))
+    assert raised.value.retryable is retryable
+    assert raised.value.status is None
+    assert kind in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        sse([]),
+        sse([encode_sse("ping", {"type": "ping"})]),
+        sse([b"event: message_start\ndata: {not json\n\n"]),
+        httpx2.Response(200, json={"hello": "not a stream"}),
+        httpx2.Response(200, text="<html>a proxy's page</html>"),
+        httpx2.Response(204),
+    ],
+    ids=["empty", "ping-only", "bad-json-line", "json-body", "html-body", "no-content"],
+)
+def test_a_200_that_is_not_a_message_stream_is_a_provider_error(response: httpx2.Response) -> None:
+    with pytest.raises(ProviderError) as raised:
+        complete(lambda request: response)
+    assert raised.value.retryable is True
+    assert raised.value.status is None
+
+
+def test_the_base_url_never_comes_from_the_process_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The SDK reads ANTHROPIC_BASE_URL itself when given none. The client always gives one."""
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://somewhere-else:1")
+    default = AnthropicProvider(api_key="k", base_url=None)
+    assert str(default._client.base_url).rstrip("/") == CLAUDE_API_URL
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "")
+    assert str(AnthropicProvider(api_key="k")._client.base_url).rstrip("/") == CLAUDE_API_URL
+    chosen = AnthropicProvider(api_key="k", base_url="http://fake:8000")
+    assert str(chosen._client.base_url).rstrip("/") == "http://fake:8000"

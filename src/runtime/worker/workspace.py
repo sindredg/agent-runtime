@@ -1,5 +1,6 @@
 """The job workspace: the one directory a job's tools may read."""
 
+import shutil
 from collections.abc import Mapping
 from pathlib import Path
 from uuid import UUID
@@ -16,8 +17,17 @@ def prepare_workspace(root: Path, job_id: UUID, files: Mapping[str, str]) -> Pat
     workspace = root / str(job_id)
     workspace.mkdir(parents=True, exist_ok=True)
     for name, content in files.items():
-        (workspace / check_relative(name)).parent.mkdir(parents=True, exist_ok=True)
+        relative = check_relative(name)
+        # Directories are made one level at a time, each checked first. A
+        # link that leads out is refused before anything is created past it.
+        for parent in reversed(relative.parents[:-1]):
+            resolve_in_workspace(workspace, str(parent)).mkdir(exist_ok=True)
         target = resolve_in_workspace(workspace, name)
         if not target.exists():
             target.write_text(content, encoding="utf-8")
     return workspace
+
+
+def remove_workspace(root: Path, job_id: UUID) -> None:
+    """Delete `root/<job_id>`. A workspace that is not there is not an error."""
+    shutil.rmtree(root / str(job_id), ignore_errors=True)

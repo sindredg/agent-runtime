@@ -14,6 +14,7 @@ import sys
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any, TextIO
+from uuid import UUID
 
 import httpx2
 
@@ -24,6 +25,14 @@ PREVIEW = 100
 
 class CommandError(Exception):
     """The command cannot be carried out. The message is for the user."""
+
+
+def _job_id(text: str) -> str:
+    """A job id is a UUID. It goes into the URL, so anything else is refused here."""
+    try:
+        return str(UUID(text))
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a job id") from error
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -42,11 +51,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     status = commands.add_parser("status", help="show a job's status")
-    status.add_argument("job_id")
+    status.add_argument("job_id", type=_job_id)
     status.add_argument("--json", action="store_true", help="print the job as JSON")
 
     logs = commands.add_parser("logs", help="print a job's steps")
-    logs.add_argument("job_id")
+    logs.add_argument("job_id", type=_job_id)
     logs.add_argument(
         "--follow", action="store_true", help="keep printing new steps until the job ends"
     )
@@ -54,7 +63,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _preview(text: str) -> str:
-    line = " ".join(text.split())
+    """One short line. Text from a model or a tool can hold terminal control
+    codes; anything that is not printable is shown as `?`."""
+    line = "".join(char if char.isprintable() else "?" for char in " ".join(text.split()))
     return line if len(line) <= PREVIEW else line[: PREVIEW - 3] + "..."
 
 
@@ -111,6 +122,22 @@ def _steps(client: httpx2.Client, job_id: str) -> Iterator[dict[str, Any]]:
         after = page[-1]["seq"]
 
 
+def _lines(response: httpx2.Response) -> Iterator[str]:
+    """The stream's lines, split at line feeds only.
+
+    `iter_lines` would also split at U+2028 and other characters that are
+    line ends to Python but ordinary data in an event stream.
+    """
+    buffer = ""
+    for chunk in response.iter_text():
+        buffer += chunk
+        *complete, buffer = buffer.split("\n")
+        for line in complete:
+            yield line.removesuffix("\r")
+    if buffer:
+        yield buffer.removesuffix("\r")
+
+
 def _follow(client: httpx2.Client, job_id: str, out: TextIO) -> str:
     """Print steps from the event stream as they arrive. Returns the final status."""
     after = 0
@@ -123,7 +150,7 @@ def _follow(client: httpx2.Client, job_id: str, out: TextIO) -> str:
             response.read()
             _check(response)
         event, data = "", ""
-        for line in response.iter_lines():
+        for line in _lines(response):
             if line.startswith("event: "):
                 event = line.removeprefix("event: ")
             elif line.startswith("data: "):
@@ -199,8 +226,13 @@ def main(
             return handler(client, args, out)
     except CommandError as error:
         print(f"runtime: {error}", file=err)
-    except httpx2.HTTPError as error:
+    except (httpx2.HTTPError, httpx2.InvalidURL) as error:
         print(f"runtime: cannot reach the API at {args.api_url}: {error}", file=err)
+    except (ValueError, LookupError, TypeError, AttributeError) as error:
+        # An answer that is not what the API sends, or a job file that cannot
+        # be sent as JSON. Reported in one line; exit status 1 stays reserved
+        # for a job that did not succeed.
+        print(f"runtime: unexpected data: {type(error).__name__}: {error}", file=err)
     return 2
 
 

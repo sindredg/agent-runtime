@@ -5,11 +5,12 @@ returns when the request already holds N assistant messages, so sending the
 same conversation again always gets the same answer.
 """
 
+import math
 import re
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # A scenario's name is its file name without `.json`, and the model id that selects it.
 NAME_PATTERN = re.compile(r"[a-z0-9][a-z0-9-]*")
@@ -25,10 +26,29 @@ class TextBlock(_Strict):
     text: str = Field(min_length=1)
 
 
+def _has_non_finite(value: Any) -> bool:
+    if isinstance(value, float):
+        return not math.isfinite(value)
+    if isinstance(value, dict):
+        return any(_has_non_finite(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_has_non_finite(item) for item in value)
+    return False
+
+
 class ToolUseBlock(_Strict):
     type: Literal["tool_use"]
     name: str = Field(min_length=1)
     input: dict[str, Any]
+
+    @field_validator("input")
+    @classmethod
+    def _input_is_json(cls, value: dict[str, Any]) -> dict[str, Any]:
+        # Python's parser accepts NaN and Infinity. They are not JSON, and
+        # the answer built from them could not be sent.
+        if _has_non_finite(value):
+            raise ValueError("a tool input holds NaN or infinity, which is not JSON")
+        return value
 
 
 Block = Annotated[TextBlock | ToolUseBlock, Field(discriminator="type")]

@@ -67,7 +67,7 @@ def test_refuses_an_absolute_path_to_a_file_inside_the_workspace(workspace: Path
         ("link.txt", "../secret.txt"),
         ("abs-link.txt", "ABSOLUTE"),
         ("linked-dir", "../outside-dir"),
-        ("sub/up", ".."),
+        ("sub/out", "../.."),
     ],
 )
 def test_refuses_a_symlink_that_leaves_the_workspace(
@@ -76,7 +76,9 @@ def test_refuses_a_symlink_that_leaves_the_workspace(
     if target == "ABSOLUTE":
         target = str(workspace.parent / "secret.txt")
     os.symlink(target, workspace / link)
-    path = {"linked-dir": "linked-dir/secret.txt", "sub/up": "sub/up/../secret.txt"}.get(link, link)
+    # None of the requested paths holds `..`: only the symlink check can refuse them.
+    path = {"linked-dir": "linked-dir/secret.txt", "sub/out": "sub/out/secret.txt"}.get(link, link)
+    assert ".." not in path
     result = read(workspace, path)
     assert result.is_error
     assert "path not allowed" in result.content

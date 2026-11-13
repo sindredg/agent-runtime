@@ -27,12 +27,21 @@ def _blocks(message: dict[str, Any]) -> list[dict[str, Any]]:
     raise _invalid("messages: content must be a string or a list of content blocks")
 
 
+def _text_id(block: dict[str, Any], key: str) -> str:
+    value = block.get(key)
+    if not isinstance(value, str) or not value:
+        raise _invalid(f"{block.get('type')}.{key}: must be a non-empty string")
+    return value
+
+
 def check_request(body: Any) -> list[dict[str, Any]]:
     """Refuse what the real API refuses outright. Returns the messages.
 
-    Checked: the required fields, and that every assistant `tool_use` is
-    answered by a `tool_result` in the next user message. A worker that
-    loses a tool result fails here as it would against the real API.
+    Checked: the required fields, and that tool calls and results pair up.
+    Every assistant `tool_use` is answered by exactly one `tool_result` in
+    the next user message, and no `tool_result` is without its `tool_use`.
+    A worker that loses or repeats a tool result fails here as it would
+    against the real API.
     """
     if not isinstance(body, dict):
         raise _invalid("the request body must be a JSON object")
@@ -53,24 +62,32 @@ def check_request(body: Any) -> list[dict[str, Any]]:
     if messages[-1]["role"] != "user":
         raise _invalid("messages: the conversation must end with a user message")
 
-    for position, message in enumerate(messages[:-1]):
-        if message["role"] != "assistant":
+    previous_calls: set[str] = set()
+    for position, message in enumerate(messages):
+        blocks = _blocks(message)
+        if message["role"] == "assistant":
+            calls = [_text_id(b, "id") for b in blocks if b.get("type") == "tool_use"]
+            if len(set(calls)) != len(calls):
+                raise _invalid(f"messages.{position}: tool_use ids must be unique")
+            previous_calls = set(calls)
             continue
-        called = {b.get("id") for b in _blocks(message) if b.get("type") == "tool_use"}
-        if not called:
-            continue
-        following = messages[position + 1]
-        answered = (
-            {b.get("tool_use_id") for b in _blocks(following) if b.get("type") == "tool_result"}
-            if following["role"] == "user"
-            else set()
-        )
-        missing = sorted(str(tool_use_id) for tool_use_id in called - answered)
+        results = [_text_id(b, "tool_use_id") for b in blocks if b.get("type") == "tool_result"]
+        if len(set(results)) != len(results):
+            raise _invalid(f"messages.{position}: more than one tool_result for one tool_use id")
+        unexpected = sorted(set(results) - previous_calls)
+        if unexpected:
+            raise _invalid(
+                f"messages.{position}: unexpected tool_use_id in tool_result blocks:"
+                f" {', '.join(unexpected)}. Each tool_result needs a tool_use in the"
+                " previous message."
+            )
+        missing = sorted(previous_calls - set(results))
         if missing:
             raise _invalid(
-                f"messages.{position + 1}: tool_use ids were found without tool_result"
+                f"messages.{position}: tool_use ids were found without tool_result"
                 f" blocks immediately after: {', '.join(missing)}"
             )
+        previous_calls = set()
     return messages
 
 

@@ -16,7 +16,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from runtime.provider.base import ModelRequest, Provider, ProviderError
+from runtime.provider.base import ModelRequest, ModelResponse, Provider, ProviderError
 from runtime.spec import JobSpec
 from runtime.store.jobs import Job, add_tokens_used, update_status
 from runtime.store.payload import InvalidPayload, check_json
@@ -24,7 +24,7 @@ from runtime.store.status import JobStatus
 from runtime.store.steps import Step, StepKind, append_step, read_steps
 from runtime.tools.base import ToolRegistry, ToolResult
 from runtime.worker.replay import replay
-from runtime.worker.workspace import prepare_workspace
+from runtime.worker.workspace import prepare_workspace, remove_workspace
 
 log = logging.getLogger("runtime.worker")
 
@@ -76,20 +76,45 @@ class _StepWriter:
 
 
 async def _run_tool(tools: ToolRegistry, workspace: Path, call: dict[str, Any]) -> ToolResult:
-    """Run one tool call. Every failure becomes an error result for the model."""
+    """Run one tool call. A failure of the tool becomes an error result for the model."""
     tool = tools.get(call["name"])
     if tool is None:
         return ToolResult(f"unknown tool: {call['name']}", is_error=True)
     try:
         result = await asyncio.to_thread(tool.run, workspace, call["input"])
-    except Exception as error:
+    # SystemExit too: a tool that calls sys.exit() must not take the worker down.
+    except (Exception, SystemExit) as error:
         log.exception("tool raised", extra={"tool": call["name"]})
-        return ToolResult(f"the tool failed: {error}", is_error=True)
+        result = ToolResult(f"the tool failed: {error}", is_error=True)
+    if not isinstance(result, ToolResult) or not isinstance(result.content, str):
+        return ToolResult("the tool returned no text result", is_error=True)
     try:
         check_json(result.content)
     except InvalidPayload as error:
         return ToolResult(f"the tool's output cannot be stored: {error}", is_error=True)
     return result
+
+
+def _response_problem(response: ModelResponse) -> str | None:
+    """What is wrong with a response's shape, or None. Checked before any tool runs."""
+    if not response.stop_reason:
+        return "it has no stop_reason"
+    content: Any = response.content
+    if not isinstance(content, list) or not all(isinstance(block, dict) for block in content):
+        return "its content is not a list of blocks"
+    ids = []
+    for block in content:
+        if block.get("type") != "tool_use":
+            continue
+        tool_use_id, name = block.get("id"), block.get("name")
+        if not (isinstance(tool_use_id, str) and tool_use_id and isinstance(name, str)):
+            return "a tool_use block has no id or no name"
+        if not isinstance(block.get("input"), dict):
+            return "a tool_use block's input is not an object"
+        ids.append(tool_use_id)
+    if len(set(ids)) != len(ids):
+        return "two tool_use blocks have the same id"
+    return None
 
 
 async def _loop(
@@ -123,19 +148,31 @@ async def _loop(
                 response = await provider.complete(request)
             except ProviderError as error:
                 raise _JobFailed(f"model call failed: {error}") from error
+            payload: dict[str, Any] = {
+                "id": response.id,
+                "content": response.content,
+                "stop_reason": response.stop_reason,
+                "usage": {
+                    "input_tokens": response.input_tokens,
+                    "output_tokens": response.output_tokens,
+                },
+            }
+            problem = _response_problem(response)
+            try:
+                check_json(payload)
+            except InvalidPayload as error:
+                # The tokens were spent, so the step and the count are still
+                # written. Only the content that cannot be stored is left out.
+                problem = problem or f"it cannot be stored: {error}"
+                payload["content"] = []
+                payload["content_dropped"] = True
             await writer.append(
                 StepKind.MODEL_RESPONSE,
-                {
-                    "id": response.id,
-                    "content": response.content,
-                    "stop_reason": response.stop_reason,
-                    "usage": {
-                        "input_tokens": response.input_tokens,
-                        "output_tokens": response.output_tokens,
-                    },
-                },
+                payload,
                 tokens=response.input_tokens + response.output_tokens,
             )
+            if problem:
+                raise _JobFailed(f"the model's response is not usable: {problem}")
             continue
 
         # A response cut off at max_tokens can hold half a tool call, so the
@@ -174,34 +211,41 @@ async def run_job(
     """Run a job this worker has claimed and return its final status.
 
     A failure of the job (a bad spec, a provider error, a response that
-    cannot be stored) is recorded as an `error` step and the status
-    `failed`. Only a failure to record that reaches the caller.
+    cannot be used) is recorded as an `error` step and the status `failed`.
+    Only a failure to record the outcome reaches the caller, and the job
+    then stays `running`. The workspace is removed once the outcome is
+    recorded.
     """
     async with engine.begin() as conn:
         writer = _StepWriter(engine, job, await read_steps(conn, job.id))
+    failure: str | None = None
     try:
         spec = JobSpec.model_validate(job.spec)
         workspace = await asyncio.to_thread(
             prepare_workspace, settings.workspace_root, job.id, spec.files
         )
         await _loop(writer, provider, tools, job, spec, settings, workspace)
+    except _JobFailed as error:
+        failure = str(error)
     except Exception as error:
-        message = (
-            str(error) if isinstance(error, _JobFailed) else f"{type(error).__name__}: {error}"
-        )
-        if not isinstance(error, _JobFailed):
-            log.exception("job crashed", extra={"job_id": job.id})
-        try:
-            check_json(message)
-        except InvalidPayload:
-            message = "the job failed with an error that cannot be stored as text"
-        await writer.append(StepKind.ERROR, {"message": message})
-        async with engine.begin() as conn:
-            await update_status(conn, job.id, JobStatus.FAILED, error=message)
-        log.info("job finished", extra={"job_id": job.id, "status": "failed", "error": message})
-        return JobStatus.FAILED
+        log.exception("job crashed", extra={"job_id": job.id})
+        failure = f"{type(error).__name__}: {error}"
 
+    if failure is None:
+        status = JobStatus.SUCCEEDED
+    else:
+        status = JobStatus.FAILED
+        try:
+            check_json(failure)
+        except InvalidPayload:
+            failure = "the job failed with an error that cannot be stored as text"
+        # Read the log again first: if the failure was a step that did not
+        # go in, the writer's idea of the next seq may be wrong.
+        async with engine.begin() as conn:
+            writer.steps = await read_steps(conn, job.id)
+        await writer.append(StepKind.ERROR, {"message": failure})
     async with engine.begin() as conn:
-        await update_status(conn, job.id, JobStatus.SUCCEEDED)
-    log.info("job finished", extra={"job_id": job.id, "status": "succeeded"})
-    return JobStatus.SUCCEEDED
+        await update_status(conn, job.id, status, error=failure)
+    await asyncio.to_thread(remove_workspace, settings.workspace_root, job.id)
+    log.info("job finished", extra={"job_id": job.id, "status": status.value, "error": failure})
+    return status

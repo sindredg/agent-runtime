@@ -151,7 +151,11 @@ def test_stream_has_the_api_event_order_and_rebuilds_the_message() -> None:
 
 
 json_values = st.recursive(
-    st.none() | st.booleans() | st.integers() | st.floats(allow_nan=False) | st.text(),
+    st.none()
+    | st.booleans()
+    | st.integers()
+    | st.floats(allow_nan=False, allow_infinity=False)
+    | st.text(),
     lambda children: st.lists(children) | st.dictionaries(st.text(), children),
     max_leaves=10,
 )
@@ -234,19 +238,67 @@ def test_a_turn_past_the_end_of_the_scenario_is_400() -> None:
     assert "2 turns" in response.json()["error"]["message"]
 
 
+RESULT = {"type": "tool_result", "tool_use_id": "toolu_fake_two_00_01", "content": "x"}
+
+
 @pytest.mark.parametrize(
-    "answer",
+    ("answer", "named"),
     [
-        {"role": "user", "content": "no result here"},
-        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "other"}]},
+        ("no result here", "toolu_fake_two_00_01"),
+        ([{"type": "tool_result", "tool_use_id": "other", "content": "x"}], "other"),
+        ([RESULT, RESULT], "more than one tool_result"),
+        ([RESULT, {**RESULT, "tool_use_id": "extra"}], "extra"),
+        ([{**RESULT, "tool_use_id": ["a", "list"]}], "non-empty string"),
+        ([{**RESULT, "tool_use_id": {"a": "dict"}}], "non-empty string"),
+        ([{"type": "tool_result", "content": "x"}], "non-empty string"),
     ],
+    ids=["missing", "wrong-id", "twice", "one-too-many", "list-id", "dict-id", "no-id"],
 )
-def test_a_tool_use_without_its_tool_result_is_400(answer: dict[str, Any]) -> None:
+def test_tool_results_that_do_not_pair_with_the_tool_calls_are_400(answer: Any, named: str) -> None:
     body = second_request()
-    body["messages"][2] = answer
+    body["messages"][2] = {"role": "user", "content": answer}
     response = client().post("/v1/messages", json=body, headers=HEADERS)
     assert error_of(response) == (400, "invalid_request_error")
-    assert "toolu_fake_two_00_01" in response.json()["error"]["message"]
+    assert named in response.json()["error"]["message"]
+
+
+def test_a_tool_result_without_any_tool_call_is_400() -> None:
+    body = request(messages=[{"role": "user", "content": [RESULT]}])
+    response = client().post("/v1/messages", json=body, headers=HEADERS)
+    assert error_of(response) == (400, "invalid_request_error")
+
+
+def test_two_tool_calls_with_one_id_in_an_assistant_message_are_400() -> None:
+    call = {"type": "tool_use", "id": "same", "name": "t", "input": {}}
+    body = request(
+        messages=[
+            USER,
+            {"role": "assistant", "content": [call, call]},
+            {"role": "user", "content": [{**RESULT, "tool_use_id": "same"}]},
+        ]
+    )
+    response = client().post("/v1/messages", json=body, headers=HEADERS)
+    assert error_of(response) == (400, "invalid_request_error")
+    assert "unique" in response.json()["error"]["message"]
+
+
+def test_json_nested_too_deep_is_400_not_500() -> None:
+    response = client().post("/v1/messages", content=b"[" * 200_000, headers=HEADERS)
+    assert error_of(response) == (400, "invalid_request_error")
+
+
+def test_text_that_is_not_valid_unicode_never_breaks_an_answer() -> None:
+    """A lone surrogate arrives as a JSON escape. It must not make any response fail."""
+    api = client()
+    lone = json.dumps(request(model="\ud800"))
+    unknown = api.post("/v1/messages", content=lone, headers=HEADERS)
+    assert error_of(unknown) == (404, "not_found_error")
+    in_text = json.dumps(request(messages=[{"role": "user", "content": "x \udfff y"}]))
+    assert api.post("/v1/messages", content=in_text, headers=HEADERS).status_code == 200
+    # The log holds both requests and can still be read.
+    log = api.get("/_fake/requests")
+    assert log.status_code == 200
+    assert len(log.json()) == 2
 
 
 # Request log

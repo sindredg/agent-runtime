@@ -13,6 +13,20 @@ from runtime.provider.base import ModelRequest, ModelResponse, ProviderError
 
 # Statuses worth sending again later. Everything else is a fault in the request.
 _RETRYABLE_STATUSES = frozenset({408, 409, 429})
+# Error types the API can send as an event inside a stream that began with 200.
+_RETRYABLE_ERROR_TYPES = frozenset(
+    {"overloaded_error", "api_error", "rate_limit_error", "timeout_error"}
+)
+# Named here so that the client never falls back to ANTHROPIC_BASE_URL in the
+# process environment: the caller's configuration alone decides.
+CLAUDE_API_URL = "https://api.anthropic.com"
+
+
+def _error_type(error: anthropic.APIStatusError) -> str | None:
+    body = error.body
+    detail = body.get("error") if isinstance(body, dict) else None
+    kind = detail.get("type") if isinstance(detail, dict) else None
+    return kind if isinstance(kind, str) else None
 
 
 class AnthropicProvider:
@@ -25,8 +39,7 @@ class AnthropicProvider:
     ) -> None:
         self._client = anthropic.AsyncAnthropic(
             api_key=api_key,
-            # None means the SDK's default, the Claude API.
-            base_url=base_url,
+            base_url=base_url or CLAUDE_API_URL,
             # The SDK would retry on its own. The runtime decides about
             # retries itself, so that each attempt is visible in the step log.
             max_retries=0,
@@ -53,19 +66,33 @@ class AnthropicProvider:
                 message = await stream.get_final_message()
         except anthropic.APIStatusError as error:
             status = error.status_code
+            if status < 400:
+                # An `error` event inside a stream that started with 200.
+                # This is how overload is reported once output has begun.
+                kind = _error_type(error)
+                raise ProviderError(
+                    f"provider sent an error during the stream: {kind}: {error.message}",
+                    status=None,
+                    retryable=kind in _RETRYABLE_ERROR_TYPES,
+                ) from error
             raise ProviderError(
                 f"provider answered {status}: {error.message}",
                 status=status,
                 retryable=status in _RETRYABLE_STATUSES or status >= 500,
             ) from error
-        except anthropic.APIConnectionError as error:
-            # Includes timeouts and a connection that broke during the stream.
-            raise ProviderError(
-                f"no complete response from the provider: {error}", status=None, retryable=True
-            ) from error
-        except httpx2.HTTPError as error:
+        except (anthropic.APIError, httpx2.HTTPError) as error:
+            # Timeouts, a connection that broke during the stream, a response
+            # the SDK could not validate.
             raise ProviderError(
                 f"no complete response from the provider: {error!r}", status=None, retryable=True
+            ) from error
+        except (AssertionError, ValueError, RuntimeError) as error:
+            # What the SDK raises for a 200 that is not a message stream: an
+            # empty body, other content, or a line that is not JSON.
+            raise ProviderError(
+                f"the provider's answer is not a message stream: {error!r}",
+                status=None,
+                retryable=True,
             ) from error
 
         if message.stop_reason is None:

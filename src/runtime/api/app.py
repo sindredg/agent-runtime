@@ -27,6 +27,9 @@ from runtime.store.steps import read_progress
 
 # Most steps one request or one poll of the event stream reads.
 MAX_PAGE = 1000
+# The largest `seq` the steps table can hold. A larger value in a request
+# is refused up front; the database would refuse it with an error.
+MAX_SEQ = 2**31 - 1
 # A comment line is sent after this many silent seconds, so proxies and
 # clients do not take a quiet stream for a dead one.
 KEEP_ALIVE_SECONDS = 15.0
@@ -39,7 +42,11 @@ def _event(name: str, data: str, event_id: int | None = None) -> bytes:
 
 
 def create_app(
-    config: ApiConfig | None = None, *, poll_interval: float = 0.5, page_size: int = MAX_PAGE
+    config: ApiConfig | None = None,
+    *,
+    poll_interval: float = 0.5,
+    page_size: int = MAX_PAGE,
+    keep_alive: float = KEEP_ALIVE_SECONDS,
 ) -> FastAPI:
     """Build the application.
 
@@ -114,7 +121,7 @@ def create_app(
     @app.get("/jobs/{job_id}/steps")
     async def read_job_steps(
         job_id: UUID,
-        after: Annotated[int, Query(ge=0)] = 0,
+        after: Annotated[int, Query(ge=0, le=MAX_SEQ)] = 0,
         limit: Annotated[int, Query(ge=1, le=MAX_PAGE)] = MAX_PAGE,
     ) -> StepList:
         """Steps with `seq` greater than `after`, in order, at most `limit`."""
@@ -128,8 +135,8 @@ def create_app(
     async def follow_job(
         request: Request,
         job_id: UUID,
-        after: Annotated[int, Query(ge=0)] = 0,
-        last_event_id: Annotated[int | None, Header(ge=0)] = None,
+        after: Annotated[int, Query(ge=0, le=MAX_SEQ)] = 0,
+        last_event_id: Annotated[int | None, Header(ge=0, le=MAX_SEQ)] = None,
     ) -> StreamingResponse:
         """Server-sent events: one `step` event per step, then one `end` event.
 
@@ -152,8 +159,11 @@ def create_app(
                     return
                 status, steps = progress
                 for step in steps:
-                    view = StepView.model_validate(step)
-                    yield _event("step", view.model_dump_json(), step.seq)
+                    view = StepView.model_validate(step).model_dump(mode="json")
+                    # json.dumps escapes everything outside ASCII. A raw
+                    # U+2028 in the data would be read as a line end by
+                    # clients that split lines the way Python does.
+                    yield _event("step", json.dumps(view), step.seq)
                     last = step.seq
                 if len(steps) == page_size:
                     # A full page: there may be more, so read on without waiting.
@@ -163,7 +173,7 @@ def create_app(
                     return
                 if steps:
                     quiet_since = time.monotonic()
-                elif time.monotonic() - quiet_since >= KEEP_ALIVE_SECONDS:
+                elif time.monotonic() - quiet_since >= keep_alive:
                     yield b": keep-alive\n\n"
                     quiet_since = time.monotonic()
                 await asyncio.sleep(poll_interval)

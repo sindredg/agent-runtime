@@ -20,7 +20,7 @@ from runtime.provider.messages import AnthropicProvider
 from runtime.store.engine import create_engine
 from runtime.store.jobs import Job, claim_job, create_job, get_job
 from runtime.store.status import JobStatus
-from runtime.store.steps import Step, StepKind, read_steps
+from runtime.store.steps import Step, StepKind, append_step, read_steps
 from runtime.tools import default_tools
 from runtime.tools.base import Tool, ToolRegistry, ToolResult
 from runtime.worker.agent import AgentSettings, run_job
@@ -180,15 +180,36 @@ def boom(workspace: Path, tool_input: dict[str, Any]) -> ToolResult:
     raise RuntimeError("disk on fire")
 
 
+def exits(workspace: Path, tool_input: dict[str, Any]) -> ToolResult:
+    raise SystemExit(3)
+
+
+def boom_with_nul(workspace: Path, tool_input: dict[str, Any]) -> ToolResult:
+    raise RuntimeError("bad byte \x00 in the message")
+
+
 @pytest.mark.parametrize(
     ("tools", "expected"),
     [
         (ToolRegistry(), "unknown tool: read_file"),
         (stub_tool(boom), "the tool failed: disk on fire"),
+        (stub_tool(exits), "the tool failed: 3"),
+        (stub_tool(boom_with_nul), "the tool's output cannot be stored"),
+        (stub_tool(lambda w, i: None), "the tool returned no text result"),  # type: ignore[arg-type, return-value]
+        (stub_tool(lambda w, i: ToolResult(b"bytes")), "the tool returned no text result"),  # type: ignore[arg-type]
         (stub_tool(lambda w, i: ToolResult("a\x00b")), "the tool's output cannot be stored"),
         (stub_tool(lambda w, i: ToolResult("no such file", is_error=True)), "no such file"),
     ],
-    ids=["unknown-tool", "tool-raises", "output-not-storable", "tool-reports-error"],
+    ids=[
+        "unknown-tool",
+        "tool-raises",
+        "tool-calls-exit",
+        "tool-raises-with-nul",
+        "tool-returns-none",
+        "tool-returns-bytes",
+        "output-not-storable",
+        "tool-reports-error",
+    ],
 )
 def test_a_failed_tool_call_is_an_error_result_and_the_job_goes_on(
     stack: Stack, tools: ToolRegistry, expected: str
@@ -229,7 +250,8 @@ def test_a_spec_the_worker_cannot_use_fails_the_job_before_any_model_call(
     assert outcome.kinds == [K.ERROR]
     assert outcome.job.status is JobStatus.FAILED
     assert outcome.requests == []
-    assert not (stack.workspace_root.parent / "escape.txt").exists()
+    # Nothing was written anywhere under the test's directory.
+    assert [p for p in stack.workspace_root.parent.rglob("*") if p.is_file()] == []
 
 
 class OneResponse:
@@ -241,6 +263,10 @@ class OneResponse:
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
         self.calls += 1
+        # A loop that keeps calling the model is cut short here, so a test
+        # of that mistake fails at once and does not hang.
+        if self.calls > 3:
+            raise RuntimeError("the model was called again and again")
         return self.response
 
     async def aclose(self) -> None:
@@ -292,19 +318,150 @@ def test_a_response_that_did_not_finish_fails_the_job_and_runs_no_tool(
     assert job.tokens_used == 12
 
 
+def run_with(stack: Stack, provider: Any, tools: ToolRegistry) -> tuple[Job, list[Step]]:
+    """One job with a stand-in provider, read back afterwards."""
+
+    async def body(engine: AsyncEngine, _: AnthropicProvider) -> tuple[Job, list[Step]]:
+        async with engine.begin() as conn:
+            await create_job(
+                conn,
+                spec={"prompt": "go"},
+                token_budget=1000,
+                deadline=datetime.now(UTC) + timedelta(hours=1),
+            )
+            claimed = await claim_job(conn, worker_id="test-worker")
+        assert claimed is not None
+        if hasattr(provider, "attach"):
+            provider.attach(engine, claimed)
+        await run_job(engine, provider, tools, claimed, stack.settings())
+        async with engine.begin() as conn:
+            job = await get_job(conn, claimed.id)
+            assert job is not None
+            return job, await read_steps(conn, claimed.id)
+
+    return stack.run(body)
+
+
+def tool_call(tool_use_id: Any = "toolu_1", **changes: Any) -> dict[str, Any]:
+    block = {"type": "tool_use", "id": tool_use_id, "name": "read_file", "input": {"path": "a"}}
+    return {**block, **changes}
+
+
+@pytest.mark.parametrize(
+    ("content", "stop_reason", "problem"),
+    [
+        ([tool_call("same"), tool_call("same")], "tool_use", "same id"),
+        ([tool_call("ok"), tool_call(None)], "tool_use", "no id or no name"),
+        ([tool_call("ok"), tool_call("two", name=None)], "tool_use", "no id or no name"),
+        ([tool_call("ok"), tool_call("two", input="text")], "tool_use", "input is not an object"),
+        ([tool_call("ok"), "not a block"], "tool_use", "not a list of blocks"),
+        ([tool_call("ok")], "", "no stop_reason"),
+    ],
+    ids=["duplicate-ids", "no-id", "no-name", "input-not-object", "not-a-block", "no-stop-reason"],
+)
+def test_a_malformed_response_fails_the_job_before_any_tool_runs(
+    stack: Stack, content: list[Any], stop_reason: str, problem: str
+) -> None:
+    """The first tool call is fine. A later block is not, and that is found first."""
+    ran: list[str] = []
+
+    def record(workspace: Path, tool_input: dict[str, Any]) -> ToolResult:
+        ran.append("ran")
+        return ToolResult("ok")
+
+    provider = OneResponse(ModelResponse("msg_1", "m", content, stop_reason, 5, 7))
+    job, steps = run_with(stack, provider, stub_tool(record))
+    assert [step.kind for step in steps] == [K.MODEL_REQUEST, K.MODEL_RESPONSE, K.ERROR]
+    assert job.status is JobStatus.FAILED
+    assert problem in (job.error or "")
+    assert ran == []
+    # One call, not a loop of them, and its tokens are counted.
+    assert provider.calls == 1
+    assert job.tokens_used == 12
+
+
+@pytest.mark.parametrize("bad", ["nul \x00 byte", "lone surrogate \ud800"])
+def test_a_response_that_cannot_be_stored_still_counts_its_tokens(stack: Stack, bad: str) -> None:
+    content = [{"type": "text", "text": bad}]
+    provider = OneResponse(ModelResponse("msg_1", "m", content, "end_turn", 100, 200))
+    job, steps = run_with(stack, provider, ToolRegistry())
+    assert [step.kind for step in steps] == [K.MODEL_REQUEST, K.MODEL_RESPONSE, K.ERROR]
+    assert steps[1].payload == {
+        "id": "msg_1",
+        "content": [],
+        "content_dropped": True,
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 100, "output_tokens": 200},
+    }
+    assert job.status is JobStatus.FAILED
+    assert "cannot be stored" in (job.error or "")
+    assert job.tokens_used == 300
+
+
+class WritesBehindTheWorker:
+    """A provider that, during the call, inserts the step the worker is about to write."""
+
+    def attach(self, engine: AsyncEngine, job: Job) -> None:
+        self.engine, self.job = engine, job
+
+    async def complete(self, request: ModelRequest) -> ModelResponse:
+        async with self.engine.begin() as conn:
+            await append_step(
+                conn,
+                job_id=self.job.id,
+                seq=2,
+                kind=K.ERROR,
+                payload={"message": "written by someone else"},
+                lease_epoch=1,
+            )
+        return ModelResponse("msg_1", "m", [{"type": "text", "text": "hi"}], "end_turn", 1, 1)
+
+    async def aclose(self) -> None:
+        return None
+
+
+def test_a_step_conflict_fails_the_job_instead_of_leaving_it_running(stack: Stack) -> None:
+    """The worker's seq 2 is taken. It records the failure at the next free seq."""
+    job, steps = run_with(stack, WritesBehindTheWorker(), ToolRegistry())
+    assert [(step.seq, step.kind) for step in steps] == [
+        (1, K.MODEL_REQUEST),
+        (2, K.ERROR),
+        (3, K.ERROR),
+    ]
+    assert steps[1].payload == {"message": "written by someone else"}
+    assert "StepConflict" in steps[2].payload["message"]
+    assert job.status is JobStatus.FAILED
+
+
 def test_spec_files_are_written_to_the_job_workspace_before_tools_run(stack: Stack) -> None:
     seen: list[str] = []
 
     def read(workspace: Path, tool_input: dict[str, Any]) -> ToolResult:
         seen.append((workspace / tool_input["path"]).read_text())
+        seen.append((workspace / "sub" / "b.txt").read_text())
         return ToolResult("ok")
 
     outcome = stack.run_one(
         {**HELLO, "files": {"hello.txt": "Hi!\n", "sub/b.txt": "b"}}, stub_tool(read)
     )
-    assert seen == ["Hi!\n"]
-    workspace = stack.workspace_root / str(outcome.job.id)
-    assert (workspace / "sub" / "b.txt").read_text() == "b"
+    assert seen == ["Hi!\n", "b"]
+    assert outcome.job.status is JobStatus.SUCCEEDED
+
+
+@pytest.mark.parametrize("spec", [HELLO, {"prompt": "go", "model": "no-such-scenario"}])
+def test_the_workspace_is_removed_when_the_job_is_final(stack: Stack, spec: dict[str, Any]) -> None:
+    """Succeeded or failed, a finished job leaves no directory behind."""
+    existed: list[bool] = []
+
+    def look(workspace: Path, tool_input: dict[str, Any]) -> ToolResult:
+        existed.append((workspace / "seed.txt").is_file())
+        return ToolResult("ok")
+
+    outcome = stack.run_one({**spec, "files": {"seed.txt": "x"}}, stub_tool(look))
+    assert outcome.job.status in (JobStatus.SUCCEEDED, JobStatus.FAILED)
+    if outcome.job.status is JobStatus.SUCCEEDED:
+        assert existed == [True]
+    assert list(stack.workspace_root.iterdir()) == []
 
 
 def test_read_file_returns_the_seeded_file_to_the_model(stack: Stack) -> None:
