@@ -47,8 +47,8 @@ async def work(
 ) -> None:
     """Claim and run jobs one at a time until `stop` is set.
 
-    `stop` is looked at between jobs. A job that is running is finished
-    first.
+    Once `stop` is set, no further job is claimed. The job in hand is
+    released at its next step boundary.
     """
     while not stop.is_set():
         # Taken before the claim is sent: the worker's deadline for the
@@ -70,7 +70,7 @@ async def work(
             extra={"job_id": job.id, "lease_epoch": job.lease_epoch, "takeovers": job.takeovers},
         )
         try:
-            await run_job(engine, provider, tools, job, settings, claimed_at=claimed_at)
+            await run_job(engine, provider, tools, job, settings, claimed_at=claimed_at, stop=stop)
         except Exception:
             # run_job records a job's own failure and drops a job it can no
             # longer write to. This is anything else; the job stays `running`

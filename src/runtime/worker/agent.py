@@ -245,6 +245,29 @@ def _response_problem(response: ModelResponse) -> str | None:
     return None
 
 
+async def _complete_unless_stopped(
+    provider: Provider, request: ModelRequest, stop: asyncio.Event
+) -> ModelResponse | None:
+    """Call the model. Returns None if `stop` was set before the answer was complete.
+
+    The call is then cancelled at once. Its request step stays in the log
+    without a response, and such a request is sent again by whoever runs
+    the job next. A complete answer is never thrown away.
+    """
+    call = asyncio.ensure_future(provider.complete(request))
+    stopped = asyncio.ensure_future(stop.wait())
+    try:
+        await asyncio.wait({call, stopped}, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        stopped.cancel()
+        if not call.done():
+            call.cancel()
+        await asyncio.gather(call, stopped, return_exceptions=True)
+    if call.cancelled():
+        return None
+    return call.result()
+
+
 async def _loop(
     writer: _StepWriter,
     provider: Provider,
@@ -255,12 +278,14 @@ async def _loop(
     workspace: Path,
     lease: Lease,
     steps: list[Step],
+    stop: asyncio.Event,
 ) -> JobStatus:
-    """Run until the model ends its turn, or until a person has to decide.
+    """Run until the model ends its turn, a person has to decide, or the worker is stopped.
 
-    Returns `succeeded` or `needs_approval`. Raises _JobFailed if the job
-    cannot finish, and LeaseLost as soon as the worker can no longer rely on
-    its lease.
+    Returns the status to leave the job in: `succeeded`, `needs_approval`,
+    or `queued` when `stop` was set and the job is to be given back. Raises
+    _JobFailed if the job cannot finish, and LeaseLost as soon as the worker
+    can no longer rely on its lease.
     """
     model = spec.model or settings.default_model
     # The log is replayed once, here. This is also how a job is resumed: the
@@ -268,6 +293,11 @@ async def _loop(
     state = replay(spec.prompt, steps)
     writer.state = state
     while True:
+        # A step boundary: everything started so far has its step. A worker
+        # that was told to stop starts nothing more.
+        if stop.is_set():
+            return JobStatus.QUEUED
+
         if state.problem:
             raise _JobFailed(f"the model's response is not usable: {state.problem}")
 
@@ -289,9 +319,11 @@ async def _loop(
             # lease must not send it.
             lease.check()
             try:
-                response = await provider.complete(request)
+                response = await _complete_unless_stopped(provider, request, stop)
             except ProviderError as error:
                 raise _JobFailed(f"model call failed: {error}") from error
+            if response is None:
+                continue
             payload: dict[str, Any] = {
                 "id": response.id,
                 "content": response.content,
@@ -343,10 +375,12 @@ async def _run(
     job: Job,
     settings: AgentSettings,
     lease: Lease,
+    stop: asyncio.Event,
 ) -> JobStatus:
     """Run the job and record its outcome. Returns the status it was left in:
-    `succeeded`, `failed`, or `needs_approval` when a person has to decide
-    about an interrupted tool call.
+    `succeeded`, `failed`, `needs_approval` when a person has to decide
+    about an interrupted tool call, or `queued` when the worker was stopped
+    and released the job.
 
     Raises LeaseLost or _StoreUnreachable when the worker has to drop the job.
     """
@@ -361,7 +395,9 @@ async def _run(
         workspace = await asyncio.to_thread(
             prepare_workspace, settings.workspace_root, job.id, spec.files
         )
-        status = await _loop(writer, provider, tools, job, spec, settings, workspace, lease, steps)
+        status = await _loop(
+            writer, provider, tools, job, spec, settings, workspace, lease, steps, stop
+        )
     except _JobFailed as error:
         failure = str(error)
     except LeaseLost, _StoreUnreachable:
@@ -386,7 +422,10 @@ async def _run(
             engine, job_id=job.id, lease_epoch=lease.epoch, new_status=status, error=failure
         )
     )
-    log.info("job finished", extra={"job_id": job.id, "status": status.value, "error": failure})
+    log.info(
+        "job finished" if status in FINAL_STATUSES else "job handed back",
+        extra={"job_id": job.id, "status": status.value, "error": failure},
+    )
     return status
 
 
@@ -398,11 +437,18 @@ async def run_job(
     settings: AgentSettings,
     *,
     claimed_at: float | None = None,
+    stop: asyncio.Event | None = None,
 ) -> JobStatus | None:
     """Run a job this worker has claimed. Returns the status it left the job in.
 
     `claimed_at` is the monotonic time just before the claim was sent. Left
     out, the lease is counted from now.
+
+    `stop` tells the worker to stop, as SIGTERM does. The job is then
+    released at the next step boundary: it goes back to `queued` and the
+    next claim is not a takeover. A model call in flight is abandoned. A
+    running tool is waited for, so that it does not leave an intent without
+    a result.
 
     A failure of the job (a bad spec, a provider error, a response that
     cannot be used) is recorded as an `error` step and the status `failed`.
@@ -420,7 +466,7 @@ async def run_job(
     )
     heartbeat = asyncio.create_task(keep_renewing(engine, lease, settings.heartbeat))
     try:
-        status = await _run(engine, provider, tools, job, settings, lease)
+        status = await _run(engine, provider, tools, job, settings, lease, stop or asyncio.Event())
     except LeaseLost:
         log.warning(
             "job dropped: the lease is gone",

@@ -87,6 +87,10 @@ services:
   worker:
     <<: *runtime
     command: [python, -m, runtime.worker]
+    # On SIGTERM the worker waits for a running tool, stores its result and
+    # gives the job back. After this long Docker kills it, and the job is
+    # taken over when its lease runs out.
+    stop_grace_period: 30s
     environment:
       DATABASE_URL: *database-url
       # The fake provider unless .env says otherwise. The compose variables
