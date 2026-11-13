@@ -37,7 +37,7 @@ A `takeovers` column on `jobs`.
 - At SIGTERM a model call in flight is abandoned at once. A request without a
   response is sent again anyway. A running tool is waited for, because
   abandoning it would leave an intent without a result
-  ([ADR 0005](0005-rerun-an-interrupted-tool-call-only-if-it-is-idempotent.md)).
+  ([ADR 0005](0005-rerun-an-interrupted-tool-call-only-when-it-is-safe.md)).
 
 ## Consequences
 
