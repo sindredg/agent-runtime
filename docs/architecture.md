@@ -112,12 +112,12 @@ claim.
 
 | Mechanism | Built | Planned |
 |---|---|---|
-| Claim | One `UPDATE` picks the oldest `queued` job with `FOR NO KEY UPDATE SKIP LOCKED`, sets `lease_owner`, sets `lease_expires_at` from the database clock, and increments `lease_epoch`. | Claiming `waiting` jobs and `running` jobs whose lease expired. A cap on takeovers. |
+| Claim | One `UPDATE` picks the oldest `queued` job with `FOR NO KEY UPDATE SKIP LOCKED`, sets `lease_owner`, sets `lease_expires_at` from the database clock, and increments `lease_epoch`. | Claiming `waiting` jobs and `running` jobs whose lease expired. A cap on takeovers ([ADR 0006](adr/0006-count-takeovers-apart-from-claims.md)). |
 | Lease | Set at the claim, 30 seconds. | Heartbeat. Nothing renews or checks the lease yet. |
-| Fencing | Every step stores the `lease_epoch` of its writer. | Refusing a step whose epoch is not the job's current one. |
+| Fencing | Every step stores the `lease_epoch` of its writer. | Refusing a step whose epoch is not the job's current one ([ADR 0004](adr/0004-fence-writes-with-the-lease-epoch-and-a-row-lock.md)). |
 | Duplicate steps | A second step with the same (`job_id`, `seq`) is refused and the first one stays. | |
 | Resume | The agent loop is already driven by a replay of the log. | A second worker picking up a job after the first one stopped. |
-| Tool calls | A response is checked before any of its tools run: every tool call needs an id, a name and an object input, and ids must differ. `tool_intent` is written before the tool runs and `tool_result` after. A failed call is an error result for the model, and the job goes on. | Deciding from an intent without a result whether a rerun is safe. |
+| Tool calls | A response is checked before any of its tools run: every tool call needs an id, a name and an object input, and ids must differ. `tool_intent` is written before the tool runs and `tool_result` after. A failed call is an error result for the model, and the job goes on. | Deciding from an intent without a result whether a rerun is safe ([ADR 0005](adr/0005-rerun-an-interrupted-tool-call-only-if-it-is-idempotent.md)). |
 | Provider errors | A failed model call fails the job with an `error` step. There is no retry. | Backoff and retry on rate limits and overload. |
 | Limits | `token_budget` and `deadline` are stored. `tokens_used` is counted from the usage of each response that was received in full. A call that fails part way is not counted. | Enforcing them. Cancel. |
 | Workspace | `WORKSPACE_ROOT/<job id>`, filled from the spec's `files` and removed when the job is final. `read_file` refuses absolute paths, `..`, and symlinks that lead out, checked after symlinks are followed. In the stack the workspace is in memory and is lost when the worker stops. | A sandbox container per tool call. A workspace that outlives its worker. |
