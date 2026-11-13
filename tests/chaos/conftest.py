@@ -31,6 +31,9 @@ WORKERS = 3
 # The lease of the chaos stack and of the default stack, in seconds.
 SHORT_LEASE, DEFAULT_LEASE = 2.0, 30.0
 FINAL = ("succeeded", "failed", "cancelled")
+# Seconds the wall clock may drift from the monotonic clock during one test
+# before the run is void. A clock that is only being disciplined stays far below.
+CLOCK_STEP_LIMIT = 1.0
 # The job the kill tests run: the CI triage workload with every answer half a
 # second late, so that there is a middle to be stopped in.
 WORKLOAD = "ci-triage-slow"
@@ -125,10 +128,23 @@ class Chaos:
 
     # Workers
 
+    def save_logs(self) -> None:
+        """Append every worker's log to a file under .chaos/logs, named by container.
+
+        Changing the workers' settings recreates the containers, and their
+        logs go with them. A failure has to keep its logs.
+        """
+        directory = CHAOS_DIR / "logs"
+        directory.mkdir(parents=True, exist_ok=True)
+        for container in self.workers():
+            text = docker("docker", "logs", "--timestamps", container, check=False, both=True)
+            (directory / f"worker-{container[:12]}.log").write_text(text, encoding="utf-8")
+
     def workers_up(
         self, *, lease: float = SHORT_LEASE, failpoint: str = "", failpoint_tool: str = ""
     ) -> None:
         """Bring all workers up with these settings. Containers that already match are kept."""
+        self.save_logs()
         docker(
             *COMPOSE,
             "up",
@@ -257,6 +273,27 @@ def record(name: str, result: dict[str, Any]) -> None:
     with (CHAOS_DIR / "results.jsonl").open("a", encoding="utf-8") as file:
         file.write(json.dumps(entry) + "\n")
     print(f"\nRESULT {json.dumps(entry)}")
+
+
+@pytest.fixture(autouse=True)
+def steady_clock() -> Iterator[None]:
+    """Void a run during which the machine's clock was set.
+
+    A lease ends by the database's wall clock. If that clock is set forward
+    while a test runs, for example when a virtual machine resumes, a live
+    lease is over at once and the job is taken over. That is a known limit of
+    the design, not what these tests are about, and a run it happens in
+    proves nothing either way. The wall clock is compared with the monotonic
+    clock, which is never set.
+    """
+    wall, monotonic = time.time(), time.monotonic()
+    yield
+    step = (time.time() - wall) - (time.monotonic() - monotonic)
+    if abs(step) > CLOCK_STEP_LIMIT:
+        pytest.fail(
+            f"void run: the wall clock moved {step:+.1f} s against the monotonic clock"
+            " during this test. Leases run on the wall clock, so the result does not count."
+        )
 
 
 @pytest.fixture(scope="session")
