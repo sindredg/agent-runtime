@@ -1,0 +1,16 @@
+extends: default
+
+ignore: |
+  .venv/
+
+rules:
+  # GitHub Actions uses "on:" as a key; yamllint reads it as a boolean.
+  truthy:
+    allowed-values: ["true", "false"]
+    check-keys: false
+  line-length:
+    max: 100
+  # Pinned actions carry the tag as a comment after the SHA, with two spaces.
+  comments:
+    min-spaces-from-content: 2
+  document-start: disable
