@@ -1,4 +1,4 @@
-.PHONY: all up down clean logs test
+.PHONY: all up down clean logs test integration
 
 # The default target runs the unit tests.
 all: test
@@ -20,3 +20,7 @@ logs:
 
 test:
 	uv run --frozen pytest tests/unit
+
+# Needs the stack from `make up`: the tests use its Postgres server.
+integration:
+	uv run --frozen pytest tests/integration

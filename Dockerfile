@@ -30,6 +30,10 @@ FROM python:3.15.2-slim-trixie@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c269
 # Services run as an unprivileged user with a fixed ID.
 RUN useradd --system --uid 10001 --no-create-home runtime
 COPY --from=build /app/.venv /app/.venv
+# The migrate service runs alembic from /app: its configuration is in
+# pyproject.toml and the migration scripts are not part of the installed package.
+COPY pyproject.toml /app/
+COPY migrations/ /app/migrations/
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1
 USER 10001

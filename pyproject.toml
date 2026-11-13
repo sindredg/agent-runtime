@@ -5,8 +5,12 @@ description = "Runs long AI agent jobs so they survive crashes, rate limits, and
 readme = "README.md"
 requires-python = "==3.15.*"
 dependencies = [
+    # Schema migrations, run by the one-shot migrate service.
+    "alembic==1.20.1",
     "asyncpg==0.32.0",
     "fastapi==0.162.6",
+    # The asyncio extra adds greenlet, which SQLAlchemy needs to drive asyncpg.
+    "sqlalchemy[asyncio]==2.1.8",
     # The ASGI server that runs the FastAPI apps.
     "uvicorn==0.54.0",
 ]
@@ -43,6 +47,10 @@ fake-provider = { workspace = true }
 # The import package is `runtime`, not the project name.
 module-name = "runtime"
 
+[tool.alembic]
+# Configured here instead of in an alembic.ini. %(here)s is this file's directory.
+script_location = "%(here)s/migrations"
+
 [tool.ruff]
 line-length = 100
 src = ["src", "tests", "services/fake_provider/src"]
@@ -58,7 +66,7 @@ select = ["E", "W", "F", "I", "B", "UP", "SIM", "ASYNC", "S", "RUF"]
 
 [tool.mypy]
 strict = true
-files = ["src", "tests", "services/fake_provider/src"]
+files = ["src", "tests", "migrations", "services/fake_provider/src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
