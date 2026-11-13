@@ -1,8 +1,8 @@
 {
-  "description": "ci-triage with a first answer that takes five seconds, long enough to pause the worker that waits for it.",
+  "description": "ci-triage with two answers that take ten seconds each, long enough to pause the worker that waits for one and to unpause it while another worker is in the middle of the job.",
   "turns": [
     {
-      "delay_seconds": 5,
+      "delay_seconds": 10,
       "content": [
         {
           "type": "text",
@@ -18,6 +18,7 @@
       ]
     },
     {
+      "delay_seconds": 10,
       "content": [
         {
           "type": "text",

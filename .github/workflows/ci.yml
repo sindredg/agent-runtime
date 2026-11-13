@@ -125,3 +125,32 @@ jobs:
       - name: Stop the stack
         if: always()
         run: make clean
+
+  chaos:
+    name: Chaos tests (short run)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    env:
+      # Random kills in the short run. The seed is the default in the tests.
+      CHAOS_RUNS: "20"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        with:
+          version: "0.13.8"
+      - run: uv sync --locked
+      # Starts the stack with three workers and a short lease, then kills,
+      # pauses and crashes workers and checks what is left.
+      - name: Chaos tests
+        run: make chaos
+      - name: Results
+        if: always()
+        run: cat .chaos/results.jsonl
+      - name: Service logs
+        if: failure()
+        run: docker compose logs --no-color
+      - name: Stop the stack
+        if: always()
+        run: make clean

@@ -1,4 +1,4 @@
-.PHONY: all up down clean logs test integration
+.PHONY: all up down clean logs test integration chaos
 
 # The default target runs the unit tests.
 all: test
@@ -24,3 +24,13 @@ test:
 # Needs the stack from `make up`: the tests use its Postgres server.
 integration:
 	uv run --frozen pytest tests/integration
+
+# Kills, pauses and crashes workers on purpose and checks what is left.
+# Starts the stack with three workers and a short lease first. CHAOS_RUNS
+# sets the number of random kills (default 20), CHAOS_SEED their times.
+# `make up` afterwards brings the normal stack back.
+chaos:
+	mkdir -p .chaos
+	chmod 777 .chaos
+	docker compose -f docker-compose.yml -f docker-compose.chaos.yml up --build --wait
+	uv run --frozen pytest -v -s tests/chaos
