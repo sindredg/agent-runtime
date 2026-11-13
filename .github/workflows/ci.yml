@@ -56,3 +56,46 @@ jobs:
           echo "$ACTIONLINT_SHA256  $RUNNER_TEMP/$archive" | sha256sum --check --strict
           tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" actionlint
           "$RUNNER_TEMP/actionlint" -color
+
+  stack:
+    name: Images and compose stack
+    runs-on: ubuntu-26.04
+    env:
+      # Checksums are copied from each release's checksum file, so a replaced
+      # release asset fails the check. They move by hand with the version.
+      HADOLINT_VERSION: "2.15.1"
+      HADOLINT_SHA256: c7187db94eeeeca956519a6af171adc31453941a1e777961f6e680f697c8c507
+      CHECKMAKE_VERSION: "0.3.2"
+      CHECKMAKE_SHA256: e2effb876913f3ee2caef0ba35f6202c5e8a3cd55a077d8d2b9ce2034257b6af
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: hadolint
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/hadolint" \
+            "https://github.com/hadolint/hadolint/releases/download/v${HADOLINT_VERSION}/hadolint-linux-x86_64"
+          echo "$HADOLINT_SHA256  $RUNNER_TEMP/hadolint" | sha256sum --check --strict
+          chmod +x "$RUNNER_TEMP/hadolint"
+          "$RUNNER_TEMP/hadolint" Dockerfile
+      - name: checkmake
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/checkmake" \
+            "https://github.com/checkmake/checkmake/releases/download/v${CHECKMAKE_VERSION}/checkmake-v${CHECKMAKE_VERSION}.linux.amd64"
+          echo "$CHECKMAKE_SHA256  $RUNNER_TEMP/checkmake" | sha256sum --check --strict
+          chmod +x "$RUNNER_TEMP/checkmake"
+          "$RUNNER_TEMP/checkmake" Makefile
+      - name: Validate the compose file
+        run: docker compose config --quiet
+      # Builds the image and fails unless every service becomes healthy and
+      # the one-shot migrate service exits 0.
+      - name: Start the stack
+        run: make up
+      - name: Call the API from the host
+        run: curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8000/healthz
+      - name: Service logs
+        if: failure()
+        run: docker compose logs --no-color
+      - name: Stop the stack
+        if: always()
+        run: make clean

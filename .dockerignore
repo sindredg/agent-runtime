@@ -1,0 +1,9 @@
+# Everything is excluded, then the build inputs are allowed back in.
+*
+!pyproject.toml
+!uv.lock
+!.python-version
+!README.md
+!src/
+!services/
+**/__pycache__/
