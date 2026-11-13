@@ -71,6 +71,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        with:
+          version: "0.13.8"
+      - run: uv sync --locked
       - name: hadolint
         run: |
           curl -fsSL -o "$RUNNER_TEMP/hadolint" \
@@ -93,6 +97,9 @@ jobs:
         run: make up
       - name: Call the API from the host
         run: curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8000/healthz
+      # Run from the host against the stack's Postgres server.
+      - name: Integration tests
+        run: make integration
       - name: Service logs
         if: failure()
         run: docker compose logs --no-color

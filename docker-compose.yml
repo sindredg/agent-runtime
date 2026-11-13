@@ -17,7 +17,7 @@ x-runtime: &runtime
   security_opt:
     - no-new-privileges:true
 
-# Development default. Postgres is reachable only inside the compose network.
+# Development default, for the services inside the compose network.
 x-database-url: &database-url >-
   postgresql://runtime:${POSTGRES_PASSWORD:-runtime-dev}@postgres:5432/runtime
 
@@ -46,19 +46,22 @@ services:
     volumes:
       # Postgres 18 images keep data under /var/lib/postgresql/<major>.
       - postgres-data:/var/lib/postgresql
+    ports:
+      # Published on localhost only, for the integration tests and psql.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     healthcheck:
       test: [CMD-SHELL, "pg_isready --username runtime --dbname runtime"]
       interval: 5s
       timeout: 3s
       retries: 10
 
-  # One-shot: must exit 0 before api and worker start. It only checks the
-  # database connection until there are migrations to run.
+  # One-shot: applies the schema migrations and must exit 0 before api and
+  # worker start.
   migrate:
     <<: *runtime
     build: .
     pull_policy: build
-    command: [python, -m, runtime.store.ping]
+    command: [alembic, upgrade, head]
     environment:
       DATABASE_URL: *database-url
     depends_on:
