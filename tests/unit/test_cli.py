@@ -434,6 +434,30 @@ def test_terminal_control_codes_are_not_printed() -> None:
     assert line == "   4  tool_result     ok ?[2K?[1Agone?]0;title? done"
 
 
+HOSTILE = "\x1b[2Kgone\x1b]0;title\x07\x9b1A\nnext"
+
+
+def test_status_does_not_print_terminal_control_codes_from_the_error() -> None:
+    # A job's error can quote model or tool text. It is shown whole, on one line.
+    error = f"tool failed: {HOSTILE} " + "x" * 300
+    code, out, _ = run("status", JOB_ID, api=StubApi(final=job("failed", error=error)))
+    assert code == 0
+    assert not {"\x1b", "\x07", "\x9b"} & set(out)
+    assert out.splitlines()[-1] == (
+        "error:        tool failed: ?[2Kgone?]0;title??1A next " + "x" * 300
+    )
+
+
+def test_a_refusal_that_is_not_json_is_shown_without_terminal_control_codes(
+    job_file: Path,
+) -> None:
+    api = StubApi()
+    api.submit_response = httpx2.Response(502, text=f"bad gateway {HOSTILE}")
+    code, out, err = run("submit", str(job_file), api=api)
+    assert (code, out) == (2, "")
+    assert err == "runtime: the API answered 502: bad gateway ?[2Kgone?]0;title??1A next\n"
+
+
 def test_error_and_failed_tool_steps_are_marked() -> None:
     failed = step(
         4, "tool_result", {"tool_use_id": "t", "content": "no such file", "is_error": True}

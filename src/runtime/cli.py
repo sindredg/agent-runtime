@@ -69,10 +69,15 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _one_line(text: str) -> str:
+    """The text on one line. Text from a model, a tool or another server can
+    hold terminal control codes; anything that is not printable is shown as `?`."""
+    return "".join(char if char.isprintable() else "?" for char in " ".join(text.split()))
+
+
 def _preview(text: str) -> str:
-    """One short line. Text from a model or a tool can hold terminal control
-    codes; anything that is not printable is shown as `?`."""
-    line = "".join(char if char.isprintable() else "?" for char in " ".join(text.split()))
+    """One short line: `_one_line`, cut to PREVIEW characters."""
+    line = _one_line(text)
     return line if len(line) <= PREVIEW else line[: PREVIEW - 3] + "..."
 
 
@@ -119,7 +124,7 @@ def _check(response: httpx2.Response) -> httpx2.Response:
             detail = json.dumps(response.json().get("detail"))
         except ValueError, AttributeError:
             detail = response.text
-        raise CommandError(f"the API answered {response.status_code}: {detail}")
+        raise CommandError(f"the API answered {response.status_code}: {_one_line(detail)}")
     return response
 
 
@@ -231,7 +236,8 @@ def _status(client: httpx2.Client, args: argparse.Namespace, out: TextIO) -> int
         return 0
     for field in ("id", "status", "tokens_used", "token_budget", "deadline", "created_at", "error"):
         if job[field] is not None:
-            print(f"{field + ':':<14}{job[field]}", file=out)
+            # The error is not cut: this is where it is read in full.
+            print(f"{field + ':':<14}{_one_line(str(job[field]))}", file=out)
     return 0
 
 
