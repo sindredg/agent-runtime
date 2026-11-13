@@ -35,6 +35,8 @@ async def run(config: WorkerConfig) -> None:
         default_model=config.provider.model,
         max_tokens=config.provider.max_tokens,
         workspace_root=config.workspace_root,
+        lease=timedelta(seconds=config.lease_seconds),
+        heartbeat=config.heartbeat_seconds,
     )
     try:
         async with asyncio.TaskGroup() as tasks:
@@ -47,7 +49,6 @@ async def run(config: WorkerConfig) -> None:
                     settings,
                     worker_id=config.worker_id,
                     poll_interval=config.poll_interval,
-                    lease=timedelta(seconds=config.lease_seconds),
                     stop=stop,
                 )
             )

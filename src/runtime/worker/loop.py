@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from datetime import timedelta
+import time
 from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -43,7 +43,6 @@ async def work(
     *,
     worker_id: str,
     poll_interval: float,
-    lease: timedelta,
     stop: asyncio.Event,
 ) -> None:
     """Claim and run jobs one at a time until `stop` is set.
@@ -52,9 +51,12 @@ async def work(
     first.
     """
     while not stop.is_set():
+        # Taken before the claim is sent: the worker's deadline for the
+        # lease counts from here, so it is never later than the database's.
+        claimed_at = time.monotonic()
         try:
             async with engine.begin() as conn:
-                job = await claim_job(conn, worker_id=worker_id, lease=lease)
+                job = await claim_job(conn, worker_id=worker_id, lease=settings.lease)
         except Exception:
             # The database may be restarting. Keep the worker up and try again.
             log.exception("claim failed")
@@ -63,10 +65,14 @@ async def work(
         if job is None:
             await _wait(stop, poll_interval)
             continue
-        log.info("job claimed", extra={"job_id": job.id, "lease_epoch": job.lease_epoch})
+        log.info(
+            "job claimed",
+            extra={"job_id": job.id, "lease_epoch": job.lease_epoch, "takeovers": job.takeovers},
+        )
         try:
-            await run_job(engine, provider, tools, job, settings)
+            await run_job(engine, provider, tools, job, settings, claimed_at=claimed_at)
         except Exception:
-            # run_job records a job's own failure. This is a failure to
-            # record it; the job stays `running`.
+            # run_job records a job's own failure and drops a job it can no
+            # longer write to. This is anything else; the job stays `running`
+            # until its lease runs out.
             log.exception("job could not be finished", extra={"job_id": job.id})

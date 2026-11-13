@@ -22,8 +22,9 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from runtime.api.app import create_app
 from runtime.config import ApiConfig
+from runtime.store import held
 from runtime.store.engine import create_engine
-from runtime.store.jobs import Job, claim_job, create_job, get_job, update_status
+from runtime.store.jobs import Job, claim_job, create_job, get_job
 from runtime.store.status import JobStatus
 from runtime.store.steps import StepKind, append_step, read_steps
 
@@ -64,8 +65,10 @@ class Api:
                 )
 
     async def finish(self, job: Job, status: JobStatus = JobStatus.SUCCEEDED) -> None:
-        async with self.engine.begin() as conn:
-            await update_status(conn, job.id, status)
+        """Finish the job the way its worker does: a fenced move out of `running`."""
+        await held.leave_running(
+            self.engine, job_id=job.id, lease_epoch=job.lease_epoch, new_status=status
+        )
 
     async def events(self, job_id: UUID, **request: Any) -> list[tuple[int | None, str, Any]]:
         """Read the event stream to its end: (id, event, data) for each event."""
@@ -246,8 +249,15 @@ def test_read_job_returns_the_current_state(database_url: str) -> None:
         submitted = (await api.client.post("/jobs", json={"prompt": "go"})).json()
         read = (await api.client.get(f"/jobs/{submitted['id']}")).json()
         async with api.engine.begin() as conn:
-            await claim_job(conn, worker_id="w1")
-            await update_status(conn, UUID(submitted["id"]), JobStatus.FAILED, error="boom")
+            claimed = await claim_job(conn, worker_id="w1")
+        assert claimed is not None
+        await held.leave_running(
+            api.engine,
+            job_id=claimed.id,
+            lease_epoch=claimed.lease_epoch,
+            new_status=JobStatus.FAILED,
+            error="boom",
+        )
         return submitted, read, (await api.client.get(f"/jobs/{submitted['id']}")).json()
 
     submitted, read, later = api_test(database_url, body)

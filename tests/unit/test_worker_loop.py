@@ -41,7 +41,13 @@ def test_keep_alive_returns_at_once_when_already_stopped(tmp_path: Path) -> None
     assert not alive.exists()
 
 
-SETTINGS = AgentSettings(default_model="m", max_tokens=10, workspace_root=Path("unused"))
+SETTINGS = AgentSettings(
+    default_model="m",
+    max_tokens=10,
+    workspace_root=Path("unused"),
+    lease=timedelta(seconds=7),
+    heartbeat=1.0,
+)
 
 
 def run_work(stop_after: float) -> None:
@@ -61,7 +67,6 @@ def run_work(stop_after: float) -> None:
                     settings=SETTINGS,
                     worker_id="w",
                     poll_interval=0.01,
-                    lease=timedelta(seconds=7),
                     stop=stop,
                 )
         finally:
@@ -84,6 +89,7 @@ def test_a_job_that_cannot_be_finished_does_not_stop_the_loop(
 
     class FakeJob:
         lease_epoch = 1
+        takeovers = 0
 
         def __init__(self, job_id: str) -> None:
             self.id = job_id
@@ -103,7 +109,9 @@ def test_a_job_that_cannot_be_finished_does_not_stop_the_loop(
         claimed.append(f"job-{len(claimed)}")
         return FakeJob(claimed[-1])
 
-    async def crash(*args: Any) -> None:
+    async def crash(*args: Any, **named: Any) -> None:
+        # The loop says when it sent the claim, on the monotonic clock.
+        assert isinstance(named["claimed_at"], float)
         raise RuntimeError("database went away")
 
     monkeypatch.setattr(loop, "claim_job", claim)

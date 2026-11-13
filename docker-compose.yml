@@ -99,6 +99,8 @@ services:
       WORKSPACE_ROOT: /tmp/workspaces
       # Seconds a claim holds a job. A job whose lease ran out is taken over.
       LEASE_SECONDS: ${LEASE_SECONDS:-30}
+      # Seconds between two renewals of the lease. Shorter than the lease.
+      HEARTBEAT_SECONDS: ${HEARTBEAT_SECONDS:-10}
     healthcheck:
       # Healthy while the liveness file was touched in the last 15 seconds.
       test:

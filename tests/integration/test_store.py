@@ -18,7 +18,6 @@ from runtime.store.jobs import (
     TAKEOVER_LIMIT,
     InvalidTransition,
     Job,
-    add_tokens_used,
     claim_job,
     claim_statement,
     create_job,
@@ -711,7 +710,8 @@ def test_update_status_follows_the_transition_table(
 
     moved, job = in_transaction(migrated_database_url, body)
     assert job is not None
-    assert moved == (new in TRANSITIONS[current])
+    # A running job belongs to its worker. Nothing moves it from here.
+    assert moved == (new in TRANSITIONS[current] and current is not S.RUNNING)
     assert job.status is (new if moved else current)
 
 
@@ -744,21 +744,6 @@ def test_a_concurrent_status_change_is_not_overwritten(migrated_database_url: st
     assert job.status is S.CANCELLED
 
 
-def test_leaving_running_clears_the_lease_and_keeps_the_epoch(database_url: str) -> None:
-    async def body(conn: AsyncConnection) -> Job:
-        await new_job(conn)
-        claimed = await claim_job(conn, worker_id="w1")
-        assert claimed is not None
-        return await update_status(conn, claimed.id, S.FAILED, error="tool crashed")
-
-    job = in_transaction(database_url, body)
-    assert job.status is S.FAILED
-    assert job.error == "tool crashed"
-    assert job.lease_owner is None
-    assert job.lease_expires_at is None
-    assert job.lease_epoch == 1
-
-
 def test_update_status_refuses_running(migrated_database_url: str) -> None:
     async def body(conn: AsyncConnection) -> None:
         job = await new_job(conn)
@@ -771,20 +756,6 @@ def test_update_status_refuses_running(migrated_database_url: str) -> None:
 def test_update_status_of_an_unknown_job_is_rejected(migrated_database_url: str) -> None:
     with pytest.raises(InvalidTransition):
         in_transaction(migrated_database_url, lambda c: update_status(c, uuid4(), S.CANCELLED))
-
-
-def test_add_tokens_used_adds_to_the_count(migrated_database_url: str) -> None:
-    async def body(conn: AsyncConnection) -> Job | None:
-        job = await new_job(conn)
-        await add_tokens_used(conn, job.id, 40)
-        await add_tokens_used(conn, job.id, 2)
-        with pytest.raises(ValueError, match="negative"):
-            await add_tokens_used(conn, job.id, -1)
-        return await get_job(conn, job.id)
-
-    job = in_transaction(migrated_database_url, body)
-    assert job is not None
-    assert job.tokens_used == 42
 
 
 def test_read_progress_returns_status_and_steps_from_one_statement(

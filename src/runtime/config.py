@@ -85,10 +85,20 @@ class WorkerConfig:
     # How long a claim holds a job. A job whose lease ran out is taken over
     # by the next worker that looks for one.
     lease_seconds: float
+    # How often the worker renews the lease of the job it is running.
+    heartbeat_seconds: float
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> WorkerConfig:
         env = os.environ if env is None else env
+        lease_seconds = _positive_float(env, "LEASE_SECONDS", 30.0)
+        heartbeat_seconds = _positive_float(env, "HEARTBEAT_SECONDS", 10.0)
+        if heartbeat_seconds >= lease_seconds:
+            # A lease that is not renewed before it ends is lost on every job.
+            raise ConfigError(
+                f"HEARTBEAT_SECONDS ({heartbeat_seconds:g}) must be shorter than"
+                f" LEASE_SECONDS ({lease_seconds:g})"
+            )
         return cls(
             database_url=_required(env, "DATABASE_URL"),
             provider=ProviderConfig.from_env(env),
@@ -96,7 +106,8 @@ class WorkerConfig:
             workspace_root=Path(env.get("WORKSPACE_ROOT") or "/tmp/workspaces"),  # noqa: S108
             poll_interval=_positive_float(env, "POLL_INTERVAL_SECONDS", 1.0),
             alive_file=Path(env.get("WORKER_ALIVE_FILE") or "/tmp/worker.alive"),  # noqa: S108
-            lease_seconds=_positive_float(env, "LEASE_SECONDS", 30.0),
+            lease_seconds=lease_seconds,
+            heartbeat_seconds=heartbeat_seconds,
         )
 
 

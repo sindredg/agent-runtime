@@ -203,33 +203,28 @@ async def claim_job(
         await _record_takeover_limit(conn, job)
 
 
-async def add_tokens_used(conn: AsyncConnection, job_id: UUID, tokens: int) -> None:
-    """Add to the job's token count. Call it in the transaction that records the usage."""
-    if tokens < 0:
-        raise ValueError("tokens must not be negative")
-    await conn.execute(
-        update(jobs).where(jobs.c.id == job_id).values(tokens_used=jobs.c.tokens_used + tokens)
-    )
-
-
 async def update_status(
     conn: AsyncConnection, job_id: UUID, new_status: JobStatus, *, error: str | None = None
 ) -> Job:
-    """Move a job to `new_status` and return it. Clears the lease.
+    """Move a job that no worker holds to `new_status` and return it.
 
     `error` replaces the stored error; leaving it out clears it.
 
     The move is checked against the transition table inside the UPDATE
     itself, so a job whose status changed in the meantime is not overwritten.
-    Raises InvalidTransition when no row was updated. A job becomes `running`
-    only through `claim_job`.
+    Raises InvalidTransition when no row was updated.
+
+    A `running` job is never moved here. Only the worker that holds it moves
+    it, through `runtime.store.held.leave_running`, which checks the lease
+    epoch. A job becomes `running` only through `claim_job`.
     """
     if new_status is JobStatus.RUNNING:
         raise ValueError("a job becomes running through claim_job, not update_status")
+    sources = sources_of(new_status) - {JobStatus.RUNNING}
     result = await conn.execute(
         update(jobs)
-        .where(jobs.c.id == job_id, jobs.c.status.in_(sources_of(new_status)))
-        .values(status=new_status, error=error, lease_owner=None, lease_expires_at=None)
+        .where(jobs.c.id == job_id, jobs.c.status.in_(sources))
+        .values(status=new_status, error=error)
         .returning(*jobs.c)
     )
     row = result.one_or_none()
