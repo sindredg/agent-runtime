@@ -7,6 +7,7 @@ provider and the tool are the recording stand-ins of the resume tests.
 import asyncio
 from typing import Any
 
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from runtime.provider.base import ModelRequest, ModelResponse
@@ -14,10 +15,11 @@ from runtime.provider.messages import AnthropicProvider
 from runtime.store.jobs import Job, claim_job, get_job
 from runtime.store.status import JobStatus
 from runtime.store.steps import Step, StepKind, read_steps
+from runtime.tools.base import CheckAnswer, CheckOutcome, Tool, ToolCall, ToolRegistry
 from runtime.worker.agent import run_job
 from runtime.worker.loop import work
 
-from .conftest import Stack
+from .conftest import Stack, expire_lease
 from .test_resume import SPEC, Acts, Script, op, uninterrupted
 
 K = StepKind
@@ -238,3 +240,85 @@ def test_a_stop_that_arrives_between_two_steps_releases_before_the_next_step(sta
     assert acts.runs == []
     # A job that is not final keeps its workspace.
     assert (stack.workspace_root / str(job.id) / "seed.txt").is_file()
+
+
+def test_a_stop_during_the_check_of_an_interrupted_call_does_not_start_the_rerun(
+    stack: Stack,
+) -> None:
+    """The check says the call did not happen. The stop arrived while it was asked.
+
+    The rerun has no intent yet, so nothing commits the worker to it. The
+    job is released with the interrupted call still open.
+    """
+    script = Cancellable()
+    stop = asyncio.Event()
+    acts = Acts(hang_at=1)
+
+    def check_and_stop(call: ToolCall) -> CheckAnswer:
+        stop.set()
+        return CheckOutcome.NOT_DONE
+
+    async def body(
+        engine: AsyncEngine, _: AnthropicProvider
+    ) -> tuple[JobStatus | None, list[Step]]:
+        async with engine.begin() as conn:
+            await stack.create(conn, SPEC)
+            first_claim = await claim_job(conn, worker_id="w1")
+        assert first_claim is not None
+        first = asyncio.create_task(
+            run_job(engine, script, acts.registry(), first_claim, stack.settings())
+        )
+        await asyncio.to_thread(acts.hanging.wait, 30)
+        first.cancel()
+        await asyncio.gather(first, return_exceptions=True)
+        acts.hang_at = None
+        acts.release.set()
+        async with engine.begin() as conn:
+            await expire_lease(conn, first_claim.id)
+            second_claim = await claim_job(conn, worker_id="w2")
+        assert second_claim is not None
+        schema = {"type": "object"}
+        tools = ToolRegistry([Tool("act", "Do it.", schema, acts.run, check=check_and_stop)])
+        status = await run_job(engine, script, tools, second_claim, stack.settings(), stop=stop)
+        return status, (await read(engine, first_claim))[1]
+
+    status, steps = stack.run(body)
+    assert status is S.QUEUED
+    assert [step.kind for step in steps] == [K.MODEL_REQUEST, K.MODEL_RESPONSE, K.TOOL_INTENT]
+    # One run: the abandoned one. The rerun did not start.
+    assert len(acts.runs) == 1
+
+
+def test_a_stop_set_before_a_model_call_means_the_call_is_not_sent(stack: Stack) -> None:
+    """The stop arrives while the request step is being written."""
+    script = Cancellable()
+    acts = Acts(idempotent=True)
+    stop = asyncio.Event()
+
+    async def body(
+        engine: AsyncEngine, _: AnthropicProvider
+    ) -> tuple[JobStatus | None, list[Step]]:
+        async with engine.begin() as conn:
+            await stack.create(conn, SPEC)
+            claim = await claim_job(conn, worker_id="w1")
+        assert claim is not None
+
+        def on_statement(conn: Any, cursor: Any, statement: str, *rest: Any) -> None:
+            if "INSERT INTO steps" in statement:
+                stop.set()
+
+        event.listen(engine.sync_engine, "before_cursor_execute", on_statement)
+        try:
+            status = await run_job(
+                engine, script, acts.registry(), claim, stack.settings(), stop=stop
+            )
+        finally:
+            event.remove(engine.sync_engine, "before_cursor_execute", on_statement)
+        return status, (await read(engine, claim))[1]
+
+    status, steps = stack.run(body)
+    assert status is S.QUEUED
+    assert [step.kind for step in steps] == [K.MODEL_REQUEST]
+    # The provider's own record: it was never called.
+    assert script.requests == []
+    assert script.cancelled == 0

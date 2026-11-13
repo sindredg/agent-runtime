@@ -154,6 +154,7 @@ async def _next_tool_call(
     lease: Lease,
     state: Replay,
     failpoints: Failpoints,
+    stop: asyncio.Event,
 ) -> bool:
     """Deal with the first open tool call. False means the job now waits for a person.
 
@@ -209,9 +210,15 @@ async def _next_tool_call(
                     },
                 )
             return False
+        if stop.is_set():
+            # Asking the check took time and the worker was told to stop
+            # meanwhile. The rerun has no intent yet, so it does not start.
+            return True
 
     # Before the intent: a call that will not start must not leave an
-    # intent behind, which would look interrupted.
+    # intent behind, which would look interrupted. Once the intent is
+    # written the worker is committed to the run, also if it is told to
+    # stop while writing it: the tool runs and its result is stored.
     lease.check()
     await writer.append(
         StepKind.TOOL_INTENT,
@@ -261,6 +268,9 @@ async def _complete_unless_stopped(
     without a response, and such a request is sent again by whoever runs
     the job next. A complete answer is never thrown away.
     """
+    if stop.is_set():
+        # The stop arrived while the request step was written. Nothing is sent.
+        return None
     call = asyncio.ensure_future(provider.complete(request))
     stopped = asyncio.ensure_future(stop.wait())
     try:
@@ -372,7 +382,7 @@ async def _loop(
         # response run one after another, one per pass.
         if state.stop_reason == "tool_use" and state.pending:
             if not await _next_tool_call(
-                writer, tools, job, workspace, lease, state, settings.failpoints
+                writer, tools, job, workspace, lease, state, settings.failpoints, stop
             ):
                 return JobStatus.NEEDS_APPROVAL
             continue
@@ -407,6 +417,10 @@ async def _run(
     failure: str | None = None
     try:
         spec = JobSpec.model_validate(job.spec)
+        # A worker that was paused past its lease right after the claim must
+        # not write to the workspace: the job may be finished and its
+        # workspace removed by now.
+        lease.check()
         # Files that are already there are left alone, so a job that is
         # taken over keeps what its tools wrote and gets back what is missing.
         workspace = await asyncio.to_thread(

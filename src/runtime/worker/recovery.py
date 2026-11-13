@@ -60,7 +60,14 @@ def decide(tool: Tool | None, call: ToolCall, *, approved: bool) -> Decision:
         answer = tool.check(call)
     # SystemExit too: a check that calls sys.exit() must not take the worker down.
     except (Exception, SystemExit) as error:
-        return Ask(f"the tool's check failed: {type(error).__name__}: {error}")
+        reason = f"the tool's check failed: {type(error).__name__}: {error}"
+        try:
+            check_json(reason)
+        except InvalidPayload:
+            # The error text came from somewhere else and cannot be stored.
+            # The question still has to reach the log.
+            reason = f"the tool's check failed: {type(error).__name__}"
+        return Ask(reason)
     if answer is CheckOutcome.NOT_DONE:
         return Rerun("the tool's check says the call did not happen")
     if answer is CheckOutcome.UNKNOWN:

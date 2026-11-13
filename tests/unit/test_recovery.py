@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 
+from runtime.store.payload import check_json
 from runtime.tools.base import CheckOutcome, Tool, ToolCall, ToolResult, operation_id
 from runtime.worker.recovery import Ask, Recovered, Rerun, decide
 
@@ -107,3 +108,17 @@ def test_a_tool_is_not_idempotent_and_has_no_check_unless_it_says_so() -> None:
     plain = Tool("t", "A tool.", {"type": "object"}, never_run)
     assert plain.idempotent is False
     assert plain.check is None
+
+
+@pytest.mark.parametrize("text", ["body was a\x00b", "lone \ud800 surrogate"])
+def test_the_reason_for_asking_can_always_be_stored(text: str) -> None:
+    """A check can fail with text from another system in its error. The question
+    to the person must still go into the log, or the job would fail instead."""
+
+    def check(call: ToolCall) -> ToolResult:
+        raise RuntimeError(text)
+
+    decision = decide(tool(check=check), CALL, approved=False)
+    assert isinstance(decision, Ask)
+    check_json(decision.reason)
+    assert "check failed" in decision.reason

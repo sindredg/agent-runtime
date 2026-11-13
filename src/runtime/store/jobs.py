@@ -24,8 +24,9 @@ from runtime.store.steps import StepKind
 log = logging.getLogger("runtime.store")
 
 DEFAULT_LEASE = timedelta(seconds=30)
-# How often a job may be taken over from a worker that went away. The claim
-# after that fails the job, so a job runs at most this many times plus one.
+# How often a job may be taken over from a worker that went away. The
+# takeover after that fails the job instead. Only takeovers are counted and
+# limited: a claim after a release or an approval is neither.
 TAKEOVER_LIMIT = 5
 TAKEOVER_LIMIT_ERROR = (
     f"the job was taken over {TAKEOVER_LIMIT} times after its worker stopped; it is not run again"
@@ -98,9 +99,9 @@ def claim_statement(worker_id: str, lease: timedelta) -> Update:
     """The one statement that is a claim. Separate so a test can inspect its plan.
 
     It picks the oldest job that is `queued`, or `running` under a lease
-    that has expired. The second kind is a takeover. A job that has already
-    been taken over TAKEOVER_LIMIT times is not handed out: the same
-    statement marks it `failed`.
+    that has expired. The second kind is a takeover. A takeover of a job
+    that has already been taken over TAKEOVER_LIMIT times is not made: the
+    same statement marks the job `failed`.
     """
     queued = _literal(JobStatus.QUEUED.value)
     running = _literal(JobStatus.RUNNING.value)
@@ -192,11 +193,11 @@ async def claim_job(
     increments `takeovers`. The claim is final when the caller's transaction
     commits.
 
-    A job that was already taken over TAKEOVER_LIMIT times is marked `failed`
-    with an `error` step, in the caller's transaction, and the next claimable
-    job is looked for. Such jobs are appended to `failed`, if given: no
-    worker runs them again, so the caller is the one to clean up after them
-    once its transaction has committed.
+    A job that would be taken over for the time after TAKEOVER_LIMIT is
+    marked `failed` with an `error` step instead, in the caller's
+    transaction, and the next claimable job is looked for. Such jobs are
+    appended to `failed`, if given: no worker runs them again, so the caller
+    is the one to clean up after them once its transaction has committed.
 
     Jobs that are backing off (`waiting`) are not picked up yet.
     """

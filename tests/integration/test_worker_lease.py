@@ -385,3 +385,26 @@ def test_the_workspace_of_a_job_failed_at_the_takeover_limit_is_removed(stack: S
     assert (job.status, job.takeovers) == (S.FAILED, 5)
     assert not workspace_left
     assert other_left
+
+
+def test_a_worker_whose_lease_is_already_over_does_not_touch_the_workspace(stack: Stack) -> None:
+    """A worker that was paused right after its claim, for longer than the lease.
+
+    Another worker may have finished the job and removed the workspace
+    since. Writing the spec files again would leave a directory nobody removes.
+    """
+
+    async def body(
+        engine: AsyncEngine, provider: AnthropicProvider
+    ) -> tuple[JobStatus | None, Job, list[Step]]:
+        job, sent_at = await claim(engine, stack, "w1", lease=30)
+        status = await run_job(
+            engine, provider, FIXED, job, stack.settings(), claimed_at=sent_at - 100
+        )
+        return status, *await read(engine, job)
+
+    status, job, steps = stack.run(body)
+    assert status is None
+    assert steps == []
+    assert job.status is S.RUNNING
+    assert not (stack.workspace_root / str(job.id)).exists()
