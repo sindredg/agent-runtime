@@ -29,9 +29,7 @@ class JobSubmission(JobSpec):
 
     def spec(self) -> dict[str, Any]:
         """The part that is stored as the job's spec."""
-        return JobSpec.model_validate(
-            self.model_dump(exclude={"token_budget", "timeout_seconds"})
-        ).model_dump(exclude_none=True)
+        return self.model_dump(exclude={"token_budget", "timeout_seconds"}, exclude_none=True)
 
 
 class JobView(BaseModel):

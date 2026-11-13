@@ -186,3 +186,27 @@ def test_the_base_url_never_comes_from_the_process_environment(
     assert str(AnthropicProvider(api_key="k")._client.base_url).rstrip("/") == CLAUDE_API_URL
     chosen = AnthropicProvider(api_key="k", base_url="http://fake:8000")
     assert str(chosen._client.base_url).rstrip("/") == "http://fake:8000"
+
+
+@pytest.mark.parametrize("error", [ValueError("bad argument"), TypeError("bad type")])
+def test_an_error_that_a_second_try_cannot_fix_is_not_retryable(
+    monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    """The SDK refuses to build the request. Sending it again would fail the same way."""
+
+    async def run() -> None:
+        provider = AnthropicProvider(api_key="k", base_url="http://provider")
+
+        def refuse(**kwargs: object) -> None:
+            raise error
+
+        monkeypatch.setattr(provider._client.messages, "stream", refuse)
+        try:
+            await provider.complete(REQUEST)
+        finally:
+            await provider.aclose()
+
+    with pytest.raises(ProviderError) as raised:
+        asyncio.run(run())
+    assert raised.value.retryable is False
+    assert raised.value.status is None

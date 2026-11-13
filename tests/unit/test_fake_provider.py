@@ -282,6 +282,21 @@ def test_two_tool_calls_with_one_id_in_an_assistant_message_are_400() -> None:
     assert "unique" in response.json()["error"]["message"]
 
 
+def test_a_tool_call_followed_by_another_assistant_message_is_400() -> None:
+    call = {"type": "tool_use", "id": "lost", "name": "t", "input": {}}
+    body = request(
+        messages=[
+            USER,
+            {"role": "assistant", "content": [call]},
+            {"role": "assistant", "content": "I never got an answer."},
+            USER,
+        ]
+    )
+    response = client().post("/v1/messages", json=body, headers=HEADERS)
+    assert error_of(response) == (400, "invalid_request_error")
+    assert "lost" in response.json()["error"]["message"]
+
+
 def test_json_nested_too_deep_is_400_not_500() -> None:
     response = client().post("/v1/messages", content=b"[" * 200_000, headers=HEADERS)
     assert error_of(response) == (400, "invalid_request_error")

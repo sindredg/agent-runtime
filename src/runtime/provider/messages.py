@@ -4,6 +4,7 @@ The same client talks to the Claude API and to the fake provider. Only the
 base URL differs, and that comes from configuration.
 """
 
+import json
 from typing import Any
 
 import anthropic
@@ -86,13 +87,20 @@ class AnthropicProvider:
             raise ProviderError(
                 f"no complete response from the provider: {error!r}", status=None, retryable=True
             ) from error
-        except (AssertionError, ValueError, RuntimeError) as error:
+        except (AssertionError, json.JSONDecodeError) as error:
             # What the SDK raises for a 200 that is not a message stream: an
-            # empty body, other content, or a line that is not JSON.
+            # empty body, other content, or a line that is not JSON. The
+            # answer was bad, not the request, so it may be sent again.
             raise ProviderError(
                 f"the provider's answer is not a message stream: {error!r}",
                 status=None,
                 retryable=True,
+            ) from error
+        except (ValueError, TypeError, RuntimeError) as error:
+            # The SDK refused the request or could not use the response for
+            # a reason that will not change on a second try.
+            raise ProviderError(
+                f"the model call could not be made: {error!r}", status=None, retryable=False
             ) from error
 
         if message.stop_reason is None:

@@ -213,8 +213,7 @@ async def run_job(
     A failure of the job (a bad spec, a provider error, a response that
     cannot be used) is recorded as an `error` step and the status `failed`.
     Only a failure to record the outcome reaches the caller, and the job
-    then stays `running`. The workspace is removed once the outcome is
-    recorded.
+    then stays `running`. The workspace is removed either way.
     """
     async with engine.begin() as conn:
         writer = _StepWriter(engine, job, await read_steps(conn, job.id))
@@ -231,21 +230,25 @@ async def run_job(
         log.exception("job crashed", extra={"job_id": job.id})
         failure = f"{type(error).__name__}: {error}"
 
-    if failure is None:
-        status = JobStatus.SUCCEEDED
-    else:
-        status = JobStatus.FAILED
-        try:
-            check_json(failure)
-        except InvalidPayload:
-            failure = "the job failed with an error that cannot be stored as text"
-        # Read the log again first: if the failure was a step that did not
-        # go in, the writer's idea of the next seq may be wrong.
+    try:
+        if failure is None:
+            status = JobStatus.SUCCEEDED
+        else:
+            status = JobStatus.FAILED
+            try:
+                check_json(failure)
+            except InvalidPayload:
+                failure = "the job failed with an error that cannot be stored as text"
+            # Read the log again first: if the failure was a step that did
+            # not go in, the writer's idea of the next seq may be wrong.
+            async with engine.begin() as conn:
+                writer.steps = await read_steps(conn, job.id)
+            await writer.append(StepKind.ERROR, {"message": failure})
         async with engine.begin() as conn:
-            writer.steps = await read_steps(conn, job.id)
-        await writer.append(StepKind.ERROR, {"message": failure})
-    async with engine.begin() as conn:
-        await update_status(conn, job.id, status, error=failure)
-    await asyncio.to_thread(remove_workspace, settings.workspace_root, job.id)
+            await update_status(conn, job.id, status, error=failure)
+    finally:
+        # Also when the outcome could not be recorded: this worker will not
+        # touch the job again.
+        await asyncio.to_thread(remove_workspace, settings.workspace_root, job.id)
     log.info("job finished", extra={"job_id": job.id, "status": status.value, "error": failure})
     return status

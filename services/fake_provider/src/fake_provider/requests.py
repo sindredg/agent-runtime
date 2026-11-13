@@ -69,6 +69,13 @@ def check_request(body: Any) -> list[dict[str, Any]]:
             calls = [_text_id(b, "id") for b in blocks if b.get("type") == "tool_use"]
             if len(set(calls)) != len(calls):
                 raise _invalid(f"messages.{position}: tool_use ids must be unique")
+            if previous_calls:
+                # Two assistant messages in a row: the first one's tool
+                # calls can no longer be answered.
+                raise _invalid(
+                    f"messages.{position}: tool_use ids were found without tool_result"
+                    f" blocks immediately after: {', '.join(sorted(previous_calls))}"
+                )
             previous_calls = set(calls)
             continue
         results = [_text_id(b, "tool_use_id") for b in blocks if b.get("type") == "tool_result"]

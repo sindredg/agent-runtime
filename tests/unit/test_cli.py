@@ -8,8 +8,9 @@ from typing import Any
 import httpx2
 import pytest
 
+from runtime import cli
 from runtime.api.models import JobSubmission
-from runtime.cli import DEFAULT_API_URL, build_parser, format_step, main
+from runtime.cli import DEFAULT_API_URL, FOLLOW_ATTEMPTS, build_parser, format_step, main
 
 JOB_ID = "01a1d655-88bd-7468-afc4-5ca3a1947906"
 EXAMPLES = Path(__file__).resolve().parents[2] / "examples"
@@ -85,6 +86,7 @@ class StubApi:
         self.final = final or job("succeeded", tokens_used=19)
         self.end = end
         self.submit_response = httpx2.Response(201, json=job())
+        self.drop_after: int | None = None
 
     def __call__(self, request: httpx2.Request) -> httpx2.Response:
         self.requests.append(request)
@@ -99,8 +101,17 @@ class StubApi:
             page = [s for s in STEPS if s["seq"] > after][:2]
             return httpx2.Response(200, json={"steps": page})
         if path == f"/jobs/{JOB_ID}/events":
-            return sse(STEPS, self.end)
+            after = int(request.url.params.get("after", "0"))
+            remaining = [s for s in STEPS if s["seq"] > after]
+            # `drop_after` cuts each answer short, like a connection that breaks.
+            return sse(remaining[: self.drop_after], self.end if self.drop_after is None else None)
         return httpx2.Response(404, json={"detail": "job not found"})
+
+
+@pytest.fixture(autouse=True)
+def no_waiting(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tests do not wait between two tries to follow a stream."""
+    monkeypatch.setattr(cli, "FOLLOW_RETRY_DELAY", 0.0)
 
 
 def run(*argv: str, api: StubApi | None = None) -> tuple[int, str, str]:
@@ -262,11 +273,65 @@ def test_logs_follow_prints_the_stream_and_the_outcome() -> None:
     assert out.splitlines() == [*LINES, "succeeded  tokens_used=19"]
 
 
-def test_a_stream_that_ends_without_its_end_event_exits_with_2() -> None:
-    code, out, err = run("logs", JOB_ID, "--follow", api=StubApi(end=None))
+def test_a_stream_that_keeps_ending_without_its_end_event_exits_with_2() -> None:
+    api = StubApi(end=None)
+    code, out, err = run("logs", JOB_ID, "--follow", api=api)
     assert code == 2
+    # Every step once: the tries after the first ask only for what is new.
     assert out.splitlines() == LINES
     assert "ended before the job did" in err
+    asked = [r.url.params["after"] for r in api.requests if r.url.path.endswith("/events")]
+    assert asked == ["0"] + ["4"] * FOLLOW_ATTEMPTS
+
+
+def test_a_stream_that_breaks_is_continued_after_the_last_printed_step() -> None:
+    """Each connection delivers one step and drops. The last one delivers the end."""
+
+    class Dropping(StubApi):
+        def __call__(self, request: httpx2.Request) -> httpx2.Response:
+            if request.url.path.endswith("/events"):
+                after = int(request.url.params.get("after", "0"))
+                self.drop_after = 1 if after < len(STEPS) else None
+            return super().__call__(request)
+
+    api = Dropping()
+    code, out, err = run("logs", JOB_ID, "--follow", api=api)
+    assert (code, err) == (0, "")
+    assert out.splitlines() == [*LINES, "succeeded  tokens_used=19"]
+    asked = [r.url.params["after"] for r in api.requests if r.url.path.endswith("/events")]
+    assert asked == ["0", "1", "2", "3", "4"]
+
+
+def test_a_connection_that_fails_while_following_is_tried_again_then_given_up() -> None:
+    calls = 0
+
+    def refuse(request: httpx2.Request) -> httpx2.Response:
+        nonlocal calls
+        calls += 1
+        raise httpx2.ReadError("connection reset", request=request)
+
+    out, err = io.StringIO(), io.StringIO()
+    code = main(
+        ["logs", JOB_ID, "--follow"], out=out, err=err, transport=httpx2.MockTransport(refuse)
+    )
+    assert code == 2
+    assert calls == FOLLOW_ATTEMPTS
+    assert "the event stream broke" in err.getvalue()
+
+
+def test_a_reader_that_goes_away_is_not_an_error() -> None:
+    """`runtime logs <id> | head`: writing fails once the reader has closed the pipe."""
+
+    class ClosedAfterOneLine(io.StringIO):
+        def write(self, text: str) -> int:
+            if self.getvalue().count("\n") >= 1:
+                raise BrokenPipeError
+            return super().write(text)
+
+    out, err = ClosedAfterOneLine(), io.StringIO()
+    code = main(["logs", JOB_ID], out=out, err=err, transport=httpx2.MockTransport(StubApi()))
+    assert (code, err.getvalue()) == (0, "")
+    assert out.getvalue().splitlines() == LINES[:1]
 
 
 def test_an_api_that_cannot_be_reached_exits_with_2() -> None:
@@ -384,6 +449,29 @@ def test_long_text_is_cut_to_one_short_line() -> None:
     assert "\n" not in line
     assert line.endswith("...")
     assert len(line) < 140
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"id": "m", "content": "just a string", "stop_reason": "end_turn", "usage": {}},
+        {"id": "m", "content": ["not a block"], "stop_reason": "x", "usage": None},
+        {
+            "id": "m",
+            "content": [{"type": "text"}],
+            "stop_reason": "x",
+            "usage": {"input_tokens": 1},
+        },
+        {},
+    ],
+)
+def test_a_step_with_an_unusual_payload_is_printed_as_json(payload: dict[str, Any]) -> None:
+    """The worker stores a malformed response as it came. Its log must still print."""
+    line = format_step(step(2, "model_response", payload))
+    assert line.startswith("   2  model_response")
+    assert "\n" not in line
+    for kind in ("model_request", "tool_intent", "tool_result", "error"):
+        assert format_step(step(3, kind, {"odd": True})).endswith('{"odd": true}')
 
 
 def test_an_unknown_step_kind_is_still_printed() -> None:

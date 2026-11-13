@@ -11,6 +11,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any, TextIO
@@ -19,6 +20,12 @@ from uuid import UUID
 import httpx2
 
 DEFAULT_API_URL = "http://127.0.0.1:8000"
+# Following a job: seconds without any data before a connection counts as
+# dead, tries in a row without a new step before giving up, and the wait
+# between two tries.
+FOLLOW_READ_TIMEOUT = 60.0
+FOLLOW_ATTEMPTS = 5
+FOLLOW_RETRY_DELAY = 1.0
 # Longest piece of a step shown on its line.
 PREVIEW = 100
 
@@ -69,27 +76,37 @@ def _preview(text: str) -> str:
     return line if len(line) <= PREVIEW else line[: PREVIEW - 3] + "..."
 
 
-def format_step(step: dict[str, Any]) -> str:
-    """One line for one step: seq, kind, and the part of the payload worth a glance."""
-    payload = step["payload"]
-    kind = step["kind"]
+def _detail(kind: str, payload: dict[str, Any]) -> str:
     if kind == "model_request":
-        detail = f"model={payload['model']} messages={payload['messages']}"
-    elif kind == "model_response":
+        return f"model={payload['model']} messages={payload['messages']}"
+    if kind == "model_response":
         usage = payload["usage"]
         text = " ".join(b["text"] for b in payload["content"] if b.get("type") == "text")
-        detail = (
+        return (
             f"stop_reason={payload['stop_reason']}"
             f" tokens={usage['input_tokens']}+{usage['output_tokens']} {_preview(text)}"
         )
-    elif kind == "tool_intent":
-        detail = f"{payload['name']} {_preview(json.dumps(payload['input']))}"
-    elif kind == "tool_result":
+    if kind == "tool_intent":
+        return f"{payload['name']} {_preview(json.dumps(payload['input']))}"
+    if kind == "tool_result":
         flag = "error" if payload["is_error"] else "ok"
-        detail = f"{flag} {_preview(payload['content'])}"
-    elif kind == "error":
-        detail = _preview(payload["message"])
-    else:
+        return f"{flag} {_preview(payload['content'])}"
+    if kind == "error":
+        return _preview(payload["message"])
+    return _preview(json.dumps(payload))
+
+
+def format_step(step: dict[str, Any]) -> str:
+    """One line for one step: seq, kind, and the part of the payload worth a glance.
+
+    A payload that does not have the usual shape is shown as JSON. The worker
+    stores a malformed model response as it came, and that job's log still
+    has to be readable.
+    """
+    payload, kind = step["payload"], step["kind"]
+    try:
+        detail = _detail(kind, payload)
+    except LookupError, TypeError, AttributeError:
         detail = _preview(json.dumps(payload))
     return f"{step['seq']:>4}  {kind:<14}  {detail}".rstrip()
 
@@ -139,30 +156,48 @@ def _lines(response: httpx2.Response) -> Iterator[str]:
 
 
 def _follow(client: httpx2.Client, job_id: str, out: TextIO) -> str:
-    """Print steps from the event stream as they arrive. Returns the final status."""
+    """Print steps from the event stream as they arrive. Returns the final status.
+
+    A stream that breaks is opened again after the last step that was
+    printed. It is given up after FOLLOW_ATTEMPTS tries in a row that
+    brought nothing new.
+    """
     after = 0
-    # timeout=None on reads: a job can be quiet for a long time between steps.
-    timeout = httpx2.Timeout(10.0, read=None)
-    with client.stream(
-        "GET", f"/jobs/{job_id}/events", params={"after": after}, timeout=timeout
-    ) as response:
-        if response.status_code >= 400:
-            response.read()
-            _check(response)
-        event, data = "", ""
-        for line in _lines(response):
-            if line.startswith("event: "):
-                event = line.removeprefix("event: ")
-            elif line.startswith("data: "):
-                data = line.removeprefix("data: ")
-            elif not line and event:
-                if event == "step":
-                    print(format_step(json.loads(data)), file=out, flush=True)
-                elif event == "end":
-                    status: str = json.loads(data)["status"]
-                    return status
+    failures = 0
+    # The API sends a comment line at least every 15 seconds. A read that
+    # waits much longer than that is a dead connection.
+    timeout = httpx2.Timeout(10.0, read=FOLLOW_READ_TIMEOUT)
+    while True:
+        printed = after
+        try:
+            with client.stream(
+                "GET", f"/jobs/{job_id}/events", params={"after": after}, timeout=timeout
+            ) as response:
+                if response.status_code >= 400:
+                    response.read()
+                    _check(response)
                 event, data = "", ""
-    raise CommandError("the event stream ended before the job did")
+                for line in _lines(response):
+                    if line.startswith("event: "):
+                        event = line.removeprefix("event: ")
+                    elif line.startswith("data: "):
+                        data = line.removeprefix("data: ")
+                    elif not line and event:
+                        if event == "step":
+                            step = json.loads(data)
+                            print(format_step(step), file=out, flush=True)
+                            after = step["seq"]
+                        elif event == "end":
+                            status: str = json.loads(data)["status"]
+                            return status
+                        event, data = "", ""
+            problem = "the event stream ended before the job did"
+        except httpx2.TransportError as error:
+            problem = f"the event stream broke: {error!r}"
+        failures = 0 if after > printed else failures + 1
+        if failures >= FOLLOW_ATTEMPTS:
+            raise CommandError(problem)
+        time.sleep(FOLLOW_RETRY_DELAY)
 
 
 def _submit(client: httpx2.Client, args: argparse.Namespace, out: TextIO) -> int:
@@ -224,6 +259,13 @@ def main(
     try:
         with httpx2.Client(base_url=args.api_url, timeout=30.0, transport=transport) as client:
             return handler(client, args, out)
+    except BrokenPipeError:
+        # The reader went away, as in `runtime logs <id> | head`. Not an
+        # error. Python would complain again when it flushes stdout at exit,
+        # so stdout is pointed somewhere that accepts the rest.
+        if out is sys.stdout:
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        return 0
     except CommandError as error:
         print(f"runtime: {error}", file=err)
     except (httpx2.HTTPError, httpx2.InvalidURL) as error:

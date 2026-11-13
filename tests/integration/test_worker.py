@@ -18,7 +18,14 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from runtime.provider.base import ModelRequest, ModelResponse
 from runtime.provider.messages import AnthropicProvider
 from runtime.store.engine import create_engine
-from runtime.store.jobs import Job, claim_job, create_job, get_job
+from runtime.store.jobs import (
+    InvalidTransition,
+    Job,
+    claim_job,
+    create_job,
+    get_job,
+    update_status,
+)
 from runtime.store.status import JobStatus
 from runtime.store.steps import Step, StepKind, append_step, read_steps
 from runtime.tools import default_tools
@@ -318,14 +325,16 @@ def test_a_response_that_did_not_finish_fails_the_job_and_runs_no_tool(
     assert job.tokens_used == 12
 
 
-def run_with(stack: Stack, provider: Any, tools: ToolRegistry) -> tuple[Job, list[Step]]:
+def run_with(
+    stack: Stack, provider: Any, tools: ToolRegistry, files: dict[str, str] | None = None
+) -> tuple[Job, list[Step]]:
     """One job with a stand-in provider, read back afterwards."""
 
     async def body(engine: AsyncEngine, _: AnthropicProvider) -> tuple[Job, list[Step]]:
         async with engine.begin() as conn:
             await create_job(
                 conn,
-                spec={"prompt": "go"},
+                spec={"prompt": "go", "files": files or {}},
                 token_budget=1000,
                 deadline=datetime.now(UTC) + timedelta(hours=1),
             )
@@ -431,6 +440,28 @@ def test_a_step_conflict_fails_the_job_instead_of_leaving_it_running(stack: Stac
     assert steps[1].payload == {"message": "written by someone else"}
     assert "StepConflict" in steps[2].payload["message"]
     assert job.status is JobStatus.FAILED
+
+
+class EndsTheJobItself:
+    """A provider that, during the call, moves the job to a final status behind the worker."""
+
+    def attach(self, engine: AsyncEngine, job: Job) -> None:
+        self.engine, self.job = engine, job
+
+    async def complete(self, request: ModelRequest) -> ModelResponse:
+        async with self.engine.begin() as conn:
+            await update_status(conn, self.job.id, JobStatus.CANCELLED)
+        return ModelResponse("msg_1", "m", [{"type": "text", "text": "hi"}], "end_turn", 1, 1)
+
+    async def aclose(self) -> None:
+        return None
+
+
+def test_the_workspace_is_removed_even_when_the_outcome_cannot_be_recorded(stack: Stack) -> None:
+    """The job is already final when the worker tries to mark it succeeded."""
+    with pytest.raises(InvalidTransition):
+        run_with(stack, EndsTheJobItself(), ToolRegistry(), files={"seed.txt": "x"})
+    assert list(stack.workspace_root.iterdir()) == []
 
 
 def test_spec_files_are_written_to_the_job_workspace_before_tools_run(stack: Stack) -> None:
