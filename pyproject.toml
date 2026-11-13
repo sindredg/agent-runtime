@@ -12,8 +12,8 @@ dev = [
     "pre-commit==4.7.0",
     "pytest==9.2.0",
     "ruff==0.17.5",
-    # Lints the workflow and config YAML. Not in the plan's stack table; added
-    # because every kind of file in the repository has a linter in CI.
+    # Lints the workflow and config YAML, so every kind of file in the
+    # repository has a linter in CI.
     "yamllint==1.38.0",
 ]
 

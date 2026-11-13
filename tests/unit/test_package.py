@@ -1,4 +1,4 @@
-"""The package installs and its layout matches the plan."""
+"""The package installs and has the expected subpackages."""
 
 import importlib
 from importlib.metadata import version
