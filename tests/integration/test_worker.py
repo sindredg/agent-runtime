@@ -21,6 +21,7 @@ from runtime.store.engine import create_engine
 from runtime.store.jobs import Job, claim_job, create_job, get_job
 from runtime.store.status import JobStatus
 from runtime.store.steps import Step, StepKind, read_steps
+from runtime.tools import default_tools
 from runtime.tools.base import Tool, ToolRegistry, ToolResult
 from runtime.worker.agent import AgentSettings, run_job
 from runtime.worker.loop import work
@@ -304,6 +305,28 @@ def test_spec_files_are_written_to_the_job_workspace_before_tools_run(stack: Sta
     assert seen == ["Hi!\n"]
     workspace = stack.workspace_root / str(outcome.job.id)
     assert (workspace / "sub" / "b.txt").read_text() == "b"
+
+
+def test_read_file_returns_the_seeded_file_to_the_model(stack: Stack) -> None:
+    """The real tool: the file from the spec reaches the provider as the tool result."""
+    text = "Hello from the workspace.\n"
+    outcome = stack.run_one({**HELLO, "files": {"hello.txt": text}}, default_tools())
+    assert outcome.job.status is JobStatus.SUCCEEDED
+    assert outcome.steps[3].payload["content"] == text
+    assert outcome.steps[3].payload["is_error"] is False
+    sent = outcome.requests[1]["body"]["messages"][2]["content"][0]
+    assert sent["content"] == text
+    assert outcome.requests[0]["body"]["tools"] == list(default_tools().definitions())
+
+
+def test_read_file_of_a_missing_file_is_an_error_result(stack: Stack) -> None:
+    outcome = stack.run_one(HELLO, default_tools())
+    assert outcome.job.status is JobStatus.SUCCEEDED
+    assert outcome.steps[3].payload == {
+        "tool_use_id": outcome.steps[2].payload["tool_use_id"],
+        "content": "no such file: hello.txt",
+        "is_error": True,
+    }
 
 
 def test_work_loop_runs_queued_jobs_oldest_first_and_stops_when_told(stack: Stack) -> None:
