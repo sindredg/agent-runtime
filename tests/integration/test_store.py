@@ -466,6 +466,26 @@ def test_a_claim_that_fails_a_job_at_the_limit_still_hands_out_the_next_job(
     assert capped.status is S.FAILED
 
 
+def test_a_claim_reports_the_jobs_it_failed_at_the_limit(database_url: str) -> None:
+    """The caller has to know: nobody else will ever clean up after such a job."""
+
+    async def body(conn: AsyncConnection) -> tuple[Job, list[Job], Job | None]:
+        capped = await new_job(conn)
+        assert await claim_job(conn, worker_id="w1") is not None
+        await conn.execute(
+            text("UPDATE jobs SET takeovers = :limit WHERE id = :id"),
+            {"limit": TAKEOVER_LIMIT, "id": capped.id},
+        )
+        await expire_lease(conn, capped.id)
+        failed: list[Job] = []
+        claimed = await claim_job(conn, worker_id="w2", failed=failed)
+        return capped, failed, claimed
+
+    capped, failed, claimed = in_transaction(database_url, body)
+    assert claimed is None
+    assert [(job.id, job.status) for job in failed] == [(capped.id, S.FAILED)]
+
+
 def test_a_failed_claim_of_a_capped_job_rolls_back_with_its_error_step(database_url: str) -> None:
     """The status and the error step are one transaction: both happen or neither."""
 

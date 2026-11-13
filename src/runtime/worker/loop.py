@@ -8,9 +8,10 @@ from pathlib import Path
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from runtime.provider.base import Provider
-from runtime.store.jobs import claim_job
+from runtime.store.jobs import Job, claim_job
 from runtime.tools.base import ToolRegistry
 from runtime.worker.agent import AgentSettings, run_job
+from runtime.worker.workspace import remove_workspace
 
 log = logging.getLogger("runtime.worker")
 
@@ -54,9 +55,16 @@ async def work(
         # Taken before the claim is sent: the worker's deadline for the
         # lease counts from here, so it is never later than the database's.
         claimed_at = time.monotonic()
+        failed: list[Job] = []
         try:
             async with engine.begin() as conn:
-                job = await claim_job(conn, worker_id=worker_id, lease=settings.lease)
+                job = await claim_job(
+                    conn, worker_id=worker_id, lease=settings.lease, failed=failed
+                )
+            # Jobs the claim failed at the takeover limit are final, and this
+            # worker made them so. Their workspaces go, like any finished job's.
+            for ended in failed:
+                await asyncio.to_thread(remove_workspace, settings.workspace_root, ended.id)
         except Exception:
             # The database may be restarting. Keep the worker up and try again.
             log.exception("claim failed")

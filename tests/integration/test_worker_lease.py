@@ -21,6 +21,7 @@ from runtime.store.status import JobStatus
 from runtime.store.steps import Step, StepKind, read_steps
 from runtime.tools.base import ToolCall, ToolRegistry, ToolResult
 from runtime.worker.agent import run_job
+from runtime.worker.loop import work
 
 from .conftest import FIXED, HELLO, Stack, stub_tool
 
@@ -336,3 +337,51 @@ def test_a_job_ended_behind_the_worker_is_dropped_and_its_workspace_left_alone(
     assert job.status is S.CANCELLED
     assert [step.kind for step in steps] == [K.MODEL_REQUEST]
     assert (stack.workspace_root / str(job.id) / "seed.txt").is_file()
+
+
+def test_the_workspace_of_a_job_failed_at_the_takeover_limit_is_removed(stack: Stack) -> None:
+    """The claim fails such a job. No worker runs it again, so the loop that claimed cleans up."""
+
+    async def body(engine: AsyncEngine, provider: AnthropicProvider) -> tuple[Job, bool, bool]:
+        async with engine.begin() as conn:
+            job = await stack.create(conn, {**HELLO, "files": {"seed.txt": "x"}})
+            assert await claim_job(conn, worker_id="gone") is not None
+            await conn.execute(
+                text(
+                    "UPDATE jobs SET takeovers = 5,"
+                    " lease_expires_at = clock_timestamp() - interval '1 second' WHERE id = :id"
+                ),
+                {"id": job.id},
+            )
+        workspace = stack.workspace_root / str(job.id)
+        workspace.mkdir(parents=True)
+        (workspace / "seed.txt").write_text("x")
+        other = stack.workspace_root / "not-a-job"
+        other.mkdir()
+
+        stop = asyncio.Event()
+        worker = asyncio.create_task(
+            work(
+                engine,
+                provider,
+                FIXED,
+                stack.settings(),
+                worker_id="w1",
+                poll_interval=0.05,
+                stop=stop,
+            )
+        )
+        async with asyncio.timeout(20):
+            while True:
+                found, _ = await read(engine, job)
+                if found.status is S.FAILED and not workspace.exists():
+                    break
+                await asyncio.sleep(0.05)
+            stop.set()
+            await worker
+        return found, workspace.exists(), other.exists()
+
+    job, workspace_left, other_left = stack.run(body)
+    assert (job.status, job.takeovers) == (S.FAILED, 5)
+    assert not workspace_left
+    assert other_left

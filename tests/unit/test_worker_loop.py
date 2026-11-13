@@ -101,7 +101,9 @@ def test_a_job_that_cannot_be_finished_does_not_stop_the_loop(
         async def __aexit__(self, *error: object) -> None:
             return None
 
-    async def claim(conn: object, *, worker_id: str, lease: timedelta) -> FakeJob | None:
+    async def claim(
+        conn: object, *, worker_id: str, lease: timedelta, failed: list[Any]
+    ) -> FakeJob | None:
         # The configured lease reaches the claim.
         assert lease == timedelta(seconds=7)
         if len(claimed) == 3:

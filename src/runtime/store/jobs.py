@@ -178,7 +178,11 @@ async def _record_takeover_limit(conn: AsyncConnection, job: Job) -> None:
 
 
 async def claim_job(
-    conn: AsyncConnection, *, worker_id: str, lease: timedelta = DEFAULT_LEASE
+    conn: AsyncConnection,
+    *,
+    worker_id: str,
+    lease: timedelta = DEFAULT_LEASE,
+    failed: list[Job] | None = None,
 ) -> Job | None:
     """Claim the oldest claimable job for `worker_id`, or return None if there is none.
 
@@ -190,7 +194,9 @@ async def claim_job(
 
     A job that was already taken over TAKEOVER_LIMIT times is marked `failed`
     with an `error` step, in the caller's transaction, and the next claimable
-    job is looked for.
+    job is looked for. Such jobs are appended to `failed`, if given: no
+    worker runs them again, so the caller is the one to clean up after them
+    once its transaction has committed.
 
     Jobs that are backing off (`waiting`) are not picked up yet.
     """
@@ -205,6 +211,8 @@ async def claim_job(
         if job.status is JobStatus.RUNNING:
             return job
         await _record_takeover_limit(conn, job)
+        if failed is not None:
+            failed.append(job)
 
 
 async def update_status(
