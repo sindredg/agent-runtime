@@ -10,27 +10,31 @@ import logging
 import os
 
 from alembic import context
-from sqlalchemy import URL, Connection, make_url, pool
+from sqlalchemy import URL, Connection, pool
 from sqlalchemy.ext.asyncio import create_async_engine
+
+from runtime.store.engine import sqlalchemy_url
+from runtime.store.schema import metadata
 
 # Alembic logs each migration it runs at INFO.
 logging.basicConfig(level=logging.INFO, format="%(levelname)s [%(name)s] %(message)s")
 
 
 def database_url() -> URL:
-    """DATABASE_URL with the asyncpg driver named, as SQLAlchemy requires."""
-    return make_url(os.environ["DATABASE_URL"]).set(drivername="postgresql+asyncpg")
+    return sqlalchemy_url(os.environ["DATABASE_URL"])
 
 
 def run_offline() -> None:
     """Print the SQL instead of running it (`alembic upgrade head --sql`)."""
-    context.configure(url=database_url(), literal_binds=True)
+    context.configure(url=database_url(), target_metadata=metadata, literal_binds=True)
     with context.begin_transaction():
         context.run_migrations()
 
 
 def run_with(connection: Connection) -> None:
-    context.configure(connection=connection)
+    # target_metadata lets `alembic check` compare the database with the
+    # table definitions in runtime.store.schema.
+    context.configure(connection=connection, target_metadata=metadata, compare_server_default=True)
     with context.begin_transaction():
         context.run_migrations()
 
