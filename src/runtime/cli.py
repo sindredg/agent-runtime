@@ -94,7 +94,7 @@ def _preview(text: str) -> str:
 
 def _detail(kind: str, payload: dict[str, Any]) -> str:
     if kind == "model_request":
-        return f"model={payload['model']} messages={payload['messages']}"
+        return f"model={_preview(str(payload['model']))} messages={payload['messages']}"
     if kind == "model_response":
         usage = payload["usage"]
         text = " ".join(b["text"] for b in payload["content"] if b.get("type") == "text")
@@ -103,7 +103,7 @@ def _detail(kind: str, payload: dict[str, Any]) -> str:
             f" tokens={usage['input_tokens']}+{usage['output_tokens']} {_preview(text)}"
         )
     if kind == "tool_intent":
-        return f"{payload['name']} {_preview(json.dumps(payload['input']))}"
+        return f"{_preview(str(payload['name']))} {_preview(json.dumps(payload['input']))}"
     if kind == "tool_result":
         flag = "error" if payload["is_error"] else "ok"
         return f"{flag} {_preview(payload['content'])}"

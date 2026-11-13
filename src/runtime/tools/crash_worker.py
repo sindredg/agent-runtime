@@ -15,8 +15,8 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
+from runtime.failpoints import die
 from runtime.tools.base import Tool, ToolCall, ToolResult
-from runtime.worker.failpoints import die
 
 LOG_NAME = "crash_worker.log"
 

@@ -297,6 +297,13 @@ Not built or not closed:
 - A job's failure is two writes: the `error` step, then the status. A worker
   that stops between them leaves a job that the next worker runs on, with an
   `error` step in the middle of its log.
+- The operation id protects a call that the runtime runs again. It does not
+  protect against the model: a model that is told a call failed and asks for
+  it again makes a new call with a new id. A model that reuses a call id in a
+  later turn gets the same operation id for a different call.
+- A worker that learns from its heartbeat that the lease is gone does not
+  cancel a model call in flight. The call runs to its end and its answer is
+  then refused.
 - A workspace can be left behind: when the write that makes a job final
   reaches the database but its answer does not reach the worker, and when two
   workers use different workspace roots.

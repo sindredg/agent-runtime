@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from runtime.worker.failpoints import NAMES as FAILPOINT_NAMES
+from runtime.failpoints import NAMES as FAILPOINT_NAMES
 
 
 class ConfigError(Exception):

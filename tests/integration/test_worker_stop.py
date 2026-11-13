@@ -322,3 +322,41 @@ def test_a_stop_set_before_a_model_call_means_the_call_is_not_sent(stack: Stack)
     # The provider's own record: it was never called.
     assert script.requests == []
     assert script.cancelled == 0
+
+
+def test_a_stop_after_the_last_step_still_finishes_the_job(stack: Stack) -> None:
+    """Only the final status is missing. Releasing would make another worker read
+    the whole log to write it."""
+    script = Cancellable()
+    acts = Acts(idempotent=True)
+    stop = asyncio.Event()
+
+    async def body(
+        engine: AsyncEngine, _: AnthropicProvider
+    ) -> tuple[JobStatus | None, Job, list[Step]]:
+        async with engine.begin() as conn:
+            await stack.create(conn, SPEC)
+            claim = await claim_job(conn, worker_id="w1")
+        assert claim is not None
+
+        def on_statement(
+            conn: Any, cursor: Any, statement: str, parameters: Any, *rest: Any
+        ) -> None:
+            # The stop arrives while the last response is being written.
+            if "INSERT INTO steps" in statement and len(script.requests) == 2:
+                stop.set()
+
+        event.listen(engine.sync_engine, "before_cursor_execute", on_statement)
+        try:
+            status = await run_job(
+                engine, script, acts.registry(), claim, stack.settings(), stop=stop
+            )
+        finally:
+            event.remove(engine.sync_engine, "before_cursor_execute", on_statement)
+        return status, *await read(engine, claim)
+
+    status, job, steps = stack.run(body)
+    assert stop.is_set()
+    assert status is S.SUCCEEDED
+    assert job.status is S.SUCCEEDED
+    assert steps[-1].kind is K.MODEL_RESPONSE

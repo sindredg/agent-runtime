@@ -20,7 +20,7 @@ from typing import Any
 
 import pytest
 
-from runtime.worker.failpoints import NAMES
+from runtime.failpoints import NAMES
 
 from .conftest import SHORT_LEASE, WORKERS, WORKLOAD, Chaos, Run, docker, record
 

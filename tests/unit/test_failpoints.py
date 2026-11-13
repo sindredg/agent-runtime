@@ -8,10 +8,10 @@ from pathlib import Path
 import pytest
 
 from runtime.config import ConfigError, WorkerConfig
+from runtime.failpoints import NAMES, Failpoints
 from runtime.tools import default_tools
 from runtime.tools.base import ToolCall
 from runtime.tools.crash_worker import crash_worker_tool
-from runtime.worker.failpoints import NAMES, Failpoints
 
 WORKER_ENV = {"ANTHROPIC_API_KEY": "k", "MODEL": "m", "DATABASE_URL": "postgresql://u:p@h/db"}
 
@@ -75,7 +75,7 @@ def test_the_real_failpoint_ends_the_process_like_a_kill() -> None:
     """No cleanup, no exit handlers: exit status 137, as after SIGKILL."""
     code = (
         "import atexit, sys\n"
-        "from runtime.worker.failpoints import Failpoints\n"
+        "from runtime.failpoints import Failpoints\n"
         "atexit.register(lambda: print('cleanup ran'))\n"
         "Failpoints('after_claim').hit('after_claim', takeovers=0)\n"
         "print('still alive')\n"

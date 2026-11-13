@@ -26,6 +26,7 @@ from uuid import UUID
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from runtime.failpoints import Failpoints
 from runtime.provider.base import ModelRequest, ModelResponse, Provider, ProviderError
 from runtime.spec import JobSpec
 from runtime.store import held
@@ -35,7 +36,6 @@ from runtime.store.payload import InvalidPayload, check_json
 from runtime.store.status import FINAL_STATUSES, JobStatus
 from runtime.store.steps import Step, StepKind, read_steps
 from runtime.tools.base import Tool, ToolCall, ToolRegistry, ToolResult, operation_id
-from runtime.worker.failpoints import Failpoints
 from runtime.worker.lease import Lease, keep_renewing
 from runtime.worker.recovery import Ask, Recovered, decide
 from runtime.worker.replay import Replay, replay
@@ -311,13 +311,15 @@ async def _loop(
     state = replay(spec.prompt, steps)
     writer.state = state
     while True:
-        # A step boundary: everything started so far has its step. A worker
-        # that was told to stop starts nothing more.
-        if stop.is_set():
-            return JobStatus.QUEUED
-
         if state.problem:
             raise _JobFailed(f"the model's response is not usable: {state.problem}")
+
+        calls_open = state.stop_reason == "tool_use" and bool(state.pending)
+        # A step boundary: everything started so far has its step. A worker
+        # that was told to stop starts nothing more. A job with nothing left
+        # to start is finished below instead of being handed back.
+        if stop.is_set() and (state.needs_model_call or calls_open):
+            return JobStatus.QUEUED
 
         if state.needs_model_call:
             request = ModelRequest(
@@ -380,7 +382,7 @@ async def _loop(
         # A response cut off at max_tokens can hold half a tool call, so the
         # stop reason is checked before any tool runs. The calls of one
         # response run one after another, one per pass.
-        if state.stop_reason == "tool_use" and state.pending:
+        if calls_open:
             if not await _next_tool_call(
                 writer, tools, job, workspace, lease, state, settings.failpoints, stop
             ):
@@ -514,5 +516,9 @@ async def run_job(
         heartbeat.cancel()
         await asyncio.gather(heartbeat, return_exceptions=True)
     if status in FINAL_STATUSES:
-        await asyncio.to_thread(remove_workspace, settings.workspace_root, job.id)
+        try:
+            await asyncio.to_thread(remove_workspace, settings.workspace_root, job.id)
+        except Exception:
+            # The job is final either way. Only its directory is left behind.
+            log.exception("workspace could not be removed", extra={"job_id": job.id})
     return status

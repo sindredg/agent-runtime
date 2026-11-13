@@ -566,3 +566,12 @@ def test_approval_steps_show_the_call_and_the_reason() -> None:
         " the tool is not idempotent and has no check"
     )
     assert format_step(given) == "   6  approval_given  0190:t1"
+
+
+def test_a_tool_name_or_model_with_control_codes_is_not_printed_raw() -> None:
+    """Both come from outside: the model names the tool, the submitter names the model."""
+    intent = step(3, "tool_intent", {"tool_use_id": "t", "name": "read\x1b[2Jfile", "input": {}})
+    request = step(1, "model_request", {"model": "m\x1b]0;x\x07", "max_tokens": 1, "messages": 1})
+    for line in (format_step(intent), format_step(request)):
+        assert "\x1b" not in line
+        assert "\x07" not in line

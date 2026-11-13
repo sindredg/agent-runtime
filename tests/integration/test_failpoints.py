@@ -18,13 +18,13 @@ import httpx2
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from runtime.failpoints import NAMES, Failpoints
 from runtime.provider.messages import AnthropicProvider
 from runtime.store.jobs import Job, claim_job, get_job
 from runtime.store.status import JobStatus
 from runtime.store.steps import Step, StepKind, read_steps
 from runtime.tools import default_tools
 from runtime.worker.agent import AgentSettings, run_job
-from runtime.worker.failpoints import NAMES, Failpoints
 
 from .conftest import Stack, expire_lease
 

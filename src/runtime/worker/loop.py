@@ -61,15 +61,20 @@ async def work(
                 job = await claim_job(
                     conn, worker_id=worker_id, lease=settings.lease, failed=failed
                 )
-            # Jobs the claim failed at the takeover limit are final, and this
-            # worker made them so. Their workspaces go, like any finished job's.
-            for ended in failed:
-                await asyncio.to_thread(remove_workspace, settings.workspace_root, ended.id)
         except Exception:
             # The database may be restarting. Keep the worker up and try again.
             log.exception("claim failed")
             await _wait(stop, poll_interval)
             continue
+        # Jobs the claim failed at the takeover limit are final, and this
+        # worker made them so. Their workspaces go, like any finished job's.
+        # The claim is committed by now: a failure here must not cost the
+        # job that was claimed with them.
+        for ended in failed:
+            try:
+                await asyncio.to_thread(remove_workspace, settings.workspace_root, ended.id)
+            except Exception:
+                log.exception("workspace could not be removed", extra={"job_id": ended.id})
         if job is None:
             await _wait(stop, poll_interval)
             continue

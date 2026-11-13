@@ -6,12 +6,12 @@ import signal
 from datetime import timedelta
 
 from runtime.config import WorkerConfig
+from runtime.failpoints import Failpoints
 from runtime.logs import configure_logging
 from runtime.provider.messages import AnthropicProvider
 from runtime.store.engine import create_engine
 from runtime.tools import default_tools
 from runtime.worker.agent import AgentSettings
-from runtime.worker.failpoints import Failpoints
 from runtime.worker.loop import keep_alive, work
 
 ALIVE_INTERVAL_SECONDS = 5.0
