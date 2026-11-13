@@ -1,0 +1,6 @@
+self-hosted-runner:
+  # Not self-hosted. ubuntu-26.04 is a GitHub-hosted image (runner-images
+  # README, read 2026-11-13), but actionlint 1.7.12 predates it. Remove this
+  # once a release knows the label.
+  labels:
+    - ubuntu-26.04
