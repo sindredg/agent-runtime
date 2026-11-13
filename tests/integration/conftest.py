@@ -27,7 +27,7 @@ from runtime.provider.messages import AnthropicProvider
 from runtime.store.engine import create_engine, sqlalchemy_url
 from runtime.store.jobs import Job, claim_job, create_job, get_job
 from runtime.store.steps import Step, StepKind, append_step, read_steps
-from runtime.tools.base import Tool, ToolRegistry, ToolResult
+from runtime.tools.base import CheckAnswer, Tool, ToolCall, ToolRegistry, ToolResult
 from runtime.worker.agent import AgentSettings, run_job
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -187,13 +187,22 @@ def database_url(stack_database_url: str, _migrated_template: str) -> Iterator[s
 HELLO = {"prompt": "Read hello.txt and say what it holds.", "model": "hello"}
 
 
-def stub_tool(run: Callable[[Path, dict[str, Any]], ToolResult]) -> ToolRegistry:
-    """A registry whose `read_file` is the given function."""
+def stub_tool(
+    run: Callable[[ToolCall], ToolResult],
+    *,
+    idempotent: bool = True,
+    check: Callable[[ToolCall], CheckAnswer] | None = None,
+) -> ToolRegistry:
+    """A registry whose `read_file` is the given function.
+
+    Idempotent unless told otherwise, like the real `read_file`.
+    """
     schema = {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
-    return ToolRegistry([Tool("read_file", "Read a file.", schema, run)])
+    tool = Tool("read_file", "Read a file.", schema, run, idempotent=idempotent, check=check)
+    return ToolRegistry([tool])
 
 
-FIXED = stub_tool(lambda workspace, tool_input: ToolResult(f"content of {tool_input['path']}"))
+FIXED = stub_tool(lambda call: ToolResult(f"content of {call.input['path']}"))
 
 
 @dataclass

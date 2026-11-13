@@ -27,8 +27,12 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --all-packages --no-editable
 
 FROM python:3.15.2-slim-trixie@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928
-# Services run as an unprivileged user with a fixed ID.
-RUN useradd --system --uid 10001 --no-create-home runtime
+# Services run as an unprivileged user with a fixed ID. /workspaces is where
+# the compose stack mounts the volume for job workspaces: a new volume takes
+# its owner from this directory, so the worker can write to it.
+RUN useradd --system --uid 10001 --no-create-home runtime \
+    && mkdir /workspaces \
+    && chown 10001 /workspaces
 COPY --from=build /app/.venv /app/.venv
 # The migrate service runs alembic from /app: its configuration is in
 # pyproject.toml and the migration scripts are not part of the installed package.

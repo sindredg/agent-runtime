@@ -193,3 +193,133 @@ def test_any_log_replays_to_a_conversation_the_provider_accepts(
     assert state.needs_model_call == (not open_call and not finished)
     if state.needs_model_call:
         check_request({"model": "m", "max_tokens": 1, "messages": state.messages})
+
+
+# Interrupted calls: what a worker finds when it takes a job over
+
+
+def approval_requested(tool_use_id: str) -> tuple[StepKind, dict[str, Any]]:
+    return StepKind.APPROVAL_REQUESTED, {"tool_use_id": tool_use_id, "name": "read_file"}
+
+
+def approval_given(tool_use_id: str) -> tuple[StepKind, dict[str, Any]]:
+    return StepKind.APPROVAL_GIVEN, {"tool_use_id": tool_use_id}
+
+
+def test_a_request_without_a_response_is_not_an_interrupted_tool_call() -> None:
+    state = replay("go", log(request()))
+    assert state.interrupted is None
+    assert state.needs_model_call
+
+
+def test_an_intent_without_a_result_is_reported_as_interrupted() -> None:
+    state = replay("go", log(request(), response(call("t1")), intent("t1")))
+    assert state.interrupted == {"tool_use_id": "t1", "name": "read_file", "input": {}}
+    assert state.approval is None
+    assert state.pending == [call("t1")]
+    assert not state.needs_model_call
+
+
+def test_a_result_closes_the_intent() -> None:
+    state = replay("go", log(request(), response(call("t1")), intent("t1"), result("t1")))
+    assert state.interrupted is None
+    assert state.needs_model_call
+
+
+def test_the_second_of_two_calls_is_the_interrupted_one() -> None:
+    state = replay(
+        "go",
+        log(request(), response(call("t1"), call("t2")), intent("t1"), result("t1"), intent("t2")),
+    )
+    assert state.interrupted is not None
+    assert state.interrupted["tool_use_id"] == "t2"
+    # The first call keeps its result. Only the second is still open.
+    assert state.pending == [call("t2")]
+    assert state.messages[-1] == {"role": "user", "content": [result_block("t1")]}
+
+
+def test_a_second_intent_for_the_same_call_is_still_one_interrupted_call() -> None:
+    """A rerun was itself interrupted: two intents, no result."""
+    state = replay("go", log(request(), response(call("t1")), intent("t1"), intent("t1")))
+    assert state.interrupted is not None
+    assert state.interrupted["tool_use_id"] == "t1"
+    assert state.pending == [call("t1")]
+
+
+def test_approval_steps_are_reported_with_the_interrupted_call() -> None:
+    asked = log(request(), response(call("t1")), intent("t1"), approval_requested("t1"))
+    state = replay("go", asked)
+    assert state.interrupted is not None
+    assert state.approval == "requested"
+
+    state = replay("go", [*asked, *log(approval_given("t1"))])
+    assert state.interrupted is not None
+    assert state.approval == "given"
+    # Approval changes nothing in the conversation.
+    assert state.pending == [call("t1")]
+    assert len(state.messages) == 2
+
+
+def test_a_new_intent_after_an_approval_starts_without_one() -> None:
+    """The approved rerun got its own intent. If it is interrupted too, a person is asked again."""
+    state = replay(
+        "go",
+        log(
+            request(),
+            response(call("t1")),
+            intent("t1"),
+            approval_requested("t1"),
+            approval_given("t1"),
+            intent("t1"),
+        ),
+    )
+    assert state.interrupted is not None
+    assert state.approval is None
+
+
+def test_a_recovered_result_enters_the_conversation_like_any_other() -> None:
+    recovered = (
+        StepKind.TOOL_RESULT,
+        {"tool_use_id": "t1", "content": "found", "is_error": False, "recovered": True},
+    )
+    state = replay("go", log(request(), response(call("t1")), intent("t1"), recovered))
+    assert state.interrupted is None
+    assert state.messages[-1] == {"role": "user", "content": [result_block("t1", "found")]}
+
+
+def test_folding_one_step_at_a_time_gives_the_same_state_as_a_full_replay() -> None:
+    steps = log(
+        request(),
+        response(call("t1"), call("t2")),
+        intent("t1"),
+        result("t1"),
+        intent("t2"),
+        approval_requested("t2"),
+        approval_given("t2"),
+        intent("t2"),
+        result("t2"),
+        request(3),
+        response(text("done")),
+    )
+    state = replay("go", [])
+    for count, step in enumerate(steps, start=1):
+        state.apply(step)
+        assert state == replay("go", steps[:count])
+        assert state.last_seq == count
+
+
+def test_a_response_recorded_with_a_problem_is_reported_and_yields_no_calls() -> None:
+    """Its content is stored as it came and need not have the shape of a message."""
+    kind, payload = response(call("t1"))
+    for content in (["not a block"], "not a list", [call("t1")]):
+        broken = {**payload, "content": content, "problem": "its content is not a list of blocks"}
+        state = replay("go", log(request(), (kind, broken)))
+        assert state.problem == "its content is not a list of blocks"
+        assert state.pending == []
+        assert not state.needs_model_call
+
+
+def test_a_later_response_without_a_problem_clears_it() -> None:
+    kind, payload = response(text("hm"))
+    state = replay("go", log(request(), (kind, {**payload, "problem": "x"}), response(text("ok"))))
+    assert state.problem is None

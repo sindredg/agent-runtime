@@ -1,9 +1,6 @@
 """read_file: read one text file from the job's workspace."""
 
-from pathlib import Path
-from typing import Any
-
-from runtime.tools.base import Tool, ToolResult
+from runtime.tools.base import Tool, ToolCall, ToolResult
 from runtime.tools.paths import PathNotAllowed, resolve_in_workspace
 
 # A larger file is refused, not cut: the model is told the size and can
@@ -11,8 +8,9 @@ from runtime.tools.paths import PathNotAllowed, resolve_in_workspace
 MAX_BYTES = 64 * 1024
 
 
-def _read_file(workspace: Path, tool_input: dict[str, Any]) -> ToolResult:
-    path = tool_input.get("path")
+def _read_file(call: ToolCall) -> ToolResult:
+    workspace = call.workspace
+    path = call.input.get("path")
     if not isinstance(path, str):
         return ToolResult("input must have a string `path`", is_error=True)
     try:
@@ -54,4 +52,6 @@ READ_FILE = Tool(
         "additionalProperties": False,
     },
     run=_read_file,
+    # Reading changes nothing, so an interrupted read is simply done again.
+    idempotent=True,
 )

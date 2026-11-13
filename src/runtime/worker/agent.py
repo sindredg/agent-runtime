@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -33,9 +34,10 @@ from runtime.store.jobs import Job
 from runtime.store.payload import InvalidPayload, check_json
 from runtime.store.status import FINAL_STATUSES, JobStatus
 from runtime.store.steps import Step, StepKind, read_steps
-from runtime.tools.base import ToolRegistry, ToolResult
+from runtime.tools.base import Tool, ToolCall, ToolRegistry, ToolResult, operation_id
 from runtime.worker.lease import Lease, keep_renewing
-from runtime.worker.replay import replay
+from runtime.worker.recovery import Ask, Recovered, decide
+from runtime.worker.replay import Replay, replay
 from runtime.worker.workspace import prepare_workspace, remove_workspace
 
 log = logging.getLogger("runtime.worker")
@@ -82,13 +84,16 @@ async def _stored[T](call: Awaitable[T]) -> T:
 class _StepWriter:
     """Appends steps for one job with rising `seq`. Every step is one fenced statement."""
 
-    def __init__(self, engine: AsyncEngine, lease: Lease, steps: list[Step]) -> None:
+    def __init__(self, engine: AsyncEngine, lease: Lease, last_seq: int) -> None:
         self._engine = engine
         self._lease = lease
-        self.steps = steps
+        self.last_seq = last_seq
+        # Set once the conversation is known. Each step written is folded
+        # into it, so the log is replayed once and not after every step.
+        self.state: Replay | None = None
 
     async def append(self, kind: StepKind, payload: dict[str, Any], *, tokens: int = 0) -> Step:
-        seq = self.steps[-1].seq + 1 if self.steps else 1
+        seq = self.last_seq + 1
         # One statement for the step and its tokens: the count and the log
         # cannot disagree.
         step = await _stored(
@@ -102,27 +107,20 @@ class _StepWriter:
                 tokens=tokens,
             )
         )
-        self.steps.append(step)
+        self.last_seq = seq
+        if self.state is not None:
+            self.state.apply(step)
         log.info("step", extra={"job_id": self._lease.job_id, "seq": seq, "kind": kind.value})
         return step
 
-    async def reread(self) -> None:
-        """Read the log again, when the writer's idea of the next seq may be wrong."""
-        async with self._engine.connect() as conn:
-            self.steps = await read_steps(conn, self._lease.job_id)
+
+async def _read_log(engine: AsyncEngine, job_id: UUID) -> list[Step]:
+    async with engine.connect() as conn:
+        return await read_steps(conn, job_id)
 
 
-async def _run_tool(tools: ToolRegistry, workspace: Path, call: dict[str, Any]) -> ToolResult:
-    """Run one tool call. A failure of the tool becomes an error result for the model."""
-    tool = tools.get(call["name"])
-    if tool is None:
-        return ToolResult(f"unknown tool: {call['name']}", is_error=True)
-    try:
-        result = await asyncio.to_thread(tool.run, workspace, call["input"])
-    # SystemExit too: a tool that calls sys.exit() must not take the worker down.
-    except (Exception, SystemExit) as error:
-        log.exception("tool raised", extra={"tool": call["name"]})
-        result = ToolResult(f"the tool failed: {error}", is_error=True)
+def _usable(result: object) -> ToolResult:
+    """The tool's result if it can be stored and sent to the model, else an error result."""
     if not isinstance(result, ToolResult) or not isinstance(result.content, str):
         return ToolResult("the tool returned no text result", is_error=True)
     try:
@@ -130,6 +128,99 @@ async def _run_tool(tools: ToolRegistry, workspace: Path, call: dict[str, Any]) 
     except InvalidPayload as error:
         return ToolResult(f"the tool's output cannot be stored: {error}", is_error=True)
     return result
+
+
+async def _run_tool(tool: Tool | None, name: str, call: ToolCall) -> ToolResult:
+    """Run one tool call. A failure of the tool becomes an error result for the model."""
+    if tool is None:
+        return ToolResult(f"unknown tool: {name}", is_error=True)
+    try:
+        result = await asyncio.to_thread(tool.run, call)
+    # SystemExit too: a tool that calls sys.exit() must not take the worker down.
+    except (Exception, SystemExit) as error:
+        log.exception("tool raised", extra={"tool": name})
+        result = ToolResult(f"the tool failed: {error}", is_error=True)
+    return _usable(result)
+
+
+async def _next_tool_call(
+    writer: _StepWriter,
+    tools: ToolRegistry,
+    job: Job,
+    workspace: Path,
+    lease: Lease,
+    state: Replay,
+) -> bool:
+    """Deal with the first open tool call. False means the job now waits for a person.
+
+    Normally that is: write the intent, run the tool, write the result. A
+    call whose intent is already in the log was interrupted when a worker
+    stopped. It is rerun, answered from the tool's check, or put before a
+    person (see `runtime.worker.recovery`).
+    """
+    block = state.pending[0]
+    tool_use_id, name = block["id"], block["name"]
+    tool = tools.get(name)
+    call = ToolCall(
+        workspace=workspace, input=block["input"], operation_id=operation_id(job.id, tool_use_id)
+    )
+
+    interrupted = state.interrupted
+    if interrupted is not None and interrupted.get("tool_use_id") == tool_use_id:
+        lease.check()
+        decision = await asyncio.to_thread(decide, tool, call, approved=state.approval == "given")
+        log.info(
+            "interrupted tool call",
+            extra={
+                "job_id": job.id,
+                "tool": name,
+                "operation_id": call.operation_id,
+                "decision": type(decision).__name__.lower(),
+            },
+        )
+        if isinstance(decision, Recovered):
+            await writer.append(
+                StepKind.TOOL_RESULT,
+                {
+                    "tool_use_id": tool_use_id,
+                    "content": decision.result.content,
+                    "is_error": decision.result.is_error,
+                    # The result came from the tool's check. The tool did not run again.
+                    "recovered": True,
+                },
+            )
+            return True
+        if isinstance(decision, Ask):
+            # A worker may have stopped between asking and parking the job.
+            # The question is then already in the log.
+            if state.approval != "requested":
+                await writer.append(
+                    StepKind.APPROVAL_REQUESTED,
+                    {
+                        "tool_use_id": tool_use_id,
+                        "name": name,
+                        "input": block["input"],
+                        "operation_id": call.operation_id,
+                        "reason": decision.reason,
+                    },
+                )
+            return False
+
+    # Before the intent: a call that will not start must not leave an
+    # intent behind, which would look interrupted.
+    lease.check()
+    await writer.append(
+        StepKind.TOOL_INTENT,
+        {"tool_use_id": tool_use_id, "name": name, "input": block["input"]},
+    )
+    # And immediately before the run, in case the write was slow.
+    lease.check()
+    result = await _run_tool(tool, name, call)
+    await writer.append(
+        StepKind.TOOL_RESULT,
+        {"tool_use_id": tool_use_id, "content": result.content, "is_error": result.is_error},
+    )
+    return True
 
 
 def _response_problem(response: ModelResponse) -> str | None:
@@ -163,14 +254,22 @@ async def _loop(
     settings: AgentSettings,
     workspace: Path,
     lease: Lease,
-) -> None:
-    """Run until the model ends its turn. Raises _JobFailed if the job cannot finish.
+    steps: list[Step],
+) -> JobStatus:
+    """Run until the model ends its turn, or until a person has to decide.
 
-    Raises LeaseLost as soon as the worker can no longer rely on its lease.
+    Returns `succeeded` or `needs_approval`. Raises _JobFailed if the job
+    cannot finish, and LeaseLost as soon as the worker can no longer rely on
+    its lease.
     """
     model = spec.model or settings.default_model
+    # The log is replayed once, here. This is also how a job is resumed: the
+    # steps a stopped worker left behind are read like any others.
+    state = replay(spec.prompt, steps)
+    writer.state = state
     while True:
-        state = replay(spec.prompt, writer.steps)
+        if state.problem:
+            raise _JobFailed(f"the model's response is not usable: {state.problem}")
 
         if state.needs_model_call:
             request = ModelRequest(
@@ -211,41 +310,27 @@ async def _loop(
                 problem = problem or f"it cannot be stored: {error}"
                 payload["content"] = []
                 payload["content_dropped"] = True
+            if problem:
+                # Stored with the step, so a worker that takes the job over
+                # here fails it for the same reason.
+                payload["problem"] = problem
             await writer.append(
                 StepKind.MODEL_RESPONSE,
                 payload,
                 tokens=response.input_tokens + response.output_tokens,
             )
-            if problem:
-                raise _JobFailed(f"the model's response is not usable: {problem}")
             continue
 
         # A response cut off at max_tokens can hold half a tool call, so the
-        # stop reason is checked before any tool runs.
+        # stop reason is checked before any tool runs. The calls of one
+        # response run one after another, one per pass.
         if state.stop_reason == "tool_use" and state.pending:
-            for call in state.pending:
-                # Before the intent: a call that will not start must not
-                # leave an intent behind, which would look interrupted.
-                lease.check()
-                await writer.append(
-                    StepKind.TOOL_INTENT,
-                    {"tool_use_id": call["id"], "name": call["name"], "input": call["input"]},
-                )
-                # And immediately before the run, in case the write was slow.
-                lease.check()
-                result = await _run_tool(tools, workspace, call)
-                await writer.append(
-                    StepKind.TOOL_RESULT,
-                    {
-                        "tool_use_id": call["id"],
-                        "content": result.content,
-                        "is_error": result.is_error,
-                    },
-                )
+            if not await _next_tool_call(writer, tools, job, workspace, lease, state):
+                return JobStatus.NEEDS_APPROVAL
             continue
 
         if state.stop_reason in _FINISHED:
-            return
+            return JobStatus.SUCCEEDED
         raise _JobFailed(
             _FAILURES.get(state.stop_reason or "", f"unexpected stop_reason: {state.stop_reason}")
         )
@@ -259,20 +344,24 @@ async def _run(
     settings: AgentSettings,
     lease: Lease,
 ) -> JobStatus:
-    """Run the job and record its outcome. Returns the status it was left in.
+    """Run the job and record its outcome. Returns the status it was left in:
+    `succeeded`, `failed`, or `needs_approval` when a person has to decide
+    about an interrupted tool call.
 
     Raises LeaseLost or _StoreUnreachable when the worker has to drop the job.
     """
-    async with engine.connect() as conn:
-        steps = await _stored(read_steps(conn, job.id))
-    writer = _StepWriter(engine, lease, steps)
+    steps = await _stored(_read_log(engine, job.id))
+    writer = _StepWriter(engine, lease, last_seq=steps[-1].seq if steps else 0)
+    status = JobStatus.FAILED
     failure: str | None = None
     try:
         spec = JobSpec.model_validate(job.spec)
+        # Files that are already there are left alone, so a job that is
+        # taken over keeps what its tools wrote and gets back what is missing.
         workspace = await asyncio.to_thread(
             prepare_workspace, settings.workspace_root, job.id, spec.files
         )
-        await _loop(writer, provider, tools, job, spec, settings, workspace, lease)
+        status = await _loop(writer, provider, tools, job, spec, settings, workspace, lease, steps)
     except _JobFailed as error:
         failure = str(error)
     except LeaseLost, _StoreUnreachable:
@@ -281,17 +370,16 @@ async def _run(
         log.exception("job crashed", extra={"job_id": job.id})
         failure = f"{type(error).__name__}: {error}"
 
-    if failure is None:
-        status = JobStatus.SUCCEEDED
-    else:
-        status = JobStatus.FAILED
+    if failure is not None:
         try:
             check_json(failure)
         except InvalidPayload:
             failure = "the job failed with an error that cannot be stored as text"
         # Read the log again first: if the failure was a step that did
         # not go in, the writer's idea of the next seq may be wrong.
-        await _stored(writer.reread())
+        steps = await _stored(_read_log(engine, job.id))
+        writer.last_seq = steps[-1].seq if steps else 0
+        writer.state = None
         await writer.append(StepKind.ERROR, {"message": failure})
     await _stored(
         held.leave_running(

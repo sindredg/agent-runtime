@@ -8,7 +8,6 @@ import asyncio
 import threading
 import time
 from datetime import timedelta
-from pathlib import Path
 from typing import Any
 
 import asyncpg
@@ -20,7 +19,7 @@ from runtime.provider.messages import AnthropicProvider
 from runtime.store.jobs import Job, claim_job, get_job
 from runtime.store.status import JobStatus
 from runtime.store.steps import Step, StepKind, read_steps
-from runtime.tools.base import ToolRegistry, ToolResult
+from runtime.tools.base import ToolCall, ToolRegistry, ToolResult
 from runtime.worker.agent import run_job
 
 from .conftest import FIXED, HELLO, Stack, stub_tool
@@ -51,7 +50,7 @@ async def read(engine: AsyncEngine, job: Job) -> tuple[Job, list[Step]]:
 def test_the_heartbeat_keeps_a_job_that_runs_longer_than_its_lease(stack: Stack) -> None:
     """The tool takes 2.5 s under a 1 s lease. A second worker polls throughout and gets nothing."""
 
-    def slow(workspace: Path, tool_input: dict[str, Any]) -> ToolResult:
+    def slow(call: ToolCall) -> ToolResult:
         time.sleep(2.5)
         return ToolResult("slow but done")
 
@@ -100,7 +99,7 @@ def test_a_worker_whose_heartbeat_stopped_loses_the_job_and_writes_nothing_more(
     """
     started, release = threading.Event(), threading.Event()
 
-    def blocks(workspace: Path, tool_input: dict[str, Any]) -> ToolResult:
+    def blocks(call: ToolCall) -> ToolResult:
         started.set()
         release.wait(timeout=30)
         return ToolResult("too late")
@@ -196,7 +195,7 @@ def test_a_worker_past_its_own_deadline_starts_no_tool(stack: Stack) -> None:
     """
     ran: list[str] = []
 
-    def record(workspace: Path, tool_input: dict[str, Any]) -> ToolResult:
+    def record(call: ToolCall) -> ToolResult:
         ran.append("ran")
         return ToolResult("ok")
 
@@ -223,7 +222,7 @@ def test_a_worker_past_its_own_deadline_starts_no_tool(stack: Stack) -> None:
 
 
 def test_a_worker_past_its_own_deadline_starts_no_model_call(stack: Stack) -> None:
-    def slow(workspace: Path, tool_input: dict[str, Any]) -> ToolResult:
+    def slow(call: ToolCall) -> ToolResult:
         time.sleep(1.0)
         return ToolResult("ok")
 
@@ -263,7 +262,7 @@ def test_a_database_error_in_the_middle_of_a_job_drops_it_instead_of_failing_it(
     left `running` for another worker to take over when the lease runs out.
     """
 
-    def cut_sessions(workspace: Path, tool_input: dict[str, Any]) -> ToolResult:
+    def cut_sessions(call: ToolCall) -> ToolResult:
         async def cut() -> None:
             conn = await asyncpg.connect(stack.database_url, timeout=5)
             try:
