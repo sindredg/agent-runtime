@@ -135,6 +135,11 @@ def test_stack_database_is_at_head(stack_database_url: str) -> None:
     assert on(stack_database_url, current_revision) == head_revision()
 
 
+def test_table_definitions_match_the_migrations(migrated_database_url: str) -> None:
+    """`alembic check` exits non-zero when runtime.store.schema and the database differ."""
+    alembic(migrated_database_url, "check")
+
+
 def test_new_job_gets_defaults(migrated_database_url: str) -> None:
     async def body(conn: Connection) -> asyncpg.Record | None:
         job_id = await conn.fetchval(INSERT_JOB, DEADLINE)

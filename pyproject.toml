@@ -24,6 +24,8 @@ dev = [
     # FastAPI's TestClient needs it. httpx2 is the maintained successor to
     # httpx; Starlette deprecates the old package.
     "httpx2==2.16.0",
+    # Property-based tests: generated inputs instead of hand-picked ones.
+    "hypothesis==6.170.15",
     "mypy==2.4.1",
     "pre-commit==4.7.0",
     "pytest==9.2.0",

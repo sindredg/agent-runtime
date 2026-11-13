@@ -7,9 +7,30 @@ provider rate limits, and bad tool output.
 
 ## Status
 
-Planned. The repository holds the project scaffold, the CI pipeline, the
-database schema, and a Docker Compose stack of placeholder services that start
-and report healthy. No runtime behaviour is built yet.
+Planned. Built so far: the project scaffold, the CI pipeline, the database
+schema, the store (the Postgres access layer), and a Docker Compose stack of
+placeholder services that start and report healthy. No service uses the store
+yet, so no job runs.
+
+## Store
+
+`src/runtime/store/` is the only code that talks to Postgres. Each function
+takes a connection, and the caller owns the transaction.
+
+| Function | What it does | Limits today |
+|---|---|---|
+| `create_job` | Inserts a job as `queued` | |
+| `get_job` | Reads one job | |
+| `claim_job` | Gives the oldest queued job to one worker: sets the lease from the database clock, increments `lease_epoch` | Claims `queued` jobs only. Expired leases and backoff are planned. |
+| `append_step` | Appends a step. A second step with the same (`job_id`, `seq`) raises `StepConflict` | The writer's lease is not checked yet (fencing is planned). |
+| `read_steps` | Reads a job's steps in `seq` order, optionally after a given `seq` | |
+| `update_status` | Moves a job along the transition table in `status.py`, clears the lease | |
+
+Job specs and step payloads are stored as `jsonb`. It rejects the NUL character
+and unpaired surrogates in strings and the floats NaN and infinity, so the
+store raises `InvalidPayload` for those, and for object keys that are not
+strings, before writing. `jsonb` also does not keep ints apart from floats:
+`2.0` is read back as `2`.
 
 ## Design decisions
 
