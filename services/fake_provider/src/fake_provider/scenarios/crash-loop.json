@@ -1,0 +1,26 @@
+{
+  "description": "Calls the crash_worker tool, which stops the worker. The job can never finish.",
+  "turns": [
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "I will run the tool."
+        },
+        {
+          "type": "tool_use",
+          "name": "crash_worker",
+          "input": {}
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "The tool returned."
+        }
+      ]
+    }
+  ]
+}

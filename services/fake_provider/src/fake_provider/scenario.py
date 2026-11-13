@@ -14,6 +14,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 # A scenario's name is its file name without `.json`, and the model id that selects it.
 NAME_PATTERN = re.compile(r"[a-z0-9][a-z0-9-]*")
+# The longest wait a turn may ask for.
+MAX_DELAY_SECONDS = 300
 
 
 class _Strict(BaseModel):
@@ -60,6 +62,9 @@ class Turn(_Strict):
     # Left out, it follows from the content: `tool_use` if the turn calls a
     # tool, otherwise `end_turn`.
     stop_reason: StopReason | None = None
+    # Seconds to wait before the answer's content is sent. It makes a job
+    # slow enough to be interrupted in the middle of a model call.
+    delay_seconds: float = Field(default=0, ge=0, le=MAX_DELAY_SECONDS, allow_inf_nan=False)
 
     @property
     def calls_tool(self) -> bool:

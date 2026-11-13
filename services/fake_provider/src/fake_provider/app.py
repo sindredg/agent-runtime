@@ -7,10 +7,11 @@ message. Every request is kept in a log that tests read back as the record
 of what the provider was really asked.
 """
 
+import asyncio
 import json
 import os
 from collections import deque
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from datetime import UTC, datetime
 from importlib import resources
 from pathlib import Path
@@ -42,6 +43,21 @@ def _json(content: Any, status: int = 200, headers: dict[str, str] | None = None
     )
 
 
+def stream_parts(message: dict[str, Any], delay: float) -> Iterator[bytes | float]:
+    """The encoded events of a streamed answer, with the wait as a number among them.
+
+    The wait comes after `message_start` and before the first content block,
+    so a client that is stopped during it has an answer that began and did
+    not finish.
+    """
+    waited = delay <= 0
+    for event, data in stream_events(message):
+        if not waited and event == "content_block_start":
+            waited = True
+            yield delay
+        yield encode_sse(event, data)
+
+
 def default_scenarios() -> dict[str, Scenario]:
     """Scenarios from FAKE_SCENARIO_DIR if set, otherwise the ones in the package."""
     directory = os.environ.get("FAKE_SCENARIO_DIR")
@@ -67,8 +83,8 @@ def create_app(scenarios: dict[str, Scenario] | None = None) -> FastAPI:
             status,
         )
 
-    def answer(body: Any, headers: Any) -> tuple[str, int, dict[str, Any]]:
-        """The scenario name, turn and message for a request, or RequestError."""
+    def answer(body: Any, headers: Any) -> tuple[str, int, dict[str, Any], float]:
+        """The scenario name, turn, message and delay for a request, or RequestError."""
         if "x-api-key" not in headers and "authorization" not in headers:
             raise RequestError(401, "authentication_error", "x-api-key header is required")
         if "anthropic-version" not in headers:
@@ -90,7 +106,7 @@ def create_app(scenarios: dict[str, Scenario] | None = None) -> FastAPI:
         message = build_message(
             name, scenario, turn, model=name, input_tokens=estimate_tokens(prompt)
         )
-        return name, turn, message
+        return name, turn, message, scenario.turns[turn].delay_seconds
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
@@ -116,18 +132,22 @@ def create_app(scenarios: dict[str, Scenario] | None = None) -> FastAPI:
         }
         log.append(entry)
         try:
-            name, turn, message = answer(body, request.headers)
+            name, turn, message, delay = answer(body, request.headers)
         except RequestError as refused:
             entry.update(status=refused.status, error=refused.message)
             return error(refused.status, refused.kind, refused.message, request_id)
         entry.update(status=200, scenario=name, turn=turn, response_id=message["id"])
 
         if not body.get("stream"):
+            await asyncio.sleep(delay)
             return _json(message, headers={"request-id": request_id})
 
-        def events() -> Iterator[bytes]:
-            for event, data in stream_events(message):
-                yield encode_sse(event, data)
+        async def events() -> AsyncIterator[bytes]:
+            for part in stream_parts(message, delay):
+                if isinstance(part, bytes):
+                    yield part
+                else:
+                    await asyncio.sleep(part)
 
         return StreamingResponse(
             events(),

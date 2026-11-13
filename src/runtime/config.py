@@ -6,6 +6,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from runtime.worker.failpoints import NAMES as FAILPOINT_NAMES
+
 
 class ConfigError(Exception):
     """A required setting is missing or has a value that cannot be used."""
@@ -99,6 +101,13 @@ class WorkerConfig:
     heartbeat_seconds: float
     # Where the `create_issue` tool opens issues. Unset, the tool is not offered.
     tracker_url: str | None
+    # For chaos tests only. The failpoint at which the worker ends its own
+    # process, and the tool the tool failpoints are limited to.
+    failpoint: str | None
+    failpoint_tool: str | None
+    # Set when CHAOS_TOOLS=1: the directory the `crash_worker` tool logs its
+    # runs to. Unset, that tool is not offered.
+    chaos_log_dir: Path | None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> WorkerConfig:
@@ -111,6 +120,14 @@ class WorkerConfig:
                 f"HEARTBEAT_SECONDS ({heartbeat_seconds:g}) must be shorter than"
                 f" LEASE_SECONDS ({lease_seconds:g})"
             )
+        failpoint = env.get("FAILPOINT") or None
+        if failpoint is not None and failpoint not in FAILPOINT_NAMES:
+            raise ConfigError(
+                f"FAILPOINT must be one of {', '.join(FAILPOINT_NAMES)}, got {failpoint!r}"
+            )
+        chaos_log_dir = None
+        if env.get("CHAOS_TOOLS") == "1":
+            chaos_log_dir = Path(_required(env, "CHAOS_LOG_DIR"))
         return cls(
             database_url=_required(env, "DATABASE_URL"),
             provider=ProviderConfig.from_env(env),
@@ -121,6 +138,9 @@ class WorkerConfig:
             lease_seconds=lease_seconds,
             heartbeat_seconds=heartbeat_seconds,
             tracker_url=_http_url(env, "TRACKER_URL"),
+            failpoint=failpoint,
+            failpoint_tool=env.get("FAILPOINT_TOOL") or None,
+            chaos_log_dir=chaos_log_dir,
         )
 
 

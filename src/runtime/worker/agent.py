@@ -17,7 +17,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Awaitable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -35,6 +35,7 @@ from runtime.store.payload import InvalidPayload, check_json
 from runtime.store.status import FINAL_STATUSES, JobStatus
 from runtime.store.steps import Step, StepKind, read_steps
 from runtime.tools.base import Tool, ToolCall, ToolRegistry, ToolResult, operation_id
+from runtime.worker.failpoints import Failpoints
 from runtime.worker.lease import Lease, keep_renewing
 from runtime.worker.recovery import Ask, Recovered, decide
 from runtime.worker.replay import Replay, replay
@@ -59,6 +60,8 @@ class AgentSettings:
     # How long a claim or a renewal holds the job, and how often to renew.
     lease: timedelta = timedelta(seconds=30)
     heartbeat: float = 10.0
+    # Crash points for chaos tests. None is switched on unless FAILPOINT is set.
+    failpoints: Failpoints = field(default_factory=Failpoints)
 
 
 class _JobFailed(Exception):
@@ -150,6 +153,7 @@ async def _next_tool_call(
     workspace: Path,
     lease: Lease,
     state: Replay,
+    failpoints: Failpoints,
 ) -> bool:
     """Deal with the first open tool call. False means the job now waits for a person.
 
@@ -213,13 +217,16 @@ async def _next_tool_call(
         StepKind.TOOL_INTENT,
         {"tool_use_id": tool_use_id, "name": name, "input": block["input"]},
     )
+    failpoints.hit("after_tool_intent", takeovers=job.takeovers, tool=name)
     # And immediately before the run, in case the write was slow.
     lease.check()
     result = await _run_tool(tool, name, call)
+    failpoints.hit("after_tool_ran", takeovers=job.takeovers, tool=name)
     await writer.append(
         StepKind.TOOL_RESULT,
         {"tool_use_id": tool_use_id, "content": result.content, "is_error": result.is_error},
     )
+    failpoints.hit("after_tool_result", takeovers=job.takeovers, tool=name)
     return True
 
 
@@ -288,6 +295,7 @@ async def _loop(
     can no longer rely on its lease.
     """
     model = spec.model or settings.default_model
+    failpoints = settings.failpoints
     # The log is replayed once, here. This is also how a job is resumed: the
     # steps a stopped worker left behind are read like any others.
     state = replay(spec.prompt, steps)
@@ -309,12 +317,18 @@ async def _loop(
                 system=spec.system,
                 tools=tools.definitions(),
                 user_id=str(job.id),
+                mid_stream=(
+                    (lambda: failpoints.hit("mid_stream", takeovers=job.takeovers))
+                    if failpoints.name == "mid_stream"
+                    else None
+                ),
             )
             lease.check()
             await writer.append(
                 StepKind.MODEL_REQUEST,
                 {"model": model, "max_tokens": request.max_tokens, "messages": len(state.messages)},
             )
+            failpoints.hit("after_model_request", takeovers=job.takeovers)
             # Immediately before the call: a worker that was paused past its
             # lease must not send it.
             lease.check()
@@ -357,7 +371,9 @@ async def _loop(
         # stop reason is checked before any tool runs. The calls of one
         # response run one after another, one per pass.
         if state.stop_reason == "tool_use" and state.pending:
-            if not await _next_tool_call(writer, tools, job, workspace, lease, state):
+            if not await _next_tool_call(
+                writer, tools, job, workspace, lease, state, settings.failpoints
+            ):
                 return JobStatus.NEEDS_APPROVAL
             continue
 
@@ -384,6 +400,7 @@ async def _run(
 
     Raises LeaseLost or _StoreUnreachable when the worker has to drop the job.
     """
+    settings.failpoints.hit("after_claim", takeovers=job.takeovers)
     steps = await _stored(_read_log(engine, job.id))
     writer = _StepWriter(engine, lease, last_seq=steps[-1].seq if steps else 0)
     status = JobStatus.FAILED

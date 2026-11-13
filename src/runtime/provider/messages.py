@@ -64,6 +64,13 @@ class AnthropicProvider:
                 messages=request.messages,  # type: ignore[arg-type]
                 **optional,
             ) as stream:
+                if request.mid_stream is not None:
+                    # Read event by event up to the first content block, tell
+                    # the caller, and let the SDK collect the rest as usual.
+                    async for event in stream:
+                        if event.type == "content_block_start":
+                            request.mid_stream()
+                            break
                 message = await stream.get_final_message()
         except anthropic.APIStatusError as error:
             status = error.status_code

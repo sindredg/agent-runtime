@@ -84,3 +84,44 @@ def test_packaged_scenarios_load_and_include_hello() -> None:
         loaded = load_scenarios(directory)
     assert "hello" in loaded
     assert [turn.resolved_stop_reason for turn in loaded["hello"].turns] == ["tool_use", "end_turn"]
+
+
+# Delay
+
+
+def test_a_turn_has_no_delay_unless_it_says_so() -> None:
+    scenario = parse_scenario('{"turns": [{"content": [{"type": "text", "text": "hi"}]}]}')
+    assert scenario.turns[0].delay_seconds == 0
+
+
+def test_a_turn_can_ask_for_a_delay() -> None:
+    scenario = parse_scenario(
+        '{"turns": [{"delay_seconds": 0.5, "content": [{"type": "text", "text": "hi"}]}]}'
+    )
+    assert scenario.turns[0].delay_seconds == 0.5
+
+
+@pytest.mark.parametrize("delay", ["-1", "301", '"soon"', "NaN", "Infinity", "null"])
+def test_a_delay_that_is_not_a_sensible_number_of_seconds_is_refused(delay: str) -> None:
+    turn = '{"delay_seconds": ' + delay + ', "content": [{"type": "text", "text": "hi"}]}'
+    text = '{"turns": [' + turn + "]}"
+    with pytest.raises(ValueError, match="delay_seconds"):
+        parse_scenario(text)
+
+
+def test_the_packaged_chaos_scenarios_load() -> None:
+    """The slow and stalled variants answer like ci-triage. Only their timing differs."""
+    from importlib import resources
+
+    with resources.as_file(resources.files("fake_provider") / "scenarios") as directory:
+        scenarios = load_scenarios(directory)
+
+    def content(name: str) -> list[object]:
+        return [turn.content for turn in scenarios[name].turns]
+
+    assert content("ci-triage-slow") == content("ci-triage")
+    assert content("ci-triage-stall") == content("ci-triage")
+    assert [turn.delay_seconds for turn in scenarios["ci-triage"].turns] == [0, 0, 0]
+    assert all(turn.delay_seconds > 0 for turn in scenarios["ci-triage-slow"].turns)
+    assert scenarios["ci-triage-stall"].turns[0].delay_seconds >= 5
+    assert scenarios["crash-loop"].turns[0].content[-1].name == "crash_worker"  # type: ignore[union-attr]
