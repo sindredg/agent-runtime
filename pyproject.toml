@@ -7,13 +7,24 @@ requires-python = "==3.15.*"
 dependencies = [
     # Schema migrations, run by the one-shot migrate service.
     "alembic==1.20.1",
+    # The official SDK for the Messages API. It parses the event stream and
+    # maps HTTP errors to typed exceptions.
+    "anthropic==2.8.0",
     "asyncpg==0.32.0",
     "fastapi==0.162.6",
+    # HTTP client for the CLI, and for FastAPI's TestClient in tests. httpx2 is
+    # the maintained successor to httpx.
+    "httpx2==2.16.0",
+    # Request and response models. FastAPI installs it anyway.
+    "pydantic==2.14.3",
     # The asyncio extra adds greenlet, which SQLAlchemy needs to drive asyncpg.
     "sqlalchemy[asyncio]==2.1.8",
     # The ASGI server that runs the FastAPI apps.
     "uvicorn==0.54.0",
 ]
+
+[project.scripts]
+runtime = "runtime.cli:run"
 
 [dependency-groups]
 dev = [
@@ -21,9 +32,6 @@ dev = [
     "asyncpg-stubs==0.32.0",
     # The workspace member, so tests can import it.
     "fake-provider",
-    # FastAPI's TestClient needs it. httpx2 is the maintained successor to
-    # httpx; Starlette deprecates the old package.
-    "httpx2==2.16.0",
     # Property-based tests: generated inputs instead of hand-picked ones.
     "hypothesis==6.170.15",
     "mypy==2.4.1",
@@ -68,10 +76,12 @@ select = ["E", "W", "F", "I", "B", "UP", "SIM", "ASYNC", "S", "RUF"]
 
 [tool.mypy]
 strict = true
-files = ["src", "tests", "migrations", "services/fake_provider/src"]
+files = ["src", "tests", "migrations", "scripts", "services/fake_provider/src"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+# A bare `pytest` runs the unit tests. The other suites need the stack or a key
+# and are named explicitly.
+testpaths = ["tests/unit"]
 # A typo in a marker or a config key fails the run instead of being ignored.
 addopts = "--strict-markers --strict-config"
 # A warning, such as a deprecation in a dependency, fails the run.

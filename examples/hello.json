@@ -1,0 +1,6 @@
+{
+  "prompt": "Read hello.txt from the workspace and say what it holds.",
+  "files": {
+    "hello.txt": "Hello from the workspace.\n"
+  }
+}

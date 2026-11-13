@@ -21,6 +21,12 @@ repos:
         # mypy checks the whole project (files set in pyproject.toml), not
         # only the staged files, so cross-module errors are caught.
         pass_filenames: false
+      - id: json
+        name: json syntax
+        # Parses each file; a syntax error fails the hook.
+        entry: uv run --frozen python scripts/lint_json.py
+        language: system
+        types: [json]
       - id: yamllint
         name: yamllint
         entry: uv run --frozen yamllint --strict

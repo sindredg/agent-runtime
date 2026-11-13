@@ -10,12 +10,13 @@ from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Row, select
+from sqlalchemy import Row, and_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from runtime.store.payload import check_json
-from runtime.store.schema import steps
+from runtime.store.schema import jobs, steps
+from runtime.store.status import JobStatus
 
 
 class StepKind(StrEnum):
@@ -93,3 +94,43 @@ async def read_steps(conn: AsyncConnection, job_id: UUID, *, after_seq: int = 0)
         select(steps).where(steps.c.job_id == job_id, steps.c.seq > after_seq).order_by(steps.c.seq)
     )
     return [_step(row) for row in result]
+
+
+async def read_progress(
+    conn: AsyncConnection, job_id: UUID, *, after_seq: int = 0, limit: int = 1000
+) -> tuple[JobStatus, list[Step]] | None:
+    """The job's status and up to `limit` steps after `after_seq`, or None if there is no job.
+
+    One statement, so both come from the same snapshot of the database. A
+    reader that follows a job relies on this: when the status it gets is
+    final and fewer than `limit` steps came with it, it has seen every step.
+    """
+    if limit < 1:
+        raise ValueError("limit must be at least 1")
+    result = await conn.execute(
+        select(jobs.c.status, *steps.c)
+        .select_from(
+            jobs.outerjoin(steps, and_(steps.c.job_id == jobs.c.id, steps.c.seq > after_seq))
+        )
+        .where(jobs.c.id == job_id)
+        .order_by(steps.c.seq)
+        .limit(limit)
+    )
+    rows = result.all()
+    if not rows:
+        return None
+    status = JobStatus(rows[0].status)
+    found = [
+        Step(
+            job_id=row.job_id,
+            seq=row.seq,
+            kind=StepKind(row.kind),
+            payload=row.payload,
+            lease_epoch=row.lease_epoch,
+            created_at=row.created_at,
+        )
+        # A job without matching steps is one row whose step columns are NULL.
+        for row in rows
+        if row.seq is not None
+    ]
+    return status, found

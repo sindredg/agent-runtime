@@ -9,8 +9,10 @@ caller can handle.
 Object keys must be strings. The JSON encoder would turn other keys into
 strings, and the value read back would not equal the value written.
 
-One more `jsonb` behaviour, not an error: numbers have no int or float type,
-so a float without a fraction, such as 2.0, is read back as the int 2.
+One more `jsonb` behaviour, not an error: numbers have no int or float type.
+A float that the JSON encoder writes without a fraction, such as 1e22
+(written `1e+22`), is read back as an int. 2.0 is written `2.0` and stays a
+float.
 
 Not checked here: nesting deep enough to hit Python's recursion limit and
 integers of more than 4300 digits. Both fail in the driver before anything is

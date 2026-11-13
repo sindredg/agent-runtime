@@ -48,6 +48,8 @@ jobs:
           version: "0.13.8"
       - run: uv sync --locked
       - run: uv run --frozen yamllint --strict .
+      - name: JSON syntax
+        run: git ls-files -z '*.json' | xargs -0 uv run --frozen python scripts/lint_json.py
       - name: actionlint
         run: |
           archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"

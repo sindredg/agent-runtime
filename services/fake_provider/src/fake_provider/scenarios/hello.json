@@ -1,0 +1,16 @@
+{
+  "description": "Read one file from the workspace, then report what it says.",
+  "turns": [
+    {
+      "content": [
+        {"type": "text", "text": "I will read hello.txt from the workspace."},
+        {"type": "tool_use", "name": "read_file", "input": {"path": "hello.txt"}}
+      ]
+    },
+    {
+      "content": [
+        {"type": "text", "text": "The file hello.txt holds a short greeting. The job is done."}
+      ]
+    }
+  ]
+}

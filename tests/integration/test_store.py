@@ -10,7 +10,7 @@ import asyncpg
 import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
@@ -19,6 +19,7 @@ from runtime.store.engine import sqlalchemy_url
 from runtime.store.jobs import (
     InvalidTransition,
     Job,
+    add_tokens_used,
     claim_job,
     claim_statement,
     create_job,
@@ -27,9 +28,7 @@ from runtime.store.jobs import (
 )
 from runtime.store.payload import InvalidPayload, check_json
 from runtime.store.status import TRANSITIONS, JobStatus
-from runtime.store.steps import StepConflict, StepKind, append_step, read_steps
-
-from .conftest import alembic, temporary_database
+from runtime.store.steps import StepConflict, StepKind, append_step, read_progress, read_steps
 
 S = JobStatus
 DEADLINE = datetime.now(UTC) + timedelta(hours=1)
@@ -77,14 +76,6 @@ async def add_step(
         payload=payload or {},
         lease_epoch=1,
     )
-
-
-@pytest.fixture
-def database_url(stack_database_url: str) -> Any:
-    """A migrated database for one test. Claim tests need the jobs table to themselves."""
-    with temporary_database(stack_database_url) as url:
-        alembic(url, "upgrade", "head")
-        yield url
 
 
 # Jobs
@@ -436,7 +427,7 @@ json_values = st.recursive(
 
 
 def numbers_as_floats(value: Any) -> Any:
-    """jsonb does not keep int apart from float (2.0 is read back as 2), so compare as floats."""
+    """jsonb has no int or float type (1e22 is read back as an int), so compare as floats."""
     if isinstance(value, bool):
         return value
     if isinstance(value, int | float):
@@ -601,3 +592,69 @@ def test_update_status_refuses_running(migrated_database_url: str) -> None:
 def test_update_status_of_an_unknown_job_is_rejected(migrated_database_url: str) -> None:
     with pytest.raises(InvalidTransition):
         in_transaction(migrated_database_url, lambda c: update_status(c, uuid4(), S.CANCELLED))
+
+
+def test_add_tokens_used_adds_to_the_count(migrated_database_url: str) -> None:
+    async def body(conn: AsyncConnection) -> Job | None:
+        job = await new_job(conn)
+        await add_tokens_used(conn, job.id, 40)
+        await add_tokens_used(conn, job.id, 2)
+        with pytest.raises(ValueError, match="negative"):
+            await add_tokens_used(conn, job.id, -1)
+        return await get_job(conn, job.id)
+
+    job = in_transaction(migrated_database_url, body)
+    assert job is not None
+    assert job.tokens_used == 42
+
+
+def test_read_progress_returns_status_and_steps_from_one_statement(
+    migrated_database_url: str,
+) -> None:
+    async def body(conn: AsyncConnection) -> dict[str, Any]:
+        job, other = await new_job(conn), await new_job(conn)
+        await add_step(conn, other.id, 1)
+        empty = await read_progress(conn, job.id)
+        for seq in (2, 1, 3):
+            await add_step(conn, job.id, seq, {"n": seq})
+        # As in the read_steps test: without index scans, only ORDER BY sorts.
+        await conn.execute(text("SET LOCAL enable_indexscan = off"))
+        await conn.execute(text("SET LOCAL enable_bitmapscan = off"))
+        return {
+            "missing": await read_progress(conn, uuid4()),
+            "empty": empty,
+            "all": await read_progress(conn, job.id),
+            "after": await read_progress(conn, job.id, after_seq=1, limit=1),
+            "past": await read_progress(conn, job.id, after_seq=3),
+            "steps": await read_steps(conn, job.id),
+        }
+
+    got = in_transaction(migrated_database_url, body)
+    assert got["missing"] is None
+    assert got["empty"] == (JobStatus.QUEUED, [])
+    assert got["all"] == (JobStatus.QUEUED, got["steps"])
+    assert got["after"] == (JobStatus.QUEUED, got["steps"][1:2])
+    assert got["past"] == (JobStatus.QUEUED, [])
+
+
+def test_read_progress_sends_one_statement(migrated_database_url: str) -> None:
+    """Status and steps must come from one snapshot, so it has to be one statement."""
+
+    async def body(engine: AsyncEngine) -> list[str]:
+        async with engine.begin() as conn:
+            job = await new_job(conn)
+            await add_step(conn, job.id, 1)
+        statements: list[str] = []
+
+        def record(conn: Any, cursor: Any, statement: str, *rest: Any) -> None:
+            statements.append(statement)
+
+        event.listen(engine.sync_engine, "before_cursor_execute", record)
+        async with engine.connect() as conn:
+            assert await read_progress(conn, job.id) is not None
+        return statements
+
+    statements = with_engine(migrated_database_url, body)
+    assert len(statements) == 1
+    assert "jobs" in statements[0]
+    assert "steps" in statements[0]
