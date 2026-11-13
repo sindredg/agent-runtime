@@ -60,7 +60,7 @@ class InvalidTransition(Exception):
         self.new_status = new_status
 
 
-def _job(row: Row[Any]) -> Job:
+def job_from_row(row: Row[Any]) -> Job:
     fields = dict(row._mapping)
     fields["status"] = JobStatus(fields["status"])
     return Job(**fields)
@@ -76,13 +76,13 @@ async def create_job(
         .values(spec=spec, token_budget=token_budget, deadline=deadline)
         .returning(*jobs.c)
     )
-    return _job(result.one())
+    return job_from_row(result.one())
 
 
 async def get_job(conn: AsyncConnection, job_id: UUID) -> Job | None:
     result = await conn.execute(select(jobs).where(jobs.c.id == job_id))
     row = result.one_or_none()
-    return None if row is None else _job(row)
+    return None if row is None else job_from_row(row)
 
 
 def _literal(value: object) -> Any:
@@ -197,7 +197,7 @@ async def claim_job(
         row = result.one_or_none()
         if row is None:
             return None
-        job = _job(row)
+        job = job_from_row(row)
         if job.status is JobStatus.RUNNING:
             return job
         await _record_takeover_limit(conn, job)
@@ -235,4 +235,4 @@ async def update_status(
     row = result.one_or_none()
     if row is None:
         raise InvalidTransition(job_id, new_status)
-    return _job(row)
+    return job_from_row(row)

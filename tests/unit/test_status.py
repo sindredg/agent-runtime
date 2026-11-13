@@ -19,6 +19,8 @@ EXPECTED_MOVES = {
     (S.RUNNING, S.SUCCEEDED),
     (S.RUNNING, S.FAILED),
     (S.RUNNING, S.CANCELLED),
+    # A worker that is told to stop gives the job back.
+    (S.RUNNING, S.QUEUED),
     (S.WAITING, S.RUNNING),
     (S.WAITING, S.CANCELLED),
     (S.WAITING, S.FAILED),

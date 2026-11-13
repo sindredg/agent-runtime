@@ -1,8 +1,7 @@
 """The store against a real Postgres: jobs, claiming, steps, status."""
 
 import asyncio
-from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -13,9 +12,8 @@ from hypothesis import strategies as st
 from sqlalchemy import event, text
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
-from runtime.store.engine import sqlalchemy_url
 from runtime.store.jobs import (
     TAKEOVER_LIMIT,
     InvalidTransition,
@@ -29,54 +27,11 @@ from runtime.store.jobs import (
 )
 from runtime.store.payload import InvalidPayload, check_json
 from runtime.store.status import TRANSITIONS, JobStatus
-from runtime.store.steps import StepConflict, StepKind, append_step, read_progress, read_steps
+from runtime.store.steps import StepConflict, StepKind, read_progress, read_steps
+
+from .conftest import DEADLINE, add_step, expire_lease, in_transaction, new_job, with_engine
 
 S = JobStatus
-DEADLINE = datetime.now(UTC) + timedelta(hours=1)
-
-
-def with_engine[T](
-    database_url: str, body: Callable[[AsyncEngine], Awaitable[T]], *, connections: int = 5
-) -> T:
-    """Run `body` with an engine that allows `connections` at once, then dispose it."""
-
-    async def run() -> T:
-        engine = create_async_engine(
-            sqlalchemy_url(database_url), pool_size=connections, max_overflow=0
-        )
-        try:
-            return await body(engine)
-        finally:
-            await engine.dispose()
-
-    return asyncio.run(run())
-
-
-def in_transaction[T](database_url: str, body: Callable[[AsyncConnection], Awaitable[T]]) -> T:
-    """Run `body` in one transaction and commit it."""
-
-    async def run(engine: AsyncEngine) -> T:
-        async with engine.begin() as conn:
-            return await body(conn)
-
-    return with_engine(database_url, run)
-
-
-async def new_job(conn: AsyncConnection) -> Job:
-    return await create_job(conn, spec={"task": "hello"}, token_budget=1000, deadline=DEADLINE)
-
-
-async def add_step(
-    conn: AsyncConnection, job_id: UUID, seq: int, payload: dict[str, Any] | None = None
-) -> None:
-    await append_step(
-        conn,
-        job_id=job_id,
-        seq=seq,
-        kind=StepKind.MODEL_REQUEST,
-        payload=payload or {},
-        lease_epoch=1,
-    )
 
 
 # Jobs
@@ -324,17 +279,6 @@ def test_claim_statement_uses_the_claim_index(database_url: str) -> None:
 
 
 # Takeover
-
-
-async def expire_lease(conn: AsyncConnection, job_id: UUID) -> None:
-    """Move the job's lease into the past, as if its worker had stopped renewing it."""
-    await conn.execute(
-        text(
-            "UPDATE jobs SET lease_expires_at = clock_timestamp() - interval '1 second'"
-            " WHERE id = :id"
-        ),
-        {"id": job_id},
-    )
 
 
 def test_a_running_job_with_a_live_lease_is_not_claimed(database_url: str) -> None:

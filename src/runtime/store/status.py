@@ -18,7 +18,10 @@ _S = JobStatus
 # Status -> the statuses it may move to. A final status moves nowhere.
 TRANSITIONS: dict[JobStatus, frozenset[JobStatus]] = {
     _S.QUEUED: frozenset({_S.RUNNING, _S.CANCELLED, _S.FAILED}),
-    _S.RUNNING: frozenset({_S.WAITING, _S.NEEDS_APPROVAL, _S.SUCCEEDED, _S.FAILED, _S.CANCELLED}),
+    # `queued` from `running`: a worker that is told to stop gives the job back.
+    _S.RUNNING: frozenset(
+        {_S.WAITING, _S.NEEDS_APPROVAL, _S.SUCCEEDED, _S.FAILED, _S.CANCELLED, _S.QUEUED}
+    ),
     _S.WAITING: frozenset({_S.RUNNING, _S.CANCELLED, _S.FAILED}),
     _S.NEEDS_APPROVAL: frozenset({_S.QUEUED, _S.CANCELLED}),
     _S.SUCCEEDED: frozenset(),

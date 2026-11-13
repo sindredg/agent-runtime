@@ -9,17 +9,83 @@ import os
 import subprocess
 import sys
 import uuid
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
+from uuid import UUID
 
 import asyncpg
 import pytest
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
+
+from runtime.store.engine import sqlalchemy_url
+from runtime.store.jobs import Job, create_job
+from runtime.store.steps import StepKind, append_step
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # The compose stack's development default, published on localhost.
 DEFAULT_DATABASE_URL = "postgresql://runtime:runtime-dev@127.0.0.1:5432/runtime"
+
+DEADLINE = datetime.now(UTC) + timedelta(hours=1)
+
+
+def with_engine[T](
+    database_url: str, body: Callable[[AsyncEngine], Awaitable[T]], *, connections: int = 5
+) -> T:
+    """Run `body` with an engine that allows `connections` at once, then dispose it."""
+
+    async def run() -> T:
+        engine = create_async_engine(
+            sqlalchemy_url(database_url), pool_size=connections, max_overflow=0
+        )
+        try:
+            return await body(engine)
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(run())
+
+
+def in_transaction[T](database_url: str, body: Callable[[AsyncConnection], Awaitable[T]]) -> T:
+    """Run `body` in one transaction and commit it."""
+
+    async def run(engine: AsyncEngine) -> T:
+        async with engine.begin() as conn:
+            return await body(conn)
+
+    return with_engine(database_url, run)
+
+
+async def new_job(conn: AsyncConnection) -> Job:
+    return await create_job(conn, spec={"task": "hello"}, token_budget=1000, deadline=DEADLINE)
+
+
+async def add_step(
+    conn: AsyncConnection, job_id: UUID, seq: int, payload: dict[str, Any] | None = None
+) -> None:
+    await append_step(
+        conn,
+        job_id=job_id,
+        seq=seq,
+        kind=StepKind.MODEL_REQUEST,
+        payload=payload or {},
+        lease_epoch=1,
+    )
+
+
+async def expire_lease(conn: AsyncConnection, job_id: UUID) -> None:
+    """Move the job's lease into the past, as if its worker had stopped renewing it."""
+    await conn.execute(
+        text(
+            "UPDATE jobs SET lease_expires_at = clock_timestamp() - interval '1 second'"
+            " WHERE id = :id"
+        ),
+        {"id": job_id},
+    )
 
 
 def alembic(database_url: str, *args: str) -> None:
