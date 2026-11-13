@@ -1,4 +1,5 @@
-# One image for every service: api, worker, migrate, and the fake provider.
+# One image for every service: api, worker, migrate, the fake provider and the
+# fake tracker.
 # Each compose service runs it with a different command.
 
 # Images are pinned by digest; the tag is kept for readability.
@@ -16,6 +17,7 @@ WORKDIR /app
 # when the lock file changes.
 COPY pyproject.toml uv.lock .python-version ./
 COPY services/fake_provider/pyproject.toml services/fake_provider/
+COPY services/fake_tracker/pyproject.toml services/fake_tracker/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --all-packages --no-install-workspace
 COPY README.md ./

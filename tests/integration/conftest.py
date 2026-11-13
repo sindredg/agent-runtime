@@ -128,6 +128,12 @@ def fake_provider_url() -> str:
 
 
 @pytest.fixture(scope="session")
+def fake_tracker_url() -> str:
+    """The compose stack's fake issue tracker, published on localhost."""
+    return os.environ.get("FAKE_TRACKER_URL", "http://127.0.0.1:8002")
+
+
+@pytest.fixture(scope="session")
 def stack_database_url() -> str:
     """The database the compose stack migrated."""
     return os.environ.get("DATABASE_URL", DEFAULT_DATABASE_URL)

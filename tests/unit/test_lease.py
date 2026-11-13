@@ -4,9 +4,9 @@ from datetime import timedelta
 from uuid import uuid4
 
 import pytest
-from runtime.worker.lease import Lease
 
 from runtime.store.held import LeaseLost
+from runtime.worker.lease import Lease
 
 
 class FakeClock:

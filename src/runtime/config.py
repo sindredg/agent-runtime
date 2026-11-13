@@ -45,6 +45,16 @@ def _positive_float(env: Mapping[str, str], name: str, default: float) -> float:
     return value
 
 
+def _http_url(env: Mapping[str, str], name: str) -> str | None:
+    """An optional http or https URL, without a trailing slash."""
+    value = env.get(name, "")
+    if not value:
+        return None
+    if not value.startswith(("http://", "https://")):
+        raise ConfigError(f"{name} must be an http or https URL, got {value!r}")
+    return value.rstrip("/")
+
+
 @dataclass(frozen=True, slots=True)
 class ProviderConfig:
     """Which provider to call and how.
@@ -87,6 +97,8 @@ class WorkerConfig:
     lease_seconds: float
     # How often the worker renews the lease of the job it is running.
     heartbeat_seconds: float
+    # Where the `create_issue` tool opens issues. Unset, the tool is not offered.
+    tracker_url: str | None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> WorkerConfig:
@@ -108,6 +120,7 @@ class WorkerConfig:
             alive_file=Path(env.get("WORKER_ALIVE_FILE") or "/tmp/worker.alive"),  # noqa: S108
             lease_seconds=lease_seconds,
             heartbeat_seconds=heartbeat_seconds,
+            tracker_url=_http_url(env, "TRACKER_URL"),
         )
 
 

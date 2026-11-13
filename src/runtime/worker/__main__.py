@@ -45,7 +45,7 @@ async def run(config: WorkerConfig) -> None:
                 work(
                     engine,
                     provider,
-                    default_tools(),
+                    default_tools(tracker_url=config.tracker_url),
                     settings,
                     worker_id=config.worker_id,
                     poll_interval=config.poll_interval,

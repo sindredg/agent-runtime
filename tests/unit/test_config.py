@@ -54,6 +54,7 @@ def test_worker_defaults() -> None:
     assert config.alive_file == Path("/tmp/worker.alive")  # noqa: S108
     assert config.lease_seconds == 30.0
     assert config.heartbeat_seconds == 10.0
+    assert config.tracker_url is None
 
 
 def test_worker_settings_are_read() -> None:
@@ -66,6 +67,7 @@ def test_worker_settings_are_read() -> None:
             "WORKER_ALIVE_FILE": "/run/alive",
             "LEASE_SECONDS": "2.5",
             "HEARTBEAT_SECONDS": "0.5",
+            "TRACKER_URL": "http://fake-tracker:8000/",
         }
     )
     assert config.worker_id == "w7"
@@ -74,6 +76,7 @@ def test_worker_settings_are_read() -> None:
     assert config.alive_file == Path("/run/alive")
     assert config.lease_seconds == 2.5
     assert config.heartbeat_seconds == 0.5
+    assert config.tracker_url == "http://fake-tracker:8000"
 
 
 def test_worker_needs_a_database_url() -> None:
@@ -111,6 +114,12 @@ def test_heartbeat_seconds_must_be_a_positive_number(value: str) -> None:
 def test_the_heartbeat_must_be_shorter_than_the_lease(env: dict[str, str]) -> None:
     with pytest.raises(ConfigError, match="shorter than LEASE_SECONDS"):
         WorkerConfig.from_env({**WORKER_ENV, **env})
+
+
+@pytest.mark.parametrize("value", ["fake-tracker:8000", "ftp://tracker", "file:///etc/passwd"])
+def test_the_tracker_url_must_be_http_or_https(value: str) -> None:
+    with pytest.raises(ConfigError, match="TRACKER_URL"):
+        WorkerConfig.from_env({**WORKER_ENV, "TRACKER_URL": value})
 
 
 def test_api_defaults_listen_on_localhost() -> None:

@@ -102,6 +102,8 @@ services:
       # On a volume that every worker mounts: a job that is taken over
       # keeps the files its tools wrote.
       WORKSPACE_ROOT: /workspaces
+      # The issue tracker the create_issue tool talks to.
+      TRACKER_URL: ${TRACKER_URL:-http://fake-tracker:8000}
       # Seconds a claim holds a job. A job whose lease ran out is taken over.
       LEASE_SECONDS: ${LEASE_SECONDS:-30}
       # Seconds between two renewals of the lease. Shorter than the lease.
@@ -126,6 +128,8 @@ services:
         condition: service_completed_successfully
       fake-provider:
         condition: service_healthy
+      fake-tracker:
+        condition: service_healthy
 
   fake-provider:
     <<: *runtime
@@ -133,6 +137,16 @@ services:
     ports:
       # Published on localhost only, so tests can read its request log.
       - "127.0.0.1:${FAKE_PROVIDER_PORT:-8001}:8000"
+    healthcheck: *http-healthcheck
+
+  # A stand-in for an issue tracker: the outside system the create_issue
+  # tool changes. It keeps its issues in memory.
+  fake-tracker:
+    <<: *runtime
+    command: [uvicorn, fake_tracker.app:app, --host, 0.0.0.0, --port, "8000"]
+    ports:
+      # Published on localhost only, so tests can read its list of issues.
+      - "127.0.0.1:${FAKE_TRACKER_PORT:-8002}:8000"
     healthcheck: *http-healthcheck
 
 volumes:
