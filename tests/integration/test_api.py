@@ -479,3 +479,108 @@ def test_a_quiet_event_stream_sends_keep_alive_comments(database_url: str) -> No
     assert set(comments) == {": keep-alive"}
     # The comments did not disturb the events around them.
     assert [(event_id, name) for event_id, name, _ in events] == [(1, "step"), (None, "end")]
+
+
+# Approval
+
+
+async def parked_for_approval(api: Api) -> Job:
+    """A job waiting for a person, with the log a worker leaves: the intent and the question."""
+    job = await api.new_job()
+    asked = {
+        "tool_use_id": "toolu_1",
+        "name": "create_issue",
+        "input": {"title": "CI is red"},
+        "operation_id": f"{job.id}:toolu_1",
+        "reason": "the tool's check could not tell whether the call happened",
+    }
+    log = [
+        (StepKind.TOOL_INTENT, {"tool_use_id": "toolu_1", "name": "create_issue", "input": {}}),
+        (StepKind.APPROVAL_REQUESTED, asked),
+    ]
+    for seq, (kind, payload) in enumerate(log, start=1):
+        await held.append_step(
+            api.engine, job_id=job.id, lease_epoch=1, seq=seq, kind=kind, payload=payload
+        )
+    return await held.leave_running(
+        api.engine, job_id=job.id, lease_epoch=1, new_status=JobStatus.NEEDS_APPROVAL
+    )
+
+
+def test_approve_queues_the_job_and_records_the_approval_as_a_step(database_url: str) -> None:
+    async def body(api: Api) -> tuple[Job, httpx2.Response, Job | None, list[Any]]:
+        job = await parked_for_approval(api)
+        response = await api.client.post(f"/jobs/{job.id}/approve")
+        async with api.engine.begin() as conn:
+            return job, response, await get_job(conn, job.id), await read_steps(conn, job.id)
+
+    parked, response, job, steps = api_test(database_url, body)
+    assert response.status_code == 200
+    assert response.json()["id"] == str(parked.id)
+    assert response.json()["status"] == "queued"
+    assert job is not None
+    assert (job.status, job.lease_owner, job.lease_epoch, job.takeovers) == (
+        JobStatus.QUEUED,
+        None,
+        1,
+        0,
+    )
+    assert [(step.seq, step.kind) for step in steps] == [
+        (1, StepKind.TOOL_INTENT),
+        (2, StepKind.APPROVAL_REQUESTED),
+        (3, StepKind.APPROVAL_GIVEN),
+    ]
+    # The approval names the call it is for.
+    assert steps[2].payload == {"tool_use_id": "toolu_1", "operation_id": f"{parked.id}:toolu_1"}
+
+
+@pytest.mark.parametrize(
+    "status",
+    [status for status in JobStatus if status is not JobStatus.NEEDS_APPROVAL],
+)
+def test_approve_refuses_a_job_that_is_not_waiting_for_approval(
+    database_url: str, status: JobStatus
+) -> None:
+    async def body(api: Api) -> tuple[httpx2.Response, Job | None, list[Any]]:
+        job = await api.new_job()
+        if status is not JobStatus.RUNNING:
+            await api.finish(job, status)
+        response = await api.client.post(f"/jobs/{job.id}/approve")
+        async with api.engine.begin() as conn:
+            return response, await get_job(conn, job.id), await read_steps(conn, job.id)
+
+    response, job, steps = api_test(database_url, body)
+    assert response.status_code == 409
+    assert status.value in response.json()["detail"]
+    assert job is not None
+    assert job.status is status
+    assert steps == []
+
+
+def test_approve_of_an_unknown_job_is_404_and_of_a_bad_id_422(database_url: str) -> None:
+    async def body(api: Api) -> tuple[httpx2.Response, httpx2.Response]:
+        return (
+            await api.client.post(f"/jobs/{uuid4()}/approve"),
+            await api.client.post("/jobs/not-an-id/approve"),
+        )
+
+    unknown, bad = api_test(database_url, body)
+    assert (unknown.status_code, unknown.json()) == (404, {"detail": "job not found"})
+    assert bad.status_code == 422
+
+
+def test_two_approvals_at_once_approve_once(database_url: str) -> None:
+    """One question, one answer: the second approval finds the job already queued."""
+
+    async def body(api: Api) -> tuple[list[int], list[Any]]:
+        job = await parked_for_approval(api)
+        responses = await asyncio.gather(
+            *(api.client.post(f"/jobs/{job.id}/approve") for _ in range(5))
+        )
+        async with api.engine.begin() as conn:
+            return [r.status_code for r in responses], await read_steps(conn, job.id)
+
+    codes, steps = api_test(database_url, body)
+    assert sorted(codes) == [200, 409, 409, 409, 409]
+    assert [step.kind for step in steps].count(StepKind.APPROVAL_GIVEN) == 1
+    assert [step.seq for step in steps] == [1, 2, 3]

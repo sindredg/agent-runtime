@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from runtime.provider.base import ModelRequest, ModelResponse
 from runtime.provider.messages import AnthropicProvider
 from runtime.store import held
-from runtime.store.jobs import Job, claim_job, get_job
+from runtime.store.jobs import Job, approve_job, claim_job, get_job
 from runtime.store.status import JobStatus
 from runtime.store.steps import Step, StepKind, read_steps
 from runtime.tools import default_tools
@@ -549,3 +549,126 @@ def test_the_real_read_file_is_rerun_without_a_question(stack: Stack) -> None:
     assert [step.kind for step in steps[2:5]] == [K.TOOL_INTENT, K.TOOL_INTENT, K.TOOL_RESULT]
     assert steps[4].payload["content"] == "seeded\n"
     assert script.requests[-1][2]["content"][0]["content"] == "seeded\n"
+
+
+# Approval: a person says the call may run again
+
+
+def test_an_approved_call_is_run_again_under_its_own_intent(stack: Stack) -> None:
+    acts = Acts(hang_at=1)
+    script = Script()
+
+    async def body(engine: AsyncEngine, _: AnthropicProvider) -> tuple[Job, Job, list[Step]]:
+        async with engine.begin() as conn:
+            await stack.create(conn, SPEC)
+            first_claim = await claim_job(conn, worker_id="w1")
+        assert first_claim is not None
+        first = asyncio.create_task(
+            run_job(engine, script, acts.registry(), first_claim, stack.settings())
+        )
+        await asyncio.to_thread(acts.hanging.wait, 30)
+        first.cancel()
+        await asyncio.gather(first, return_exceptions=True)
+        acts.hang_at = None
+        acts.release.set()
+
+        async with engine.begin() as conn:
+            await expire_lease(conn, first_claim.id)
+            second_claim = await claim_job(conn, worker_id="w2")
+        assert second_claim is not None
+        parked = await run_job(engine, script, acts.registry(), second_claim, stack.settings())
+        assert parked is S.NEEDS_APPROVAL
+        # Nobody may claim a job that waits for a person.
+        async with engine.begin() as conn:
+            assert await claim_job(conn, worker_id="w3") is None
+            await approve_job(conn, first_claim.id)
+        async with engine.begin() as conn:
+            third_claim = await claim_job(conn, worker_id="w3")
+        assert third_claim is not None
+        status = await run_job(engine, script, acts.registry(), third_claim, stack.settings())
+        assert status is S.SUCCEEDED
+        async with engine.begin() as conn:
+            job = await get_job(conn, first_claim.id)
+            assert job is not None
+            return third_claim, job, await read_steps(conn, job.id)
+
+    third_claim, job, steps = stack.run(body)
+    # The claim after the approval is an ordinary claim, not a takeover.
+    assert (third_claim.lease_epoch, third_claim.takeovers) == (3, 1)
+    assert job.status is S.SUCCEEDED
+    assert [(step.kind, step.lease_epoch) for step in steps] == [
+        (K.MODEL_REQUEST, 1),
+        (K.MODEL_RESPONSE, 1),
+        (K.TOOL_INTENT, 1),
+        (K.APPROVAL_REQUESTED, 2),
+        (K.APPROVAL_GIVEN, 2),
+        (K.TOOL_INTENT, 3),
+        (K.TOOL_RESULT, 3),
+        (K.TOOL_INTENT, 3),
+        (K.TOOL_RESULT, 3),
+        (K.MODEL_REQUEST, 3),
+        (K.MODEL_RESPONSE, 3),
+    ]
+    a, b = op(job, "toolu_a"), op(job, "toolu_b")
+    # Two runs of the first call, for two intents: the abandoned one and the approved one.
+    assert acts.runs == [(a, "a"), (a, "a"), (b, "b")]
+    assert steps[4].payload == {"tool_use_id": "toolu_a", "operation_id": a}
+
+
+def test_an_approved_rerun_that_is_interrupted_too_needs_a_new_approval(stack: Stack) -> None:
+    """Approval covers one run. The intent of the rerun is a new open question."""
+    acts = Acts(hang_at=1)
+    script = Script()
+
+    async def body(
+        engine: AsyncEngine, _: AnthropicProvider
+    ) -> tuple[JobStatus | None, list[Step]]:
+        async with engine.begin() as conn:
+            job = await stack.create(conn, SPEC)
+        claims = 0
+
+        async def claim() -> Job:
+            nonlocal claims
+            claims += 1
+            async with engine.begin() as conn:
+                await expire_lease(conn, job.id)
+                claimed = await claim_job(conn, worker_id=f"w{claims}")
+            assert claimed is not None
+            return claimed
+
+        async def abandon_in_the_tool() -> None:
+            acts.hang_at = len(acts.runs) + 1
+            acts.hanging.clear()
+            acts.release.clear()
+            worker = asyncio.create_task(
+                run_job(engine, script, acts.registry(), await claim(), stack.settings())
+            )
+            await asyncio.to_thread(acts.hanging.wait, 30)
+            worker.cancel()
+            await asyncio.gather(worker, return_exceptions=True)
+            acts.hang_at = None
+            acts.release.set()
+
+        await abandon_in_the_tool()
+        assert (
+            await run_job(engine, script, acts.registry(), await claim(), stack.settings())
+            is S.NEEDS_APPROVAL
+        )
+        async with engine.begin() as conn:
+            await approve_job(conn, job.id)
+        # The approved rerun starts, and its worker stops inside the tool again.
+        await abandon_in_the_tool()
+        status = await run_job(engine, script, acts.registry(), await claim(), stack.settings())
+        async with engine.begin() as conn:
+            return status, await read_steps(conn, job.id)
+
+    status, steps = stack.run(body)
+    assert status is S.NEEDS_APPROVAL
+    assert [step.kind for step in steps][2:] == [
+        K.TOOL_INTENT,
+        K.APPROVAL_REQUESTED,
+        K.APPROVAL_GIVEN,
+        K.TOOL_INTENT,
+        K.APPROVAL_REQUESTED,
+    ]
+    assert len(acts.runs) == 2

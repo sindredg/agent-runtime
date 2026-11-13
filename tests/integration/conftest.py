@@ -83,11 +83,14 @@ async def add_step(
 
 
 async def expire_lease(conn: AsyncConnection, job_id: UUID) -> None:
-    """Move the job's lease into the past, as if its worker had stopped renewing it."""
+    """Move the job's lease into the past, as if its worker had stopped renewing it.
+
+    A job that has no lease is left as it is.
+    """
     await conn.execute(
         text(
             "UPDATE jobs SET lease_expires_at = clock_timestamp() - interval '1 second'"
-            " WHERE id = :id"
+            " WHERE id = :id AND lease_expires_at IS NOT NULL"
         ),
         {"id": job_id},
     )

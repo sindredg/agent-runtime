@@ -147,11 +147,14 @@ def claim_statement(worker_id: str, lease: timedelta) -> Update:
     )
 
 
-async def _record_takeover_limit(conn: AsyncConnection, job: Job) -> None:
-    """Append the `error` step for a job the claim just failed.
+async def _append_next_step(
+    conn: AsyncConnection, job: Job, kind: StepKind, payload: dict[str, Any]
+) -> None:
+    """Append a step at the job's next `seq`, for a caller that holds the job row's lock.
 
-    The claim's transaction still holds the job row's lock, so no worker
-    write can take the same `seq` in between.
+    The claim and the approval both update the job row first, in the same
+    transaction. Until that transaction ends no worker can write a step for
+    the job, so the next `seq` cannot be taken in between.
     """
     next_seq = (
         select(func.coalesce(func.max(steps.c.seq), 0) + 1)
@@ -160,13 +163,14 @@ async def _record_takeover_limit(conn: AsyncConnection, job: Job) -> None:
     )
     await conn.execute(
         insert(steps).values(
-            job_id=job.id,
-            seq=next_seq,
-            kind=StepKind.ERROR,
-            payload={"message": TAKEOVER_LIMIT_ERROR},
-            lease_epoch=job.lease_epoch,
+            job_id=job.id, seq=next_seq, kind=kind, payload=payload, lease_epoch=job.lease_epoch
         )
     )
+
+
+async def _record_takeover_limit(conn: AsyncConnection, job: Job) -> None:
+    """Append the `error` step for a job the claim just failed."""
+    await _append_next_step(conn, job, StepKind.ERROR, {"message": TAKEOVER_LIMIT_ERROR})
     log.warning(
         "job failed at the takeover limit",
         extra={"job_id": job.id, "takeovers": job.takeovers},
@@ -231,3 +235,38 @@ async def update_status(
     if row is None:
         raise InvalidTransition(job_id, new_status)
     return job_from_row(row)
+
+
+async def approve_job(conn: AsyncConnection, job_id: UUID) -> Job:
+    """Approve the rerun a job is waiting for, and return the job.
+
+    The job moves from `needs_approval` to `queued` and gets an
+    `approval_given` step that names the call, taken from the job's last
+    `approval_requested` step. Both happen in the caller's transaction. The
+    worker that claims the job next runs the call again.
+
+    Raises InvalidTransition when the job does not exist or is not waiting
+    for an approval. Of two approvals sent at once, one waits for the other
+    and is then refused.
+    """
+    result = await conn.execute(
+        update(jobs)
+        .where(jobs.c.id == job_id, jobs.c.status == JobStatus.NEEDS_APPROVAL.value)
+        .values(status=JobStatus.QUEUED.value)
+        .returning(*jobs.c)
+    )
+    row = result.one_or_none()
+    if row is None:
+        raise InvalidTransition(job_id, JobStatus.QUEUED)
+    job = job_from_row(row)
+    asked = (
+        await conn.execute(
+            select(steps.c.payload)
+            .where(steps.c.job_id == job_id, steps.c.kind == StepKind.APPROVAL_REQUESTED.value)
+            .order_by(steps.c.seq.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none() or {}
+    named = {key: asked[key] for key in ("tool_use_id", "operation_id") if key in asked}
+    await _append_next_step(conn, job, StepKind.APPROVAL_GIVEN, named)
+    return job

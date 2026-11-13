@@ -87,6 +87,7 @@ class StubApi:
         self.end = end
         self.submit_response = httpx2.Response(201, json=job())
         self.drop_after: int | None = None
+        self.approve_response = httpx2.Response(200, json=job("queued"))
 
     def __call__(self, request: httpx2.Request) -> httpx2.Response:
         self.requests.append(request)
@@ -95,6 +96,8 @@ class StubApi:
             return self.submit_response
         if path == f"/jobs/{JOB_ID}":
             return httpx2.Response(200, json=self.final)
+        if request.method == "POST" and path == f"/jobs/{JOB_ID}/approve":
+            return self.approve_response
         if path == f"/jobs/{JOB_ID}/steps":
             # Pages of two, to show that the command reads on.
             after = int(request.url.params.get("after", "0"))
@@ -514,3 +517,52 @@ def test_every_example_is_a_valid_submission(path: Path) -> None:
 
 def test_there_is_a_hello_example() -> None:
     assert (EXAMPLES / "hello.json").is_file()
+
+
+# approve
+
+
+def test_approve_posts_to_the_job_and_prints_its_new_status() -> None:
+    api = StubApi()
+    code, out, err = run("approve", JOB_ID, api=api)
+    assert (code, err) == (0, "")
+    assert out == "queued\n"
+    assert [(r.method, r.url.path) for r in api.requests] == [("POST", f"/jobs/{JOB_ID}/approve")]
+
+
+def test_an_approval_the_api_refuses_exits_with_2_and_shows_why() -> None:
+    api = StubApi()
+    api.approve_response = httpx2.Response(
+        409, json={"detail": "job is running; only a job that needs approval can be approved"}
+    )
+    code, out, err = run("approve", JOB_ID, api=api)
+    assert (code, out) == (2, "")
+    assert "409" in err
+    assert "only a job that needs approval" in err
+
+
+def test_approve_needs_a_job_id(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as stopped:
+        run("approve", "not-a-job-id")
+    assert stopped.value.code == 2
+    assert "not a job id" in capsys.readouterr().err
+
+
+def test_approval_steps_show_the_call_and_the_reason() -> None:
+    asked = step(
+        5,
+        "approval_requested",
+        {
+            "tool_use_id": "t1",
+            "name": "create_issue",
+            "input": {"title": "CI is red"},
+            "operation_id": "0190:t1",
+            "reason": "the tool is not idempotent and has no check",
+        },
+    )
+    given = step(6, "approval_given", {"tool_use_id": "t1", "operation_id": "0190:t1"})
+    assert format_step(asked) == (
+        "   5  approval_requested  create_issue 0190:t1:"
+        " the tool is not idempotent and has no check"
+    )
+    assert format_step(given) == "   6  approval_given  0190:t1"
