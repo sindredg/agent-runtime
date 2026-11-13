@@ -1,0 +1,13 @@
+[project]
+name = "fake-provider"
+version = "0.0.0"
+description = "Scripted stand-in for the model provider, used by tests and load runs."
+requires-python = "==3.15.*"
+dependencies = [
+    "fastapi==0.162.6",
+    "uvicorn==0.54.0",
+]
+
+[build-system]
+requires = ["uv_build==0.13.8"]
+build-backend = "uv_build"

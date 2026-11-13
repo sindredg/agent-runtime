@@ -1,0 +1,111 @@
+name: agent-runtime
+
+# Shared by every service built from the Dockerfile.
+x-runtime: &runtime
+  # Built once, by the migrate service. The others reuse the local image and
+  # never try to pull it.
+  image: agent-runtime:dev
+  pull_policy: never
+  # A tiny init process as PID 1, so SIGTERM reaches the service and it stops promptly.
+  init: true
+  # The container cannot write to its own filesystem, only to /tmp in memory.
+  read_only: true
+  tmpfs:
+    - /tmp
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+
+# Development default. Postgres is reachable only inside the compose network.
+x-database-url: &database-url >-
+  postgresql://runtime:${POSTGRES_PASSWORD:-runtime-dev}@postgres:5432/runtime
+
+# urllib because the slim image has no curl.
+x-http-healthcheck: &http-healthcheck
+  test:
+    - CMD
+    - python
+    - -c
+    - >-
+      import urllib.request;
+      urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2)
+  interval: 5s
+  timeout: 3s
+  retries: 5
+  start_period: 10s
+
+services:
+  postgres:
+    # yamllint disable-line rule:line-length
+    image: postgres:18.7-trixie@sha256:9f4fd4aa918f52ae3d6f3b687f1de90d8f867cd4d520021545a9a50c120eae3b
+    environment:
+      POSTGRES_USER: runtime
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-runtime-dev}
+      POSTGRES_DB: runtime
+    volumes:
+      # Postgres 18 images keep data under /var/lib/postgresql/<major>.
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready --username runtime --dbname runtime"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # One-shot: must exit 0 before api and worker start. It only checks the
+  # database connection until there are migrations to run.
+  migrate:
+    <<: *runtime
+    build: .
+    pull_policy: build
+    command: [python, -m, runtime.store.ping]
+    environment:
+      DATABASE_URL: *database-url
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    <<: *runtime
+    command: [uvicorn, runtime.api.app:app, --host, 0.0.0.0, --port, "8000"]
+    environment:
+      DATABASE_URL: *database-url
+    ports:
+      # Published on localhost only: the API has no authentication.
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    healthcheck: *http-healthcheck
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    <<: *runtime
+    command: [python, -m, runtime.worker]
+    environment:
+      DATABASE_URL: *database-url
+    healthcheck:
+      # Healthy while the liveness file was touched in the last 15 seconds.
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import os, sys, time;
+          sys.exit(time.time() - os.path.getmtime('/tmp/worker.alive') > 15)
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      fake-provider:
+        condition: service_healthy
+
+  fake-provider:
+    <<: *runtime
+    command: [uvicorn, fake_provider.app:app, --host, 0.0.0.0, --port, "8000"]
+    healthcheck: *http-healthcheck
+
+volumes:
+  postgres-data:
