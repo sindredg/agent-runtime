@@ -28,7 +28,7 @@ from runtime.store.jobs import (
 )
 from runtime.store.payload import InvalidPayload, check_json
 from runtime.store.status import TRANSITIONS, JobStatus
-from runtime.store.steps import StepConflict, StepKind, append_step, read_steps
+from runtime.store.steps import StepConflict, StepKind, append_step, read_progress, read_steps
 
 S = JobStatus
 DEADLINE = datetime.now(UTC) + timedelta(hours=1)
@@ -606,3 +606,32 @@ def test_add_tokens_used_adds_to_the_count(migrated_database_url: str) -> None:
     job = in_transaction(migrated_database_url, body)
     assert job is not None
     assert job.tokens_used == 42
+
+
+def test_read_progress_returns_status_and_steps_from_one_statement(
+    migrated_database_url: str,
+) -> None:
+    async def body(conn: AsyncConnection) -> dict[str, Any]:
+        job, other = await new_job(conn), await new_job(conn)
+        await add_step(conn, other.id, 1)
+        empty = await read_progress(conn, job.id)
+        for seq in (2, 1, 3):
+            await add_step(conn, job.id, seq, {"n": seq})
+        # As in the read_steps test: without index scans, only ORDER BY sorts.
+        await conn.execute(text("SET LOCAL enable_indexscan = off"))
+        await conn.execute(text("SET LOCAL enable_bitmapscan = off"))
+        return {
+            "missing": await read_progress(conn, uuid4()),
+            "empty": empty,
+            "all": await read_progress(conn, job.id),
+            "after": await read_progress(conn, job.id, after_seq=1, limit=1),
+            "past": await read_progress(conn, job.id, after_seq=3),
+            "steps": await read_steps(conn, job.id),
+        }
+
+    got = in_transaction(migrated_database_url, body)
+    assert got["missing"] is None
+    assert got["empty"] == (JobStatus.QUEUED, [])
+    assert got["all"] == (JobStatus.QUEUED, got["steps"])
+    assert got["after"] == (JobStatus.QUEUED, got["steps"][1:2])
+    assert got["past"] == (JobStatus.QUEUED, [])

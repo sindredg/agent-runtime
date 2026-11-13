@@ -26,7 +26,9 @@ class JobSpec(BaseModel):
     def _files_are_small_and_relative(cls, files: dict[str, str]) -> dict[str, str]:
         for path in files:
             check_relative(path)
-        size = sum(len(content.encode()) for content in files.values())
+        # surrogatepass: text that is not valid Unicode is still measured
+        # here. The store refuses it with its own error.
+        size = sum(len(content.encode("utf-8", "surrogatepass")) for content in files.values())
         if size > MAX_FILES_BYTES:
             raise ValueError(f"files hold {size} bytes; the limit is {MAX_FILES_BYTES}")
         return files

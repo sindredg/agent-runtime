@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from runtime.config import ConfigError, ProviderConfig, WorkerConfig
+from runtime.config import ApiConfig, ConfigError, ProviderConfig, WorkerConfig
 
 ENV = {"ANTHROPIC_API_KEY": "k", "MODEL": "some-model"}
 
@@ -79,3 +79,33 @@ def test_worker_needs_a_database_url() -> None:
 def test_poll_interval_must_be_a_positive_number(value: str) -> None:
     with pytest.raises(ConfigError, match="POLL_INTERVAL_SECONDS"):
         WorkerConfig.from_env({**WORKER_ENV, "POLL_INTERVAL_SECONDS": value})
+
+
+def test_api_defaults_listen_on_localhost() -> None:
+    config = ApiConfig.from_env({"DATABASE_URL": "postgresql://u:p@h/db"})
+    assert config == ApiConfig(
+        database_url="postgresql://u:p@h/db",
+        default_token_budget=1_000_000,
+        default_timeout_seconds=3600,
+        host="127.0.0.1",
+        port=8000,
+    )
+
+
+def test_api_settings_are_read() -> None:
+    config = ApiConfig.from_env(
+        {
+            "DATABASE_URL": "postgresql://u:p@h/db",
+            "DEFAULT_TOKEN_BUDGET": "500",
+            "DEFAULT_TIMEOUT_SECONDS": "60",
+            "API_HOST": "0.0.0.0",  # noqa: S104 - a value under test, nothing listens
+            "API_PORT": "9000",
+        }
+    )
+    assert (config.default_token_budget, config.default_timeout_seconds) == (500, 60)
+    assert (config.host, config.port) == ("0.0.0.0", 9000)  # noqa: S104
+
+
+def test_api_needs_a_database_url() -> None:
+    with pytest.raises(ConfigError, match="DATABASE_URL"):
+        ApiConfig.from_env({})

@@ -94,3 +94,25 @@ class WorkerConfig:
             poll_interval=_positive_float(env, "POLL_INTERVAL_SECONDS", 1.0),
             alive_file=Path(env.get("WORKER_ALIVE_FILE") or "/tmp/worker.alive"),  # noqa: S108
         )
+
+
+@dataclass(frozen=True, slots=True)
+class ApiConfig:
+    database_url: str
+    # Used for a submission that does not give its own.
+    default_token_budget: int
+    default_timeout_seconds: int
+    # The API has no authentication. It listens on localhost unless told otherwise.
+    host: str
+    port: int
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> ApiConfig:
+        env = os.environ if env is None else env
+        return cls(
+            database_url=_required(env, "DATABASE_URL"),
+            default_token_budget=_positive_int(env, "DEFAULT_TOKEN_BUDGET", 1_000_000),
+            default_timeout_seconds=_positive_int(env, "DEFAULT_TIMEOUT_SECONDS", 3600),
+            host=env.get("API_HOST") or "127.0.0.1",
+            port=_positive_int(env, "API_PORT", 8000),
+        )
