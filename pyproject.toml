@@ -7,6 +7,9 @@ requires-python = "==3.15.*"
 dependencies = [
     # Schema migrations, run by the one-shot migrate service.
     "alembic==1.20.1",
+    # The official SDK for the Messages API. It parses the event stream and
+    # maps HTTP errors to typed exceptions.
+    "anthropic==2.8.0",
     "asyncpg==0.32.0",
     "fastapi==0.162.6",
     # The asyncio extra adds greenlet, which SQLAlchemy needs to drive asyncpg.
@@ -71,7 +74,9 @@ strict = true
 files = ["src", "tests", "migrations", "scripts", "services/fake_provider/src"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+# A bare `pytest` runs the unit tests. The other suites need the stack or a key
+# and are named explicitly.
+testpaths = ["tests/unit"]
 # A typo in a marker or a config key fails the run instead of being ignored.
 addopts = "--strict-markers --strict-config"
 # A warning, such as a deprecation in a dependency, fails the run.
