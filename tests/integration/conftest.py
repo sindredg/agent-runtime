@@ -42,6 +42,12 @@ async def _admin(database_url: str, statement: str) -> None:
 
 
 @pytest.fixture(scope="session")
+def api_url() -> str:
+    """The compose stack's API, published on localhost."""
+    return os.environ.get("RUNTIME_API_URL", "http://127.0.0.1:8000")
+
+
+@pytest.fixture(scope="session")
 def fake_provider_url() -> str:
     """The compose stack's fake provider, published on localhost."""
     return os.environ.get("FAKE_PROVIDER_URL", "http://127.0.0.1:8001")

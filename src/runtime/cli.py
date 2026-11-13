@@ -207,3 +207,7 @@ def main(
 def run() -> None:
     """Console script entry point."""
     sys.exit(main())
+
+
+if __name__ == "__main__":
+    run()
