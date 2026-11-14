@@ -81,6 +81,8 @@ class SandboxTool:
     idempotent: bool = False
     # True when the call gets the job's scope. False: never any network.
     networked: bool = False
+    # As for `Tool`: True when no call runs before a person approved it.
+    needs_approval: bool = False
 
     def definition(self) -> dict[str, Any]:
         return tool_definition(self.name, self.description, self.input_schema)

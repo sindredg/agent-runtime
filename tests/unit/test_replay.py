@@ -368,3 +368,94 @@ def test_the_last_request_carries_its_max_tokens() -> None:
     lowered = (StepKind.MODEL_REQUEST, {"model": "m", "max_tokens": 37, "messages": 1})
 
     assert replay("go", log(lowered)).requested_max_tokens == 37
+
+
+# A call that waits for a person before it runs (ADR 0011)
+
+
+def approval_denied(tool_use_id: str) -> tuple[StepKind, dict[str, Any]]:
+    return StepKind.APPROVAL_DENIED, {"tool_use_id": tool_use_id}
+
+
+def test_an_approval_before_the_intent_belongs_to_the_call_that_was_asked_about() -> None:
+    """A gated call is asked about before it has an intent: nothing was interrupted."""
+    asked = log(request(), response(call("t1"), call("t2")), approval_requested("t1"))
+    state = replay("go", asked)
+    assert state.interrupted is None
+    assert (state.approval, state.approval_for) == ("requested", "t1")
+    assert state.pending == [call("t1"), call("t2")]
+    assert not state.needs_model_call
+
+    state = replay("go", [*asked, *log(approval_given("t1"))])
+    assert state.interrupted is None
+    assert (state.approval, state.approval_for) == ("given", "t1")
+    # The answer is not part of the conversation.
+    assert len(state.messages) == 2
+
+
+def test_an_approval_is_used_up_by_the_intent_of_its_call() -> None:
+    """One approval covers one run: the next call starts without one."""
+    steps = log(
+        request(),
+        response(call("t1"), call("t2")),
+        approval_requested("t1"),
+        approval_given("t1"),
+        intent("t1"),
+    )
+    state = replay("go", steps)
+    assert (state.approval, state.approval_for) == (None, None)
+    assert state.interrupted is not None
+
+    state = replay("go", [*steps, *log(result("t1"))])
+    assert (state.approval, state.approval_for) == (None, None)
+    assert state.pending == [call("t2")]
+
+
+def test_a_denial_is_reported_for_the_call_and_changes_nothing_else() -> None:
+    asked = log(request(), response(call("t1")), approval_requested("t1"), approval_denied("t1"))
+    state = replay("go", asked)
+    assert (state.approval, state.approval_for) == ("denied", "t1")
+    assert state.interrupted is None
+    # The call stays open until the worker stores a result that says so.
+    assert state.pending == [call("t1")]
+    assert len(state.messages) == 2
+
+    refused = result("t1", "A person denied this call. It was not run.", is_error=True)
+    state = replay("go", [*asked, *log(refused)])
+    assert (state.approval, state.approval_for) == (None, None)
+    assert state.pending == []
+    assert state.needs_model_call
+    assert state.messages[-1]["content"] == [
+        result_block("t1", "A person denied this call. It was not run.", is_error=True)
+    ]
+
+
+def test_a_denial_of_an_interrupted_call_keeps_the_call_interrupted() -> None:
+    state = replay(
+        "go",
+        log(
+            request(),
+            response(call("t1")),
+            intent("t1"),
+            approval_requested("t1"),
+            approval_denied("t1"),
+        ),
+    )
+    assert state.interrupted is not None
+    assert (state.approval, state.approval_for) == ("denied", "t1")
+
+
+def test_a_new_response_starts_without_an_answer() -> None:
+    state = replay(
+        "go",
+        log(
+            request(),
+            response(call("t1")),
+            approval_requested("t1"),
+            approval_denied("t1"),
+            result("t1", is_error=True),
+            request(3),
+            response(call("t2")),
+        ),
+    )
+    assert (state.approval, state.approval_for) == (None, None)

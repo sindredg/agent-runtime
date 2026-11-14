@@ -90,6 +90,9 @@ class StubApi:
         self.submit_response = httpx2.Response(201, json=job())
         self.drop_after: int | None = None
         self.approve_response = httpx2.Response(200, json=job("queued"))
+        self.deny_response = httpx2.Response(200, json=job("queued"))
+        # The job's steps, for the pages and for the stream.
+        self.steps = STEPS
         self.cancel_response = httpx2.Response(200, json=job("cancelled"))
         # A `status` event the stream carries after the steps, if any.
         self.status: str | None = None
@@ -103,16 +106,18 @@ class StubApi:
             return httpx2.Response(200, json=self.final)
         if request.method == "POST" and path == f"/jobs/{JOB_ID}/approve":
             return self.approve_response
+        if request.method == "POST" and path == f"/jobs/{JOB_ID}/deny":
+            return self.deny_response
         if request.method == "POST" and path == f"/jobs/{JOB_ID}/cancel":
             return self.cancel_response
         if path == f"/jobs/{JOB_ID}/steps":
             # Pages of two, to show that the command reads on.
             after = int(request.url.params.get("after", "0"))
-            page = [s for s in STEPS if s["seq"] > after][:2]
+            page = [s for s in self.steps if s["seq"] > after][:2]
             return httpx2.Response(200, json={"steps": page})
         if path == f"/jobs/{JOB_ID}/events":
             after = int(request.url.params.get("after", "0"))
-            remaining = [s for s in STEPS if s["seq"] > after]
+            remaining = [s for s in self.steps if s["seq"] > after]
             # `drop_after` cuts each answer short, like a connection that breaks.
             end = self.end if self.drop_after is None else None
             return sse(remaining[: self.drop_after], end, self.status)
@@ -284,21 +289,44 @@ def test_logs_follow_prints_the_stream_and_the_outcome() -> None:
     assert out.splitlines() == [*LINES, "succeeded  tokens_used=19"]
 
 
+ASKED = step(
+    5,
+    "approval_requested",
+    {
+        "tool_use_id": "t2",
+        "name": "run_shell",
+        "input": {"command": "rm -rf build\n\x1b[2J" + "x" * 200},
+        "operation_id": f"{JOB_ID}:t2",
+        "reason": "the job's spec asks for a person's approval before this tool runs",
+    },
+)
+
+
 @pytest.mark.parametrize("command", ["submit", "logs"])
-def test_following_a_job_that_stops_for_approval_says_how_to_approve_and_exits_with_3(
+def test_following_a_job_that_stops_for_approval_shows_the_call_and_exits_with_3(
     job_file: Path, command: str
 ) -> None:
-    """The stream of such a job stays open. The command must not wait on it for ever."""
+    """The stream of such a job stays open. The command must not wait on it for ever.
+
+    The person decides about the call, so it is shown in full, on one line
+    and without what a terminal would act on.
+    """
     api = StubApi(final=job("needs_approval", tokens_used=19), end=None)
     api.status = "needs_approval"
+    api.steps = [*STEPS, ASKED]
     target = str(job_file) if command == "submit" else JOB_ID
     code, out, err = run(command, target, "--follow", api=api)
     assert (code, err) == (3, "")
-    assert out.splitlines()[-(len(LINES) + 3) :] == [
+    assert out.splitlines()[-(len(LINES) + 8) :] == [
         *LINES,
+        format_step(ASKED),
         "needs_approval  tokens_used=19",
-        "The job waits for approval: a tool call was interrupted and may or may not have run.",
-        f"To run the call again: runtime approve {JOB_ID}",
+        "The job waits for a person to decide about a tool call.",
+        "  tool:   run_shell",
+        '  input:  {"command": "rm -rf build\\n\\u001b[2J' + "x" * 200 + '"}',
+        "  reason: the job's spec asks for a person's approval before this tool runs",
+        f"To let the call run: runtime approve {JOB_ID}",
+        f"To refuse it:        runtime deny {JOB_ID}",
     ]
     # One look at the stream was enough.
     assert len([r for r in api.requests if r.url.path.endswith("/events")]) == 1
@@ -579,9 +607,10 @@ def test_an_approval_the_api_refuses_exits_with_2_and_shows_why() -> None:
     assert "only a job that needs approval" in err
 
 
-def test_approve_needs_a_job_id(capsys: pytest.CaptureFixture[str]) -> None:
+@pytest.mark.parametrize("command", ["approve", "deny"])
+def test_an_answer_needs_a_job_id(capsys: pytest.CaptureFixture[str], command: str) -> None:
     with pytest.raises(SystemExit) as stopped:
-        run("approve", "not-a-job-id")
+        run(command, "not-a-job-id")
     assert stopped.value.code == 2
     assert "not a job id" in capsys.readouterr().err
 
@@ -604,6 +633,43 @@ def test_approval_steps_show_the_call_and_the_reason() -> None:
         " the tool is not idempotent and has no check"
     )
     assert format_step(given) == "   6  approval_given  0190:t1"
+    denied = step(6, "approval_denied", {"tool_use_id": "t1", "operation_id": "0190:t1"})
+    assert format_step(denied) == "   6  approval_denied  0190:t1"
+
+
+# deny
+
+
+def test_deny_posts_to_the_job_and_prints_its_new_status() -> None:
+    api = StubApi()
+    code, out, err = run("deny", JOB_ID, api=api)
+    assert (code, err) == (0, "")
+    assert out == "queued\n"
+    assert [(r.method, r.url.path) for r in api.requests] == [("POST", f"/jobs/{JOB_ID}/deny")]
+
+
+def test_a_denial_the_api_refuses_exits_with_2_and_shows_why() -> None:
+    api = StubApi()
+    api.deny_response = httpx2.Response(
+        409, json={"detail": "job is running; only a job that needs approval can be denied"}
+    )
+    code, out, err = run("deny", JOB_ID, api=api)
+    assert (code, out) == (2, "")
+    assert "409" in err
+    assert "only a job that needs approval" in err
+
+
+def test_a_job_that_waits_without_a_question_in_its_log_still_says_how_to_answer() -> None:
+    """The steps are read after the stream. A log that cannot be read that way is not fatal."""
+    api = StubApi(final=job("needs_approval"), end=None)
+    api.status = "needs_approval"
+    code, out, err = run("logs", JOB_ID, "--follow", api=api)
+    assert (code, err) == (3, "")
+    assert out.splitlines()[-3:] == [
+        "The job waits for a person to decide about a tool call.",
+        f"To let the call run: runtime approve {JOB_ID}",
+        f"To refuse it:        runtime deny {JOB_ID}",
+    ]
 
 
 def test_a_tool_name_or_model_with_control_codes_is_not_printed_raw() -> None:

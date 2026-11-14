@@ -173,8 +173,8 @@ async def _append_next_step(
 ) -> None:
     """Append a step at the job's next `seq`, for a caller that holds the job row's lock.
 
-    The claim and the approval both update the job row first, in the same
-    transaction. Until that transaction ends no worker can write a step for
+    The claim and an answer to an approval both update the job row first, in
+    the same transaction. Until that transaction ends no worker can write a step for
     the job, so the next `seq` cannot be taken in between.
     """
     await conn.execute(
@@ -266,17 +266,16 @@ async def update_status(
     return job_from_row(row)
 
 
-async def approve_job(conn: AsyncConnection, job_id: UUID) -> Job:
-    """Approve the rerun a job is waiting for, and return the job.
+async def _answer(conn: AsyncConnection, job_id: UUID, kind: StepKind) -> Job:
+    """Record a person's answer to the question a job waits on, and queue the job.
 
-    The job moves from `needs_approval` to `queued` and gets an
-    `approval_given` step that names the call, taken from the job's last
-    `approval_requested` step. Both happen in the caller's transaction. The
-    worker that claims the job next runs the call again.
+    The job moves from `needs_approval` to `queued` and gets a step of
+    `kind` that names the call, taken from the job's last
+    `approval_requested` step. Both happen in the caller's transaction.
 
     Raises InvalidTransition when the job does not exist or is not waiting
-    for an approval. Of two approvals sent at once, one waits for the other
-    and is then refused.
+    for an answer. Of two answers sent at once, one waits for the other and
+    is then refused: the update locks the job's row.
     """
     result = await conn.execute(
         update(jobs)
@@ -297,8 +296,29 @@ async def approve_job(conn: AsyncConnection, job_id: UUID) -> Job:
         )
     ).scalar_one_or_none() or {}
     named = {key: asked[key] for key in ("tool_use_id", "operation_id") if key in asked}
-    await _append_next_step(conn, job, StepKind.APPROVAL_GIVEN, named)
+    await _append_next_step(conn, job, kind, named)
     return job
+
+
+async def approve_job(conn: AsyncConnection, job_id: UUID) -> Job:
+    """Approve the tool call a job is waiting for, and return the job, now `queued`.
+
+    Writes an `approval_given` step. The worker that claims the job next
+    runs the call: for the first time if the tool needs approval before it
+    runs (ADR 0011), again if the call was interrupted (ADR 0005). The
+    approval covers that one run. Raises InvalidTransition as `_answer` does.
+    """
+    return await _answer(conn, job_id, StepKind.APPROVAL_GIVEN)
+
+
+async def deny_job(conn: AsyncConnection, job_id: UUID) -> Job:
+    """Refuse the tool call a job is waiting for, and return the job, now `queued`.
+
+    Writes an `approval_denied` step. The worker that claims the job next
+    does not run the call: it stores an error result that says so, and the
+    job goes on. Raises InvalidTransition as `_answer` does.
+    """
+    return await _answer(conn, job_id, StepKind.APPROVAL_DENIED)
 
 
 class JobNotFound(Exception):

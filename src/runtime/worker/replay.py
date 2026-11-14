@@ -28,9 +28,13 @@ class Replay:
     interrupted: dict[str, Any] | None = None
     # When that `tool_intent` step was written, by the database clock.
     interrupted_at: datetime | None = None
-    # What was done about that interrupted call: None, "requested" (a person
-    # was asked) or "given" (a person approved running it again).
+    # What a person was asked about a call, and answered: None, "requested",
+    # "given" or "denied". A person is asked before a call that needs
+    # approval gets its intent (ADR 0011), and about an interrupted call
+    # that nobody can vouch for (ADR 0005).
     approval: str | None = None
+    # The `tool_use_id` of the call the question is about.
+    approval_for: str | None = None
     # Why the last assistant message cannot be used, as its `model_response`
     # step recorded it. None when it is fine.
     problem: str | None = None
@@ -65,7 +69,8 @@ class Replay:
         The results of one assistant message go into one user message, as
         the API requires. A `model_request` only records its `max_tokens`,
         and an `error` changes nothing: a request without a response is
-        simply sent again.
+        simply sent again. A question to a person and its answer are kept
+        for the worker and are not part of the conversation.
         """
         self.last_seq = step.seq
         payload = step.payload
@@ -87,12 +92,14 @@ class Replay:
             )
             self.used_ids.update(block["id"] for block in self.pending)
             self.stop_reason = payload["stop_reason"]
-            self.interrupted, self.interrupted_at, self.approval = None, None, None
+            self.interrupted, self.interrupted_at = None, None
+            self.approval, self.approval_for = None, None
         elif step.kind is StepKind.TOOL_INTENT:
-            # Every run of a tool has its own intent. A new one starts with
-            # no approval, also when it reruns an approved call.
-            self.interrupted, self.approval = payload, None
-            self.interrupted_at = step.created_at
+            # Every run of a tool has its own intent, and an approval covers
+            # one run. The intent uses it up: if this run is interrupted
+            # too, a person is asked again.
+            self.interrupted, self.interrupted_at = payload, step.created_at
+            self.approval, self.approval_for = None, None
         elif step.kind is StepKind.TOOL_RESULT:
             tool_use_id = payload["tool_use_id"]
             if self.messages[-1]["role"] != "user" or len(self.messages) == 1:
@@ -106,11 +113,14 @@ class Replay:
                 }
             )
             self.pending = [block for block in self.pending if block["id"] != tool_use_id]
-            self.interrupted, self.interrupted_at, self.approval = None, None, None
+            self.interrupted, self.interrupted_at = None, None
+            self.approval, self.approval_for = None, None
         elif step.kind is StepKind.APPROVAL_REQUESTED:
-            self.approval = "requested"
+            self.approval, self.approval_for = "requested", payload.get("tool_use_id")
         elif step.kind is StepKind.APPROVAL_GIVEN:
             self.approval = "given"
+        elif step.kind is StepKind.APPROVAL_DENIED:
+            self.approval = "denied"
 
 
 def replay(prompt: str, steps: Iterable[Step]) -> Replay:

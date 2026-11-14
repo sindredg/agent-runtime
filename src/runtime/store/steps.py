@@ -27,6 +27,7 @@ class StepKind(StrEnum):
     ERROR = "error"
     APPROVAL_REQUESTED = "approval_requested"
     APPROVAL_GIVEN = "approval_given"
+    APPROVAL_DENIED = "approval_denied"
 
 
 @dataclass(frozen=True, slots=True)

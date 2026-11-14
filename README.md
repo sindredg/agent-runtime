@@ -12,8 +12,8 @@ A worker holds a job through a lease and renews it while the job runs. When
 the lease runs out, another worker takes the job over and resumes from the
 step log. Writes of a worker that lost its job are refused. A tool call that
 was interrupted is run again only when that is known to be safe; otherwise
-the job waits for a person to approve. A job that takes its worker down every
-time is failed after five takeovers. See [Results](#results).
+the job waits for a person to approve or deny. A job that takes its worker
+down every time is failed after five takeovers. See [Results](#results).
 
 `run_shell` and `list_dir` run each call in a container of its own, with a
 read-only root, no capabilities, a user that is not root, limits on CPU,
@@ -28,8 +28,16 @@ Not built: retry on provider errors and rate limits.
 The full list is in
 [Known limits](docs/architecture.md#known-limits).
 
-Decided and not built: a way to halt a job, and approval before a risky tool
-call. See ADR 0010 and 0011 under [Design](#design).
+A tool call can wait for a person before it runs. A tool's definition can
+say that its calls need approval, and a job can name further tools in
+`needs_approval`; it cannot take a tool out. Such a call is asked about
+before anything of it happens, and the job waits in `needs_approval`.
+Approved, the call runs once. Denied, it does not run and the model is told.
+Not answered, the job is failed at its deadline. No tool that ships here sets
+the flag, so a job has to name the tools it wants asked about.
+
+A job can be cancelled, and is failed at its deadline, also in the middle of
+a model call or a tool command.
 
 Locally the model provider is a fake that answers from scenario files, so
 nothing here calls a paid API.
@@ -80,21 +88,47 @@ uv run runtime submit examples/ci-triage.json --follow
 curl http://127.0.0.1:8002/issues
 ```
 
+A fourth example is the second one with `"needs_approval": ["run_shell"]`:
+its shell command waits for a person.
+
+```sh
+uv run runtime submit examples/approval.json --follow
+uv run runtime approve <job id>
+uv run runtime logs <job id> --follow
+```
+
+The first command stops when the job asks, shows the call with its input,
+and exits with status 3:
+
+```text
+needs_approval  tokens_used=1143
+The job waits for a person to decide about a tool call.
+  tool:   run_shell
+  input:  {"command": "cat hello.txt && echo seen > note.txt && ls"}
+  reason: the job's spec asks for a person's approval before this tool runs
+To let the call run: runtime approve 01a1dc46-ae79-75d6-9dd9-070e7dc3e400
+To refuse it:        runtime deny 01a1dc46-ae79-75d6-9dd9-070e7dc3e400
+```
+
+`runtime approve` lets the call run once. `runtime deny <job id>` refuses it
+instead: the command does not run, the model gets an error result that says
+so, and the job goes on.
+
 ```sh
 uv run runtime status <job id>
 uv run runtime logs <job id>
-uv run runtime approve <job id>
 uv run runtime cancel <job id>
 make clean
 ```
 
-`runtime approve` is for a job in `needs_approval`: a worker went away during
-a tool call and nobody can tell whether the call happened. Approving runs the
-call again, so look at the system the tool changes first. A command that
-follows such a job prints how to approve it and exits with status 3.
-`runtime cancel` cancels a job: at once if no worker holds it, otherwise its
-worker stops it within a few seconds and kills a running tool command. `make
-clean` stops the stack and deletes its database.
+A job is in `needs_approval` for one of two reasons, and its
+`approval_requested` step says which. The tool needs approval: nothing of
+the call has run. Or a worker went away during a tool call and nobody can
+tell whether the call happened: approving runs it again, so look at the
+system the tool changes first. A job nobody answers is failed at its
+deadline. `runtime cancel` cancels a job: at once if no worker holds it,
+otherwise its worker stops it within a few seconds and kills a running tool
+command. `make clean` stops the stack and deletes its database.
 
 ## Job files
 
@@ -107,6 +141,7 @@ clean` stops the stack and deletes its database.
 | `model` | no | Model id. Default: the worker's `MODEL`. With the fake provider it names a scenario. |
 | `files` | no | Text files written into the job's workspace before it starts: relative path to content. 1 MiB in total, paths included. Paths are plain relative paths: no `..`, no `./`, no trailing `/`, and no path that is also a directory of another. |
 | `scope` | no | What `run_shell` may reach on the network: a list of targets, each `{"host": ..., "ports": [...]}`. `host` is an IPv4 address (`10.0.0.5`), an IPv4 range (`10.0.0.0/24`) or a host name (`lab.example`, resolved by the worker once per call to its IPv4 addresses, no wildcards; a name that spells a number such as `2852039166` is refused); `ports` are TCP and UDP ports, left out for all. At most 64 targets. A target in the fixed deny list (link-local and the cloud metadata address) is refused here; one in the runtime's own networks is refused when a call starts. Left out: no network. |
+| `needs_approval` | no | Names of tools whose calls wait for a person in this job, at most 100. Each call of a named tool is asked about before it runs, and runs only after `runtime approve`. The list adds to the tools whose own definition asks; there is no way to take a tool out. A name that is not a tool of the worker fails the job when it starts, so a misspelt name does not leave a tool without the question. |
 | `token_budget` | no | At least 1. A model call is not made when the upper bound of its input does not fit what is left; the job then fails. See [Limits](docs/architecture.md). |
 | `timeout_seconds` | no | 1 to 604800 (one week). Sets the job's deadline. At the deadline the job is `failed`, also in the middle of a model call or a tool command, and also while it waits for a worker or for an approval. |
 
@@ -214,7 +249,7 @@ What these results do not show:
   through one path, and bound a model call's tokens before it is sent.
   Built.
 - [ADR 0011](docs/adr/0011-ask-a-person-before-a-risky-tool-call.md): ask a
-  person before a risky tool call runs. Not built.
+  person before a risky tool call runs. Built.
 
 ## Development
 

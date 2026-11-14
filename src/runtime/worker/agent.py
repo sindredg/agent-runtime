@@ -12,7 +12,8 @@ job next.
 
 The token budget is kept with an upper bound of each call's input
 (`runtime.worker.budget`). A cancel and the deadline halt the job
-(`runtime.worker.halt`).
+(`runtime.worker.halt`). A tool call that needs approval waits for a person
+before it runs (`runtime.worker.approval`).
 """
 
 import asyncio
@@ -46,6 +47,7 @@ from runtime.store.status import FINAL_STATUSES, JobStatus
 from runtime.store.steps import Step, StepKind, read_steps
 from runtime.tools.base import AnyTool, ToolCall, ToolRegistry, ToolResult, operation_id
 from runtime.tools.sandboxed import SandboxTool
+from runtime.worker.approval import DENIED, DENIED_RERUN, gate_reason, not_offered
 from runtime.worker.budget import input_bound, max_tokens_within
 from runtime.worker.halt import Halt, Halted, HaltReason, watch_cancel
 from runtime.worker.lease import Lease, keep_renewing
@@ -306,6 +308,7 @@ async def _next_tool_call(
     stop: asyncio.Event,
     scope: tuple[Target, ...] | None,
     halt: Halt,
+    gated: tuple[str, ...] = (),
 ) -> bool:
     """Deal with the first open tool call. False means the job now waits for a person.
 
@@ -313,6 +316,12 @@ async def _next_tool_call(
     call whose intent is already in the log was interrupted when a worker
     stopped. It is rerun, answered from the tool's check, or put before a
     person (see `runtime.worker.recovery`).
+
+    A call of a tool that needs approval, by its definition or by the names
+    in `gated` from the job's spec, is put before a person first (ADR 0011):
+    the question is written and the job parked, with no intent. It gets its
+    intent and runs once the log holds an approval for it. A call a person
+    denied gets an error result and never runs.
     """
     block = state.pending[0]
     tool_use_id, name = block["id"], block["name"]
@@ -323,6 +332,30 @@ async def _next_tool_call(
         operation_id=operation_id(job.id, tool_use_id),
         lease_epoch=lease.epoch,
     )
+    # A person's answer counts for the call it names and for no other.
+    answer = state.approval if state.approval_for == tool_use_id else None
+    why_gated = gate_reason(tool, name, gated)
+
+    async def ask(reason: str) -> None:
+        # A worker may have stopped between asking and parking the job. The
+        # question is then already in the log.
+        if answer != "requested":
+            await writer.append(
+                StepKind.APPROVAL_REQUESTED,
+                {
+                    "tool_use_id": tool_use_id,
+                    "name": name,
+                    "input": block["input"],
+                    "operation_id": call.operation_id,
+                    "reason": reason,
+                },
+            )
+
+    async def refuse(content: str) -> None:
+        await writer.append(
+            StepKind.TOOL_RESULT,
+            {"tool_use_id": tool_use_id, "content": content, "is_error": True, "denied": True},
+        )
 
     interrupted = state.interrupted
     if interrupted is not None and interrupted.get("tool_use_id") == tool_use_id:
@@ -332,10 +365,17 @@ async def _next_tool_call(
         ):
             return True
         lease.check()
+        if answer == "denied":
+            # A person refused the rerun. Whether the interrupted run
+            # happened stays unknown, and the result says so.
+            await refuse(DENIED_RERUN)
+            return True
         # Raced: a halt does not wait for a slow check. The check runs on in
         # its thread; it only asks, it changes nothing.
         _, found = await _race(
-            asyncio.to_thread(decide, tool, call, approved=state.approval == "given"),
+            asyncio.to_thread(
+                decide, tool, call, approved=answer == "given", gated=why_gated is not None
+            ),
             lease=lease,
             halt=halt,
         )
@@ -363,24 +403,24 @@ async def _next_tool_call(
             )
             return True
         if isinstance(decision, Ask):
-            # A worker may have stopped between asking and parking the job.
-            # The question is then already in the log.
-            if state.approval != "requested":
-                await writer.append(
-                    StepKind.APPROVAL_REQUESTED,
-                    {
-                        "tool_use_id": tool_use_id,
-                        "name": name,
-                        "input": block["input"],
-                        "operation_id": call.operation_id,
-                        "reason": decision.reason,
-                    },
-                )
+            await ask(decision.reason)
             return False
         if stop.is_set():
             # Asking the check took time and the worker was told to stop
             # meanwhile. The rerun has no intent yet, so it does not start.
             return True
+    elif answer == "denied":
+        # Checked before the gate: a denial holds also on a worker whose
+        # tools would not have asked.
+        lease.check()
+        await refuse(DENIED)
+        return True
+    elif why_gated is not None and answer != "given":
+        # The gate. No intent is written, so nothing of the call has
+        # happened and nothing looks interrupted.
+        lease.check()
+        await ask(why_gated)
+        return False
 
     # Before the intent: a call that will not start must not leave an
     # intent behind, which would look interrupted. Once the intent is
@@ -510,6 +550,16 @@ async def _loop(
     """
     model = spec.model or settings.default_model
     failpoints = settings.failpoints
+    gated = spec.needs_approval or ()
+    if unknown := not_offered(gated, tools):
+        # Before anything runs. Such a name gates nothing: if it is a
+        # misspelt one, the tool it was meant for would run without a question.
+        more = f" and {len(unknown) - 5} more" if len(unknown) > 5 else ""
+        raise _JobFailed(
+            "the spec asks for approval before tools this worker does not offer: "
+            + ", ".join(repr(name) for name in unknown[:5])
+            + more
+        )
     # The log is replayed once, here. This is also how a job is resumed: the
     # steps a stopped worker left behind are read like any others.
     state = replay(spec.prompt, steps)
@@ -624,6 +674,7 @@ async def _loop(
                 stop,
                 spec.scope,
                 halt,
+                gated,
             ):
                 return JobStatus.NEEDS_APPROVAL
             continue
@@ -655,8 +706,8 @@ async def _run(
 ) -> JobStatus:
     """Run the job and record its outcome. Returns the status it was left in:
     `succeeded`, `failed`, `cancelled`, `needs_approval` when a person has
-    to decide about an interrupted tool call, or `queued` when the worker
-    was stopped and released the job.
+    to decide about a tool call, or `queued` when the worker was stopped
+    and released the job.
 
     The job is halted at its deadline, by the database clock: the time left
     is read once, here, and a timer kept on the worker's clock.

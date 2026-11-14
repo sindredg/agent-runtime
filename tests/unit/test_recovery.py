@@ -124,3 +124,36 @@ def test_the_reason_for_asking_can_always_be_stored(text: str) -> None:
     assert isinstance(decision, Ask)
     check_json(decision.reason)
     assert "check failed" in decision.reason
+
+
+# A tool whose calls need approval: one approval covers one run (ADR 0011)
+
+
+def test_an_interrupted_call_of_a_gated_tool_is_not_run_again_because_it_is_idempotent() -> None:
+    decision = decide(tool(idempotent=True), CALL, approved=False, gated=True)
+    assert isinstance(decision, Ask)
+    assert "approval" in decision.reason
+
+
+def test_an_interrupted_call_of_a_gated_tool_is_not_run_again_on_the_checks_word() -> None:
+    decision = decide(
+        tool(check=lambda call: CheckOutcome.NOT_DONE), CALL, approved=False, gated=True
+    )
+    assert isinstance(decision, Ask)
+    assert "did not happen" in decision.reason
+    assert "approval" in decision.reason
+
+
+def test_a_gated_call_the_check_finds_is_answered_from_the_check() -> None:
+    """The approved run happened. Storing its result runs nothing."""
+    found = ToolResult("created issue 7")
+    for idempotent in (False, True):
+        decision = decide(
+            tool(idempotent=idempotent, check=lambda call: found), CALL, approved=False, gated=True
+        )
+        assert decision == Recovered(found)
+
+
+def test_an_approved_rerun_of_a_gated_call_runs() -> None:
+    assert isinstance(decide(tool(), CALL, approved=True, gated=True), Rerun)
+    assert isinstance(decide(tool(idempotent=True), CALL, approved=True, gated=True), Rerun)

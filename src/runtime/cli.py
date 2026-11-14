@@ -1,4 +1,5 @@
-"""The `runtime` command: submit a job, read its status and steps, approve a rerun.
+"""The `runtime` command: submit a job, read its status and steps, cancel it,
+and approve or deny a tool call that waits for a person.
 
 It talks to the API over HTTP. The API's address comes from --api-url or
 RUNTIME_API_URL and defaults to http://127.0.0.1:8000.
@@ -76,14 +77,26 @@ def build_parser() -> argparse.ArgumentParser:
 
     approve = commands.add_parser(
         "approve",
-        help="let a job that needs approval run its interrupted tool call again",
+        help="let the tool call run that a job in needs_approval waits for",
         description=(
-            "A job stops in needs_approval when a worker went away during a tool call and"
-            " nobody can tell whether the call happened. Approving runs the call again."
-            " Look at the system the tool changes first: the call may already have been made."
+            "A job stops in needs_approval for one of two reasons, which its"
+            " approval_requested step names. The tool needs approval before each run:"
+            " nothing of the call has run, and approving runs it once. Or a worker went away"
+            " during the call and nobody can tell whether it happened: approving runs it"
+            " again, so look at the system the tool changes first."
         ),
     )
     approve.add_argument("job_id", type=_job_id)
+
+    deny = commands.add_parser(
+        "deny",
+        help="refuse the tool call that a job in needs_approval waits for",
+        description=(
+            "The call does not run. The job goes on, and the model is told that the call"
+            " was denied. A job nobody answers is failed at its deadline."
+        ),
+    )
+    deny.add_argument("job_id", type=_job_id)
 
     cancel = commands.add_parser(
         "cancel",
@@ -129,7 +142,7 @@ def _detail(kind: str, payload: dict[str, Any]) -> str:
         return _preview(payload["message"])
     if kind == "approval_requested":
         return _preview(f"{payload['name']} {payload['operation_id']}: {payload['reason']}")
-    if kind == "approval_given":
+    if kind in ("approval_given", "approval_denied"):
         return _preview(payload["operation_id"])
     return _preview(json.dumps(payload))
 
@@ -265,11 +278,17 @@ def _finish(status: str, client: httpx2.Client, job_id: str, out: TextIO) -> int
         line += f"  error={_preview(job['error'])}"
     print(line, file=out)
     if status == "needs_approval":
-        print(
-            "The job waits for approval: a tool call was interrupted and may or may not have run.",
-            file=out,
-        )
-        print(f"To run the call again: runtime approve {_one_line(job_id)}", file=out)
+        print("The job waits for a person to decide about a tool call.", file=out)
+        asked = [s for s in _steps(client, job_id) if s["kind"] == "approval_requested"]
+        if asked:
+            # In full: this is what the person decides about. One line each,
+            # and JSON escapes what a terminal would act on.
+            call = asked[-1]["payload"]
+            print(f"  tool:   {_one_line(str(call.get('name')))}", file=out)
+            print(f"  input:  {_one_line(json.dumps(call.get('input')))}", file=out)
+            print(f"  reason: {_one_line(str(call.get('reason')))}", file=out)
+        print(f"To let the call run: runtime approve {_one_line(job_id)}", file=out)
+        print(f"To refuse it:        runtime deny {_one_line(job_id)}", file=out)
         return EXIT_NEEDS_APPROVAL
     return 0 if status == "succeeded" else 1
 
@@ -301,6 +320,12 @@ def _approve(client: httpx2.Client, args: argparse.Namespace, out: TextIO) -> in
     return 0
 
 
+def _deny(client: httpx2.Client, args: argparse.Namespace, out: TextIO) -> int:
+    job = _check(client.post(f"/jobs/{args.job_id}/deny")).json()
+    print(_one_line(str(job["status"])), file=out)
+    return 0
+
+
 def _cancel(client: httpx2.Client, args: argparse.Namespace, out: TextIO) -> int:
     response = _check(client.post(f"/jobs/{args.job_id}/cancel"))
     status = _one_line(str(response.json()["status"]))
@@ -327,6 +352,7 @@ def main(
         "status": _status,
         "logs": _logs,
         "approve": _approve,
+        "deny": _deny,
         "cancel": _cancel,
     }
     handler = handlers[args.command]

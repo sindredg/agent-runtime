@@ -4,6 +4,7 @@ Each test runs against a real Postgres server and its own new database.
 """
 
 import asyncio
+import subprocess
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 
@@ -51,6 +52,7 @@ STEP_KINDS = [
     "error",
     "approval_requested",
     "approval_given",
+    "approval_denied",
 ]
 
 DEADLINE = datetime.now(UTC) + timedelta(hours=1)
@@ -253,3 +255,37 @@ def test_step_rejects(migrated_database_url: str, seq: int, kind: str) -> None:
 
     with pytest.raises(asyncpg.CheckViolationError):
         on(migrated_database_url, body)
+
+
+def test_the_denial_step_kind_arrives_with_its_migration_and_leaves_with_it(
+    empty_database_url: str,
+) -> None:
+    url = empty_database_url
+
+    async def add(conn: Connection, kind: str) -> None:
+        job_id = await conn.fetchval(INSERT_JOB, DEADLINE)
+        await conn.execute(INSERT_STEP, job_id, 1, kind)
+
+    alembic(url, "upgrade", "0004")
+    with pytest.raises(asyncpg.CheckViolationError):
+        on(url, lambda c: add(c, "approval_denied"))
+
+    alembic(url, "upgrade", "0005")
+    on(url, lambda c: add(c, "approval_given"))
+    on(url, lambda c: add(c, "approval_denied"))
+    # A kind that never existed is still refused.
+    with pytest.raises(asyncpg.CheckViolationError):
+        on(url, lambda c: add(c, "thought"))
+
+    # A log that holds a denial is not cut to fit the older schema.
+    with pytest.raises(subprocess.CalledProcessError):
+        alembic(url, "downgrade", "0004")
+    assert on(url, current_revision) == "0005"
+
+    async def forget(conn: Connection) -> None:
+        await conn.execute("DELETE FROM steps WHERE kind = 'approval_denied'")
+
+    on(url, forget)
+    alembic(url, "downgrade", "0004")
+    with pytest.raises(asyncpg.CheckViolationError):
+        on(url, lambda c: add(c, "approval_denied"))
