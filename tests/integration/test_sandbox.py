@@ -30,7 +30,8 @@ IMAGE = os.environ.get("SANDBOX_IMAGE", "agent-runtime-sandbox:dev")
 # the timeout use it: 100 MB of output can take several seconds on a slow
 # machine.
 SHORT_TIMEOUT = 2.0
-# Far above what any other command here needs.
+# Far above what any other command here needs. The 100 MB flood took 1.1 s
+# to 4.0 s in 30 runs on one arm64 machine (issue 31).
 TIMEOUT = 60.0
 LIMIT = 64 * 1024
 
