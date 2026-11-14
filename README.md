@@ -15,20 +15,29 @@ was interrupted is run again only when that is known to be safe; otherwise
 the job waits for a person to approve. A job that takes its worker down every
 time is failed after five takeovers. See [Results](#results).
 
-Not built: retry on provider errors and rate limits, token budgets, deadlines,
-cancel, and a sandbox for tools. Tools run in the worker process. The full
-list is in [Known limits](docs/architecture.md#known-limits).
+Built, escape tests not written yet: `run_shell` and `list_dir` run each call
+in a container of its own, with no network, a read-only root, no
+capabilities, a user that is not root, limits on CPU, memory and processes,
+and only the job's workspace directory. Each call has a timeout, and its
+output is cut at 64 KiB. `read_file` and `create_issue` still run in the
+worker process.
 
-Decided and not built: a container for each tool call, a target scope that
-the tools cannot leave, a way to halt a job, and approval before a risky tool
-call. See ADR 0007 to 0011 under [Design](#design).
+Not built: retry on provider errors and rate limits, token budgets, deadlines,
+and cancel. The full list is in
+[Known limits](docs/architecture.md#known-limits).
+
+Decided and not built: removal of the tool containers a stopped worker leaves
+behind, a target scope that the tools cannot leave, a way to halt a job, and
+approval before a risky tool call. See ADR 0007 to 0011 under
+[Design](#design).
 
 Locally the model provider is a fake that answers from scenario files, so
 nothing here calls a paid API.
 
 ## Quickstart
 
-Requires [uv](https://docs.astral.sh/uv/), Docker with Compose, and make.
+Requires [uv](https://docs.astral.sh/uv/), Docker with Compose, make, and
+Linux: `make` reads the group of `/var/run/docker.sock` with GNU `stat`.
 
 ```sh
 git clone https://github.com/sindredg/agent-runtime.git
@@ -37,8 +46,8 @@ make up
 uv run runtime submit examples/hello.json --follow
 ```
 
-`make up` builds the image and starts Postgres, the API, one worker, the fake
-provider and a fake issue tracker. The job in `examples/hello.json` asks the
+`make up` builds the two images and starts Postgres, the API, one worker, the
+fake provider and a fake issue tracker. The job in `examples/hello.json` asks the
 agent to read one file. The output is the job id, one line per step, and the
 outcome:
 
@@ -56,7 +65,14 @@ succeeded  tokens_used=601
 The text of the two responses is scripted in the fake provider's `hello`
 scenario. The tool call and its result are real: the worker read the file.
 
-A second example changes something outside the runtime. It reads a failed CI
+A second example runs shell commands in the sandbox. It lists the workspace,
+reads `hello.txt` with `cat` and writes `note.txt` next to it:
+
+```sh
+uv run runtime submit examples/shell.json --follow
+```
+
+A third example changes something outside the runtime. It reads a failed CI
 log and opens an issue in the fake tracker:
 
 ```sh
@@ -92,9 +108,12 @@ clean` stops the stack and deletes its database.
 
 Any other field is refused.
 
-The agent has two tools. `read_file` reads a text file of up to 64 KiB from
-the job's workspace. `create_issue` opens an issue in the tracker at
-`TRACKER_URL` and is offered only when that is set.
+The agent has four tools. `read_file` reads a text file of up to 64 KiB from
+the job's workspace. `list_dir` lists a directory of the workspace and
+`run_shell` runs a command with `/bin/sh` there, each in a container of its
+own; both are offered only when `SANDBOX_IMAGE` is set, as it is in the
+stack. `create_issue` opens an issue in the tracker at `TRACKER_URL` and is
+offered only when that is set.
 
 ## Results
 
@@ -113,8 +132,8 @@ tool's own log file, and for the paused worker its container log.
 | Provider rate limits slow jobs, they do not fail them | Not built | | |
 | Throughput scales with workers | Not measured | | |
 | Every job stays inside its token budget and deadline, and can be cancelled | Not built | | |
-| A tool cannot leave its sandbox | Not built | | |
-| Bad tool output does not break a job | Partly built, not proven | A tool call that fails becomes an error result and the job goes on. The output cap and the tool timeout are not built. | |
+| A tool cannot leave its sandbox | Partly built, not proven | `run_shell` and `list_dir` run in a container per call. The escape tests are not written yet. | |
+| Bad tool output does not break a job | Built for `run_shell` and `list_dir`, no result recorded yet | An integration test runs one job whose commands run past the timeout, exit non-zero, print 100 MB and print bytes that are not UTF-8. Each becomes a tool result of at most 64 KiB, the 100 MB one flagged `truncated`, and the job succeeds. `read_file` and `create_issue` run in the worker and have no general timeout. | |
 
 Also tested, outside the table: a worker stopped with `docker stop` (SIGTERM)
 handed its job back in 1.2 s and the job finished on another worker with no
@@ -182,7 +201,9 @@ What these results do not show:
   build for security agents, and measure the controls against OWASP APTS.
   Not built.
 - [ADR 0008](docs/adr/0008-run-each-tool-call-in-its-own-container.md): run
-  each tool call in its own container, started by the worker. Not built.
+  each tool call in its own container, started by the worker. Built for
+  `run_shell` and `list_dir`, except the handling of containers that a
+  stopped worker leaves behind.
 - [ADR 0009](docs/adr/0009-enforce-the-target-scope-in-the-network-namespace.md):
   enforce a job's target scope in the network namespace of its tools. Not
   built.
@@ -198,7 +219,7 @@ uv installs the pinned Python and tools into `.venv`.
 
 | Command | What it does |
 |---|---|
-| `make up` | Build the image, start every service, wait until all are healthy |
+| `make up` | Build the images, start every service, wait until all are healthy |
 | `make logs` | Follow the service logs |
 | `make down` | Stop the services, keep the database volume |
 | `make clean` | Stop the services, delete the database volume |

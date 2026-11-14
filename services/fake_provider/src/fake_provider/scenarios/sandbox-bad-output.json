@@ -1,0 +1,10 @@
+{
+  "description": "Four sandboxed commands that misbehave: one runs too long, one fails, one prints 100 MB, one prints bytes that are not UTF-8. Then the turn ends.",
+  "turns": [
+    {"content": [{"type": "tool_use", "name": "run_shell", "input": {"command": "echo started; sleep 30"}}]},
+    {"content": [{"type": "tool_use", "name": "run_shell", "input": {"command": "echo failing >&2; exit 7"}}]},
+    {"content": [{"type": "tool_use", "name": "run_shell", "input": {"command": "yes | head -c 100000000"}}]},
+    {"content": [{"type": "tool_use", "name": "run_shell", "input": {"command": "printf 'bad \\377\\376 bytes \\000 end'"}}]},
+    {"content": [{"type": "text", "text": "Every command came back. The job is done."}]}
+  ]
+}

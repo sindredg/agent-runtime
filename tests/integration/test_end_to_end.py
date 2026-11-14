@@ -93,7 +93,12 @@ def test_hello_job_runs_to_success(
         f"{fake_provider_url}/_fake/requests", params={"user_id": job_id}, timeout=10
     ).json()
     assert [(entry["status"], entry["turn"]) for entry in log] == [(200, 0), (200, 1)]
-    assert [tool["name"] for tool in log[0]["body"]["tools"]] == ["read_file", "create_issue"]
+    assert [tool["name"] for tool in log[0]["body"]["tools"]] == [
+        "read_file",
+        "list_dir",
+        "run_shell",
+        "create_issue",
+    ]
     sent_result = log[1]["body"]["messages"][2]["content"][0]
     assert sent_result["type"] == "tool_result"
     assert sent_result["content"] == file_text
@@ -162,3 +167,40 @@ def test_ci_triage_job_creates_exactly_one_issue(
     ).json()
     assert [(entry["status"], entry["turn"]) for entry in log] == [(200, 0), (200, 1), (200, 2)]
     assert f"created issue {issue['id']}" in json.dumps(log[2]["body"]["messages"])
+
+
+SHELL = REPO_ROOT / "examples" / "shell.json"
+
+
+def test_shell_job_runs_its_commands_in_the_sandbox(
+    api_url: str, fake_provider_url: str, stack_database_url: str
+) -> None:
+    """The stack's worker starts tool containers through the Docker socket.
+
+    The listing shows files owned by the worker's uid 10001, which the
+    sandbox image names `sandbox`. The command reads
+    the file the spec wrote and writes one next to it in the same directory.
+    """
+    submitted = runtime(api_url, "submit", str(SHELL), "--follow")
+    assert submitted.returncode == 0, submitted.stderr
+    job_id, *_, outcome = submitted.stdout.splitlines()
+    assert outcome.startswith("succeeded")
+
+    _, steps = database_rows(stack_database_url, job_id)
+    results = [json.loads(row["payload"]) for row in steps if row["kind"] == "tool_result"]
+    listing, shell = results
+    assert listing["is_error"] is False
+    assert "-rw-r--r-- 1 sandbox" in listing["content"]
+    assert "hello.txt" in listing["content"]
+    assert shell == {
+        "tool_use_id": shell["tool_use_id"],
+        "content": "Hello from the workspace.\nhello.txt\nnote.txt\n[exit status 0]",
+        "is_error": False,
+    }
+
+    # What the provider was sent: the same results.
+    log = httpx2.get(
+        f"{fake_provider_url}/_fake/requests", params={"user_id": job_id}, timeout=10
+    ).json()
+    sent = log[2]["body"]["messages"][4]["content"][0]
+    assert sent["content"] == shell["content"]

@@ -35,7 +35,8 @@ from runtime.store.jobs import Job
 from runtime.store.payload import InvalidPayload, check_json
 from runtime.store.status import FINAL_STATUSES, JobStatus
 from runtime.store.steps import Step, StepKind, read_steps
-from runtime.tools.base import Tool, ToolCall, ToolRegistry, ToolResult, operation_id
+from runtime.tools.base import AnyTool, ToolCall, ToolRegistry, ToolResult, operation_id
+from runtime.tools.sandboxed import SandboxTool
 from runtime.worker.lease import Lease, keep_renewing
 from runtime.worker.recovery import Ask, Recovered, decide
 from runtime.worker.replay import Replay, replay
@@ -133,12 +134,19 @@ def _usable(result: object) -> ToolResult:
     return result
 
 
-async def _run_tool(tool: Tool | None, name: str, call: ToolCall) -> ToolResult:
-    """Run one tool call. A failure of the tool becomes an error result for the model."""
+async def _run_tool(tool: AnyTool | None, name: str, call: ToolCall) -> ToolResult:
+    """Run one tool call. A failure of the tool becomes an error result for the model.
+
+    A sandboxed tool runs its command in a container and is awaited here. A
+    tool that is runtime code runs in a thread, so it may block.
+    """
     if tool is None:
         return ToolResult(f"unknown tool: {name}", is_error=True)
     try:
-        result = await asyncio.to_thread(tool.run, call)
+        if isinstance(tool, SandboxTool):
+            result = await tool.run(call)
+        else:
+            result = await asyncio.to_thread(tool.run, call)
     # SystemExit too: a tool that calls sys.exit() must not take the worker down.
     except (Exception, SystemExit) as error:
         log.exception("tool raised", extra={"tool": name})
@@ -229,10 +237,14 @@ async def _next_tool_call(
     lease.check()
     result = await _run_tool(tool, name, call)
     failpoints.hit("after_tool_ran", takeovers=job.takeovers, tool=name)
-    await writer.append(
-        StepKind.TOOL_RESULT,
-        {"tool_use_id": tool_use_id, "content": result.content, "is_error": result.is_error},
-    )
+    payload: dict[str, Any] = {
+        "tool_use_id": tool_use_id,
+        "content": result.content,
+        "is_error": result.is_error,
+    }
+    if result.truncated:
+        payload["truncated"] = True
+    await writer.append(StepKind.TOOL_RESULT, payload)
     failpoints.hit("after_tool_result", takeovers=job.takeovers, tool=name)
     return True
 
@@ -444,8 +456,8 @@ async def _run(
         # not write to the workspace: the job may be finished and its
         # workspace removed by now.
         lease.check()
-        # Files that are already there are left alone, so a job that is
-        # taken over keeps what its tools wrote and gets back what is missing.
+        # Made with the spec's files on the first claim only. A job that is
+        # taken over finds its workspace as its tools left it.
         workspace = await asyncio.to_thread(
             prepare_workspace, settings.workspace_root, job.id, spec.files
         )

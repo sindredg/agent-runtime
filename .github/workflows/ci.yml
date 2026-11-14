@@ -73,13 +73,18 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
+      # Every compose command needs the group of the Docker socket, which the
+      # worker joins to start tool containers. `make` sets it; the steps that
+      # call compose directly read it from here.
+      - name: Docker socket group
+        run: echo "DOCKER_GID=$(stat -c %g /var/run/docker.sock)" >> "$GITHUB_ENV"
       - name: hadolint
         run: |
           curl -fsSL -o "$RUNNER_TEMP/hadolint" \
             "https://github.com/hadolint/hadolint/releases/download/v${HADOLINT_VERSION}/hadolint-linux-x86_64"
           echo "$HADOLINT_SHA256  $RUNNER_TEMP/hadolint" | sha256sum --check --strict
           chmod +x "$RUNNER_TEMP/hadolint"
-          "$RUNNER_TEMP/hadolint" Dockerfile
+          "$RUNNER_TEMP/hadolint" Dockerfile images/sandbox/Dockerfile
       - name: checkmake
         run: |
           curl -fsSL -o "$RUNNER_TEMP/checkmake" \
@@ -113,6 +118,11 @@ jobs:
         with:
           version: "0.13.8"
       - run: uv sync --locked
+      # Every compose command needs the group of the Docker socket, which the
+      # worker joins to start tool containers. `make` sets it; the steps that
+      # call compose directly read it from here.
+      - name: Docker socket group
+        run: echo "DOCKER_GID=$(stat -c %g /var/run/docker.sock)" >> "$GITHUB_ENV"
       # Postgres with the migrations applied. The tests run on the host and
       # reach it on 127.0.0.1:5432.
       - name: Start the stack
@@ -141,6 +151,11 @@ jobs:
         with:
           version: "0.13.8"
       - run: uv sync --locked
+      # Every compose command needs the group of the Docker socket, which the
+      # worker joins to start tool containers. `make` sets it; the steps that
+      # call compose directly read it from here.
+      - name: Docker socket group
+        run: echo "DOCKER_GID=$(stat -c %g /var/run/docker.sock)" >> "$GITHUB_ENV"
       # Starts the stack with three workers and a short lease, then kills,
       # pauses and crashes workers and checks what is left.
       - name: Chaos tests

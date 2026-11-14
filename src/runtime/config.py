@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from runtime.failpoints import NAMES as FAILPOINT_NAMES
+from runtime.sandbox.runner import SandboxSettings
 
 
 class ConfigError(Exception):
@@ -83,6 +84,32 @@ class ProviderConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class SandboxConfig:
+    """Where the worker starts tool containers, and what they get.
+
+    SANDBOX_IMAGE switches the sandboxed tools on. Unset, they are not offered.
+    """
+
+    docker_socket: str
+    settings: SandboxSettings
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> SandboxConfig | None:
+        env = os.environ if env is None else env
+        image = env.get("SANDBOX_IMAGE", "")
+        if not image:
+            return None
+        return cls(
+            docker_socket=env.get("DOCKER_SOCKET") or "/var/run/docker.sock",
+            settings=SandboxSettings(
+                image=image,
+                volume=_required(env, "SANDBOX_VOLUME"),
+                timeout=_positive_float(env, "SANDBOX_TIMEOUT_SECONDS", 30.0),
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class WorkerConfig:
     database_url: str
     provider: ProviderConfig
@@ -108,6 +135,8 @@ class WorkerConfig:
     # Set when CHAOS_TOOLS=1: the directory the `crash_worker` tool logs its
     # runs to. Unset, that tool is not offered.
     chaos_log_dir: Path | None
+    # Unset when SANDBOX_IMAGE is not set: no sandboxed tools then.
+    sandbox: SandboxConfig | None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> WorkerConfig:
@@ -141,6 +170,7 @@ class WorkerConfig:
             failpoint=failpoint,
             failpoint_tool=env.get("FAILPOINT_TOOL") or None,
             chaos_log_dir=chaos_log_dir,
+            sandbox=SandboxConfig.from_env(env),
         )
 
 
