@@ -11,10 +11,13 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import asyncpg
 import pytest
 from sqlalchemy import text, update
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
+from runtime.store import held
 from runtime.store.jobs import (
     DEADLINE_ERROR,
     InvalidTransition,
@@ -26,6 +29,7 @@ from runtime.store.jobs import (
     create_job,
     fail_overdue,
     get_job,
+    overdue_statement,
 )
 from runtime.store.schema import jobs
 from runtime.store.status import JobStatus
@@ -214,3 +218,96 @@ def test_the_workers_timer_fails_a_parked_job_within_seconds_of_its_deadline(
     late = with_engine(database_url, body)
 
     assert late < 5
+
+
+def test_the_deadline_query_uses_the_open_deadline_index(database_url: str) -> None:
+    """Every worker runs it every second: finished jobs must cost it nothing.
+
+    Planned with sequential scans off, because the planner prefers them on a
+    table this small.
+    """
+    sql = str(
+        overdue_statement().compile(
+            dialect=postgresql.asyncpg.dialect(),  # type: ignore[no-untyped-call]
+            compile_kwargs={"literal_binds": True},
+        )
+    )
+
+    async def body() -> str:
+        conn = await asyncpg.connect(database_url, timeout=5)
+        try:
+            await conn.execute("SET enable_seqscan = off")
+            plan = await conn.fetch(f"EXPLAIN {sql}")
+        finally:
+            await conn.close()
+        return "\n".join(row[0] for row in plan)
+
+    plan = asyncio.run(body())
+
+    assert "jobs_open_deadline" in plan
+    assert "Seq Scan" not in plan
+    assert "LockRows" in plan
+
+
+def test_a_running_job_whose_lease_is_over_is_cancelled_at_once(database_url: str) -> None:
+    """Its worker is gone; no claim has to come along first."""
+
+    async def body(engine: AsyncEngine) -> tuple[Job, bool, Job, bool]:
+        async with engine.begin() as conn:
+            await new(conn)
+            held = await claim_job(conn, worker_id="w1")
+            assert held is not None
+            await expire_lease(conn, held.id)
+        async with engine.begin() as conn:
+            first, done = await cancel_job(conn, held.id)
+        async with engine.begin() as conn:
+            again, done_again = await cancel_job(conn, held.id)
+        return first, done, again, done_again
+
+    first, done, again, done_again = with_engine(database_url, body)
+
+    assert (first.status, done, first.lease_owner) == (S.CANCELLED, True, None)
+    # A second cancel finds it cancelled and says so.
+    assert (again.status, done_again) == (S.CANCELLED, True)
+
+
+def test_a_job_parked_while_its_cancel_is_requested_is_cancelled(database_url: str) -> None:
+    """The worker parks it for a person before it saw the request: nobody else would stop it."""
+
+    async def body(engine: AsyncEngine) -> Job:
+        async with engine.begin() as conn:
+            await new(conn)
+            held_job = await claim_job(conn, worker_id="w1")
+        assert held_job is not None
+        async with engine.begin() as conn:
+            await cancel_job(conn, held_job.id)
+        return await held.leave_running(
+            engine,
+            job_id=held_job.id,
+            lease_epoch=held_job.lease_epoch,
+            new_status=S.NEEDS_APPROVAL,
+        )
+
+    assert with_engine(database_url, body).status is S.CANCELLED
+
+
+def test_the_timer_fails_a_running_job_past_its_deadline_whose_lease_is_over(
+    database_url: str,
+) -> None:
+    async def body(engine: AsyncEngine) -> tuple[list[Job], Job | None]:
+        async with engine.begin() as conn:
+            await new(conn)
+            orphan = await claim_job(conn, worker_id="w1")
+            assert orphan is not None
+            await expire_lease(conn, orphan.id)
+            await past_deadline(conn, orphan)
+        async with engine.begin() as conn:
+            ended = await fail_overdue(conn)
+        async with engine.connect() as conn:
+            return ended, await get_job(conn, orphan.id)
+
+    ended, job = with_engine(database_url, body)
+
+    assert [j.status for j in ended] == [S.FAILED]
+    assert job is not None
+    assert (job.status, job.error, job.lease_owner) == (S.FAILED, DEADLINE_ERROR, None)

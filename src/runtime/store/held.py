@@ -19,7 +19,7 @@ from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Executable, Integer, Row, Text, func, insert, literal, select, update
+from sqlalchemy import Executable, Integer, Row, Text, case, func, insert, literal, select, update
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -149,7 +149,10 @@ async def leave_running(
     """Move the held job from `running` to `new_status` and give up the lease.
 
     This is how a worker finishes a job, parks it for an approval, and
-    releases it back to `queued`. A stored error is cleared.
+    releases it back to `queued`. A stored error is cleared. A job that
+    would be parked for an approval while its cancel is requested is
+    `cancelled` instead: nobody else would stop it before its deadline. A
+    released job keeps the request; the next claim cancels it.
 
     Not to `failed`: that is `fail`, which writes the `error` step with it.
     """
@@ -160,7 +163,16 @@ async def leave_running(
     statement = (
         update(jobs)
         .where(*_held(job_id, lease_epoch))
-        .values(status=new_status.value, error=None, lease_owner=None, lease_expires_at=None)
+        .values(
+            status=(
+                case((jobs.c.cancel_requested, JobStatus.CANCELLED.value), else_=new_status.value)
+                if new_status is JobStatus.NEEDS_APPROVAL
+                else new_status.value
+            ),
+            error=None,
+            lease_owner=None,
+            lease_expires_at=None,
+        )
         .returning(*jobs.c)
     )
     return job_from_row(await _send(engine, statement, job_id, lease_epoch))

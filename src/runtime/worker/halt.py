@@ -38,7 +38,8 @@ class Halted(Exception):
 class Halt:
     """Set once, with the first reason that came."""
 
-    def __init__(self) -> None:
+    def __init__(self, job_id: UUID) -> None:
+        self.job_id = job_id
         self.reason: HaltReason | None = None
         self._event = asyncio.Event()
 
@@ -46,7 +47,7 @@ class Halt:
         if self.reason is None:
             self.reason = reason
             self._event.set()
-            log.info("job halted", extra={"reason": reason.value})
+            log.info("job halted", extra={"job_id": self.job_id, "reason": reason.value})
 
     async def wait(self) -> None:
         await self._event.wait()

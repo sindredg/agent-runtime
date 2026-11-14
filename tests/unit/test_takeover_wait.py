@@ -23,7 +23,7 @@ def lease() -> Lease:
 def test_the_wait_runs_its_full_length() -> None:
     async def go() -> tuple[bool, float]:
         started = time.monotonic()
-        done = await _wait_unless_stopped(0.2, asyncio.Event(), lease(), Halt())
+        done = await _wait_unless_stopped(0.2, asyncio.Event(), lease(), Halt(JOB))
         return done, time.monotonic() - started
 
     done, took = asyncio.run(go())
@@ -37,7 +37,7 @@ def test_a_stop_ends_the_wait_without_a_decision() -> None:
         stop = asyncio.Event()
         asyncio.get_running_loop().call_later(0.05, stop.set)
         started = time.monotonic()
-        done = await _wait_unless_stopped(30, stop, lease(), Halt())
+        done = await _wait_unless_stopped(30, stop, lease(), Halt(JOB))
         return done, time.monotonic() - started
 
     done, took = asyncio.run(go())
@@ -50,7 +50,7 @@ def test_a_stop_that_came_first_ends_the_wait_at_once() -> None:
     async def go() -> bool:
         stop = asyncio.Event()
         stop.set()
-        return await _wait_unless_stopped(30, stop, lease(), Halt())
+        return await _wait_unless_stopped(30, stop, lease(), Halt(JOB))
 
     assert asyncio.run(go()) is False
 
@@ -59,7 +59,7 @@ def test_a_lost_lease_ends_the_wait_with_lease_lost() -> None:
     async def go() -> None:
         held = lease()
         asyncio.get_running_loop().call_later(0.05, held.mark_lost)
-        await _wait_unless_stopped(30, asyncio.Event(), held, Halt())
+        await _wait_unless_stopped(30, asyncio.Event(), held, Halt(JOB))
 
     with pytest.raises(LeaseLost):
         asyncio.run(go())
@@ -72,7 +72,7 @@ def test_a_broken_watcher_is_raised_and_not_read_as_the_end_of_the_wait() -> Non
 
     async def go() -> None:
         held = Broken(JOB, 2, timedelta(seconds=30), claimed_at=time.monotonic())
-        await _wait_unless_stopped(30, asyncio.Event(), held, Halt())
+        await _wait_unless_stopped(30, asyncio.Event(), held, Halt(JOB))
 
     with pytest.raises(RuntimeError, match="watcher broke"):
         asyncio.run(go())

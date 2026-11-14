@@ -17,6 +17,7 @@ The token budget is kept with an upper bound of each call's input
 
 import asyncio
 import dataclasses
+import inspect
 import logging
 import math
 import time
@@ -158,6 +159,13 @@ async def _race[T](
     Halted when one of those came first. Unless it completed, `work` is
     cancelled and waited for: a sandboxed call removes its containers then.
     """
+    if lease.lost or halt.reason is not None:
+        # Nothing is started for a job that is already halted or dropped.
+        if inspect.iscoroutine(work):
+            work.close()
+        if lease.lost:
+            raise LeaseLost(lease.job_id, lease.epoch)
+        halt.check()
     task = asyncio.ensure_future(work)
     watchers: list[asyncio.Future[Any]] = [
         asyncio.ensure_future(lease.wait_lost()),
@@ -324,7 +332,15 @@ async def _next_tool_call(
         ):
             return True
         lease.check()
-        decision = await asyncio.to_thread(decide, tool, call, approved=state.approval == "given")
+        # Raced: a halt does not wait for a slow check. The check runs on in
+        # its thread; it only asks, it changes nothing.
+        _, found = await _race(
+            asyncio.to_thread(decide, tool, call, approved=state.approval == "given"),
+            lease=lease,
+            halt=halt,
+        )
+        assert found is not None  # noqa: S101 - _race returns the result when it completed
+        decision = found
         log.info(
             "interrupted tool call",
             extra={
@@ -382,7 +398,11 @@ async def _next_tool_call(
             try:
                 if tool.sandbox.settings.guard_image is None:
                     raise ScopeRefused("this worker has no guard image, so it cannot enforce one")
-                resolved = await resolve(scope, tool.sandbox.settings.deny)
+                _, looked_up = await _race(
+                    resolve(scope, tool.sandbox.settings.deny), lease=lease, halt=halt
+                )
+                assert looked_up is not None  # noqa: S101 - _race returns the result
+                resolved = looked_up
             except ScopeRefused as refused:
                 # Before the intent: the call does not start.
                 await writer.append(
@@ -396,6 +416,8 @@ async def _next_tool_call(
                 return True
             call = dataclasses.replace(call, scope=resolved)
             intent["scope"] = resolved.record()
+    # The last moment to give up a call: after the intent the tool runs.
+    halt.check()
     await writer.append(StepKind.TOOL_INTENT, intent)
     failpoints.hit("after_tool_intent", takeovers=job.takeovers, tool=name)
     # And immediately before the run, in case the write was slow.
@@ -693,9 +715,12 @@ async def _run(
         )
         log.info("step", extra={"job_id": job.id, "seq": step.seq, "kind": step.kind.value})
     else:
-        await _stored(
+        left_as = await _stored(
             held.leave_running(engine, job_id=job.id, lease_epoch=lease.epoch, new_status=status)
         )
+        # A job that would wait for a person is cancelled instead if its
+        # cancel was requested meanwhile.
+        status = left_as.status
     log.info(
         "job finished" if status in FINAL_STATUSES else "job handed back",
         extra={"job_id": job.id, "status": status.value, "error": failure},
@@ -743,7 +768,7 @@ async def run_job(
         claimed_at=time.monotonic() if claimed_at is None else claimed_at,
     )
     heartbeat = asyncio.create_task(keep_renewing(engine, lease, settings.heartbeat))
-    halt = Halt()
+    halt = Halt(job.id)
     watcher = asyncio.create_task(watch_cancel(engine, job.id, halt))
     try:
         status = await _run(

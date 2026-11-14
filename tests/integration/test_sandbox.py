@@ -733,3 +733,46 @@ def test_the_deadline_kills_a_running_command_and_fails_the_job(
     assert 0 <= late < 5.0
     assert our_containers(workspace_volume[1]) == []
     assert steps[-1].kind is StepKind.ERROR
+
+
+def test_a_lost_lease_kills_a_running_command(
+    stack: Stack, workspace_volume: tuple[Path, str], settings: SandboxSettings
+) -> None:
+    """Its result would be refused by the fenced write: there is nothing to wait for."""
+    assert stack.workspace_root == workspace_volume[0]
+    provider = OneLongCommand("sleep 300")
+    volume = workspace_volume[1]
+
+    async def body(engine: AsyncEngine, _: AnthropicProvider) -> tuple[JobStatus | None, float]:
+        async with engine.begin() as conn:
+            await stack.create(conn, {"prompt": "wait"})
+            claimed = await claim_job(conn, worker_id="w1", lease=timedelta(seconds=2))
+        assert claimed is not None
+        run = asyncio.create_task(
+            run_job(
+                engine,
+                provider,
+                default_tools(sandbox=OwnClientSandbox(settings)),
+                claimed,
+                stack.settings(lease=2.0, heartbeat=0.5),
+            )
+        )
+        async with asyncio.timeout(30):
+            while not (found := await asyncio.to_thread(our_containers, volume)):  # noqa: ASYNC110 - Docker has no event to wait on
+                await asyncio.sleep(0.1)
+            while not await asyncio.to_thread(running, found[0]):  # noqa: ASYNC110 - Docker has no event to wait on
+                await asyncio.sleep(0.1)
+        # Another worker takes the job: the first one's next renewal is refused.
+        async with engine.begin() as conn:
+            await expire_lease(conn, claimed.id)
+            assert await claim_job(conn, worker_id="w2") is not None
+        taken = time.monotonic()
+        status = await asyncio.wait_for(run, 30)
+        return status, time.monotonic() - taken
+
+    status, took = stack.run(body)
+
+    # Dropped, not ended: the job is the other worker's now.
+    assert status is None
+    assert took < 5.0
+    assert our_containers(volume) == []

@@ -13,12 +13,13 @@ from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Row, Update, and_, case, func, insert, literal, or_, select, update
+from sqlalchemy import Row, Select, Update, and_, case, func, insert, literal, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncConnection
+from sqlalchemy.sql.elements import ColumnElement
 
 from runtime.store.payload import check_json
 from runtime.store.schema import jobs, steps
-from runtime.store.status import JobStatus, sources_of
+from runtime.store.status import FINAL_STATUSES, JobStatus, sources_of
 from runtime.store.steps import StepKind, next_seq
 
 log = logging.getLogger("runtime.store")
@@ -304,36 +305,56 @@ class JobNotFound(Exception):
     """No job has this id."""
 
 
+def _unheld() -> ColumnElement[bool]:
+    """A job that no worker holds: waiting for one, or `running` under a lease that is over.
+
+    A worker whose lease is over can no longer write: every write is fenced
+    on `running` and its epoch.
+    """
+    # Constants in the SQL, so the planner can match the deadline index.
+    return or_(
+        jobs.c.status.in_([_literal(status.value) for status in _UNHELD]),
+        and_(
+            jobs.c.status == _literal(JobStatus.RUNNING.value),
+            jobs.c.lease_expires_at < func.clock_timestamp(),
+        ),
+    )
+
+
 async def cancel_job(conn: AsyncConnection, job_id: UUID) -> tuple[Job, bool]:
     """Cancel a job, or ask the worker that holds it to. Returns the job and whether it is done.
 
-    A job that no worker holds (`queued`, `waiting`, `needs_approval`) is
-    `cancelled` by this one statement. For a `running` job the cancel is
-    requested: its worker sees the flag within a second and stops the job,
-    and a claim of it after its lease ran out cancels it. Raises
-    JobNotFound, or InvalidTransition for a job that is already final.
+    One statement. A job that no worker holds is `cancelled` by it: one that
+    waits (`queued`, `waiting`, `needs_approval`), or a `running` one whose
+    lease is over. A `running` job under a live lease gets `cancel_requested`:
+    its worker sees the flag within a second and stops it. A job that is
+    already `cancelled` is returned as it is. Raises JobNotFound, or
+    InvalidTransition for a job that ended otherwise.
     """
+    unheld = _unheld()
     result = await conn.execute(
         update(jobs)
-        .where(jobs.c.id == job_id, jobs.c.status.in_([status.value for status in _UNHELD]))
-        .values(status=JobStatus.CANCELLED, lease_owner=None, lease_expires_at=None)
+        .where(
+            jobs.c.id == job_id,
+            jobs.c.status.not_in([status.value for status in FINAL_STATUSES]),
+        )
+        .values(
+            status=case((unheld, JobStatus.CANCELLED.value), else_=jobs.c.status),
+            cancel_requested=True,
+            lease_owner=case((unheld, None), else_=jobs.c.lease_owner),
+            lease_expires_at=case((unheld, None), else_=jobs.c.lease_expires_at),
+        )
         .returning(*jobs.c)
     )
     row = result.one_or_none()
     if row is not None:
-        return job_from_row(row), True
-    result = await conn.execute(
-        update(jobs)
-        .where(jobs.c.id == job_id, jobs.c.status == JobStatus.RUNNING.value)
-        .values(cancel_requested=True)
-        .returning(*jobs.c)
-    )
-    row = result.one_or_none()
-    if row is not None:
-        return job_from_row(row), False
-    job = await get_job(conn, job_id)
-    if job is None:
+        job = job_from_row(row)
+        return job, job.status is JobStatus.CANCELLED
+    found = await get_job(conn, job_id)
+    if found is None:
         raise JobNotFound(job_id)
+    if found.status is JobStatus.CANCELLED:
+        return found, True
     raise InvalidTransition(job_id, JobStatus.CANCELLED)
 
 
@@ -343,20 +364,28 @@ async def cancel_wanted(conn: AsyncConnection, job_id: UUID) -> bool:
     return bool(result.scalar_one_or_none())
 
 
-async def fail_overdue(conn: AsyncConnection) -> list[Job]:
-    """Fail every job that waits past its deadline, each with an `error` step. Returns them.
+def overdue_statement() -> Select[tuple[UUID]]:
+    """The jobs that no worker holds and whose deadline passed. Separate so a test can plan it."""
+    return (
+        select(jobs.c.id)
+        .where(_unheld(), jobs.c.deadline <= func.clock_timestamp())
+        # Rows another worker is ending, claiming or cancelling are left to
+        # it: no waiting, and no two workers lock the same rows in turn.
+        .with_for_update(skip_locked=True)
+    )
 
-    Waiting means no worker holds it: `queued`, `waiting` or
-    `needs_approval`. A `running` job is the business of its worker, or of
-    the claim once its lease is over. The rows stay locked until the
-    caller's transaction ends, so the steps cannot race a worker.
+
+async def fail_overdue(conn: AsyncConnection) -> list[Job]:
+    """Fail every job past its deadline that no worker holds, each with an `error` step.
+
+    No worker holds a job that waits (`queued`, `waiting`, `needs_approval`)
+    or a `running` one whose lease is over. A job under a live lease is its
+    worker's to fail. The rows stay locked until the caller's transaction
+    ends, so the steps cannot race a worker. Returns the jobs.
     """
     result = await conn.execute(
         update(jobs)
-        .where(
-            jobs.c.status.in_([status.value for status in _UNHELD]),
-            jobs.c.deadline <= func.clock_timestamp(),
-        )
+        .where(jobs.c.id.in_(overdue_statement()))
         .values(
             status=JobStatus.FAILED,
             error=DEADLINE_ERROR,

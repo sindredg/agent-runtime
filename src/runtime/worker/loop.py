@@ -66,8 +66,9 @@ async def work(
             log.exception("claim failed")
             await _wait(stop, poll_interval)
             continue
-        # Jobs the claim failed at the takeover limit are final, and this
-        # worker made them so. Their workspaces go, like any finished job's.
+        # Jobs the claim ended (cancelled, past their deadline, at the
+        # takeover limit) are final, and this worker made them so. Their
+        # workspaces go, like any finished job's.
         # The claim is committed by now: a failure here must not cost the
         # job that was claimed with them.
         for ended in failed:

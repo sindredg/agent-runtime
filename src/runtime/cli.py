@@ -297,13 +297,13 @@ def _logs(client: httpx2.Client, args: argparse.Namespace, out: TextIO) -> int:
 
 def _approve(client: httpx2.Client, args: argparse.Namespace, out: TextIO) -> int:
     job = _check(client.post(f"/jobs/{args.job_id}/approve")).json()
-    print(job["status"], file=out)
+    print(_one_line(str(job["status"])), file=out)
     return 0
 
 
 def _cancel(client: httpx2.Client, args: argparse.Namespace, out: TextIO) -> int:
     response = _check(client.post(f"/jobs/{args.job_id}/cancel"))
-    status = response.json()["status"]
+    status = _one_line(str(response.json()["status"]))
     if response.status_code == 202:
         print(f"{status}; cancel requested, its worker stops it", file=out)
     else:
