@@ -199,17 +199,20 @@ async def _run_tool(
     """
     if tool is None:
         return ToolResult(f"unknown tool: {name}", is_error=True)
-    try:
-        work = (
-            tool.run(call) if isinstance(tool, SandboxTool) else asyncio.to_thread(tool.run, call)
-        )
-        _, result = await _race(work, lease=lease, halt=halt)
-    except Halted, LeaseLost:
-        raise
-    # SystemExit too: a tool that calls sys.exit() must not take the worker down.
-    except (Exception, SystemExit) as error:
-        log.exception("tool raised", extra={"tool": name})
-        result = ToolResult(f"the tool failed: {error}", is_error=True)
+
+    async def attempt() -> ToolResult:
+        # A failure of the tool is caught here, inside the task: asyncio lets
+        # a SystemExit out of a task straight through the event loop.
+        try:
+            if isinstance(tool, SandboxTool):
+                return await tool.run(call)
+            return await asyncio.to_thread(tool.run, call)
+        # SystemExit too: a tool that calls sys.exit() must not take the worker down.
+        except (Exception, SystemExit) as error:
+            log.exception("tool raised", extra={"tool": name})
+            return ToolResult(f"the tool failed: {error}", is_error=True)
+
+    _, result = await _race(attempt(), lease=lease, halt=halt)
     return _usable(result)
 
 
