@@ -41,12 +41,12 @@ outcome:
 ```text
 01a1d655-88bd-7468-afc4-5ca3a1947906
    1  model_request   model=hello messages=1
-   2  model_response  stop_reason=tool_use tokens=123+44 I will read hello.txt from the workspace.
+   2  model_response  stop_reason=tool_use tokens=221+44 I will read hello.txt from the workspace.
    3  tool_intent     read_file {"path": "hello.txt"}
    4  tool_result     ok Hello from the workspace.
    5  model_request   model=hello messages=3
-   6  model_response  stop_reason=end_turn tokens=216+22 The file hello.txt holds a short greeting. The job is done.
-succeeded  tokens_used=405
+   6  model_response  stop_reason=end_turn tokens=314+22 The file hello.txt holds a short greeting. The job is done.
+succeeded  tokens_used=601
 ```
 
 The text of the two responses is scripted in the fake provider's `hello`
@@ -95,13 +95,14 @@ the job's workspace. `create_issue` opens an issue in the tracker at
 
 Each guarantee has a test with a pass line that was fixed before the run, and
 a run with the mechanism switched off to show that the test can fail. What
-happened is read from records the worker does not write: the fake provider's
-request log, the fake tracker's list of issues, and the crash tool's log file.
+happened outside a job is read from records other than the job's step log:
+the fake provider's request log, the fake tracker's list of issues, the crash
+tool's own log file, and for the paused worker its container log.
 
 | Guarantee | Status | Test and result | With the mechanism off |
 |---|---|---|---|
-| A job survives a worker stopping | Tested | 200 jobs. The worker holding each one was killed with `docker kill` at a random time from a seed. 200 of 200 succeeded, each with the same final conversation as a job nobody interrupted, and the provider was never asked an earlier turn again. 116 of the jobs were taken over in the middle. The other 84 were not interrupted: 29 kill times fell before the claim or after the end, and 55 kills landed just after the job had finished. One more run per failpoint, with the worker ending its own process: 6 of 6. | Resume switched off (the log is not replayed): the provider is asked turns 0, 1, 0, 1, 2 and the test fails. |
-| A tool call that is unsafe to repeat never runs twice without approval | Tested | The same 206 runs: no operation id has more than one issue in the tracker, and no approval was needed. Worker stopped after the tool ran: the check finds the issue and the result is recovered. Worker stopped after the intent: the check finds nothing and the call runs once more, one issue. One run with the tracker frozen so the check gets no answer: the job waits in `needs_approval`, and after the approval the tracker holds two issues for one approval. | Intent write skipped: two issues for one operation id. Every tool treated as idempotent: two issues for one operation id. |
+| A job survives a worker stopping | Tested | 200 runs. In each, a job was submitted and the worker holding it at a random time from a seed was killed with `docker kill`: 171 kills were sent. 200 of 200 succeeded, each with the same final conversation as a job nobody interrupted, and the provider was never asked an earlier turn again. 116 of the jobs were taken over in the middle. The other 84 were not interrupted: at 29 kill times no worker held the job (before the claim or after the end), and 55 kills landed after the job had finished. One more run per failpoint, with the worker ending its own process: 6 of 6. | Resume switched off (the log is not replayed): the provider is asked turns 0, 1, 0, 1, 2 and the test fails. |
+| A tool call that is unsafe to repeat does not run twice without approval, with [one accepted exception](docs/architecture.md#known-limits) for a worker paused at the wrong instant | Tested | The same 206 runs: no operation id has more than one issue in the tracker, and no approval was needed. Worker stopped after the tool ran: the check finds the issue and the result is recovered. Worker stopped after the intent: the check finds nothing and the call runs once more, one issue. One run with the tracker frozen so the check gets no answer: the job waits in `needs_approval`, and after the approval the tracker holds two issues for one approval. | Intent write skipped: two issues for one operation id. Every tool treated as idempotent: two issues for one operation id. |
 | A stale worker cannot corrupt a job | Tested | A worker waiting for a model answer was paused with `docker pause` for 45 s under the default 30 s lease. Another worker took the job over after 29.3 s. The first was woken while the second was in the middle of the job. It wrote no step after the takeover, sent no further request to the provider and opened no issue. The job succeeded with one takeover. | Epoch check removed from the fence: the woken worker marks the job `failed` under the second worker. |
 | A job that crashes its worker every time does not loop forever | Tested | A job whose tool ends the worker's process: `failed` after 5 takeovers, with 6 runs in the tool's own log. | Limit removed: the job was still running after 180 s and had been taken over 34 times. |
 | Provider rate limits slow jobs, they do not fail them | Not built | | |
@@ -117,12 +118,12 @@ takeover counted.
 | | |
 |---|---|
 | Command | `CHAOS_RUNS=200 make chaos` |
-| Commit | `256fe08` for the 200 kills. Review fixes came after it. The short run (20 kills and every other test, 11 of 11 tests) passed on them at `665bf6a`. |
-| Runs and seed | 200 random kills, seed `20261113`. Every other test: 1 run. |
+| Commit | `256fe08` for the 200 runs, on 2026-11-13. Review fixes came after it. The short run (20 runs with 15 kills sent, and every other test: 11 of 11 tests) passed on them at `665bf6a` on 2026-11-14. |
+| Runs and seed | 200 runs with a random kill time, seed `20261113`. Every other test: 1 run. |
 | Workers | 3 |
-| Provider | The fake provider. Scenario `ci-triage-slow` (each answer 0.5 s late) for the kills, `ci-triage-stall` (two answers 10 s late) for the pause and the stop. |
+| Provider | The fake provider. Scenario `ci-triage-slow` (each answer 0.5 s late) for the kills and failpoints, `ci-triage-stall` (two answers 10 s late) for the pause and the stop, `crash-loop` for the crash loop. |
 | Lease | 2 s, renewed every 0.5 s, for the kills, the failpoints and the crash loop. The default 30 s, renewed every 10 s, for the pause and the stop. |
-| Where | Docker Compose on one machine, Linux aarch64 under WSL2, 8 CPUs, 2026-11-13 |
+| Where | Docker Compose on one machine, Linux aarch64 under WSL2, 8 CPUs |
 
 What these results do not show:
 
@@ -130,13 +131,24 @@ What these results do not show:
 - Everything ran on one host with one clock. A lost network between a worker
   and the database is covered by an integration test that cuts the database
   sessions, not by a chaos run.
-- The pause test passed in this run and in six earlier ones. In one earlier
-  run the job was taken over twice: the machine's clock was set forward by
-  36.6 s during the test, which ended the second worker's lease early. The
-  paused worker still wrote nothing and the job succeeded with one issue. A
-  lease ends by the database's clock, so a clock that is set forward is a
-  [known limit](docs/architecture.md#known-limits). The tests now detect a
-  clock step and do not count such a run.
+- The runs with a mechanism switched off were read when they ran. Their
+  output was not kept.
+- Runs that do not count, and why:
+  - One earlier run of the pause test had two takeovers instead of one. The
+    machine's wall clock moved forward by 36.6 s during the test: a container
+    log that was written ten times a second has a gap of that length, and the
+    test's own monotonic clock saw no pause. That ended the second worker's
+    lease early. The paused worker still wrote nothing and the job succeeded
+    with one issue. A lease ends by the database's clock, so a clock that is
+    set forward is a [known limit](docs/architecture.md#known-limits). The
+    pause test passed in the run above and in six runs before it.
+  - One short run at `665bf6a` was aborted: the machine was suspended for
+    about eight hours in the middle of it. The run was repeated and passed.
+  - The first trial of the kill test, before any result was recorded, failed
+    6 of 6: the test compared each job with a reference job of a different
+    scenario, whose tool call ids differ. The test was corrected.
+  - The chaos tests now compare the wall clock with the monotonic clock and
+    fail a test during which they drift apart by more than a second.
 - The limits that the design accepts are listed under
   [Known limits](docs/architecture.md#known-limits). The main one: fencing
   protects the database, not the outside world. A worker that is paused at
@@ -174,7 +186,7 @@ uv installs the pinned Python and tools into `.venv`.
 | `make clean` | Stop the services, delete the database volume |
 | `make test` | Unit tests |
 | `make integration` | Integration tests. Needs the stack from `make up`. |
-| `make chaos` | Chaos tests. Starts the stack with three workers and a 2 second lease, then kills, pauses and crashes workers. `CHAOS_RUNS` sets the number of random kills (default 20), `CHAOS_SEED` their times. Run `make up` afterwards to get the normal stack back. |
+| `make chaos` | Chaos tests. Starts the stack with three workers and a 2 second lease, then kills, pauses and crashes workers. `CHAOS_RUNS` sets the number of runs with a random kill time (default 20), `CHAOS_SEED` the times. Run `make up` afterwards to get the normal stack back. |
 
 The stack publishes four ports, all on `127.0.0.1` only: the API on 8000,
 Postgres on 5432, the fake provider on 8001 and the fake tracker on 8002.

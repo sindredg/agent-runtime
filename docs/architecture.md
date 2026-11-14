@@ -30,7 +30,7 @@ flowchart LR
 | `postgres` | `migrations/`, `src/runtime/store/` | Jobs and the step log. Also the queue ([ADR 0002](adr/0002-postgres-as-the-job-queue.md)). |
 | `migrate` | `migrations/` | Runs `alembic upgrade head` and exits. `api` and `worker` start after it succeeds. |
 | `fake-provider` | `services/fake_provider/` | Answers `POST /v1/messages` from scenario files and keeps a log of the requests in memory, the newest 10,000 ([ADR 0003](adr/0003-official-sdk-and-a-wire-compatible-fake.md)). A scenario turn can ask for a delay. |
-| `fake-tracker` | `services/fake_tracker/` | A stand-in for an issue tracker. Stores every issue it is sent with its operation id, in memory, and never merges two. |
+| `fake-tracker` | `services/fake_tracker/` | A stand-in for an issue tracker. Stores the issues it is sent with their operation ids, in memory, up to 100,000, and never merges two. |
 | Provider client | `src/runtime/provider/` | The worker's one way to call a model: the official SDK behind a `Provider` interface. |
 | Tools | `src/runtime/tools/` | `read_file`, `create_issue`, and `crash_worker` for failure tests. They run inside the worker process, not in a sandbox. |
 | CLI | `src/runtime/cli.py` | `runtime submit`, `status`, `logs`, `approve`. Talks to the API only. |
@@ -120,7 +120,7 @@ that are `queued`, `waiting` or `running`.
 | Step kind | Payload | Written |
 |---|---|---|
 | `model_request` | `model`, `max_tokens`, `messages` (a count) | Before each model call |
-| `model_response` | `id`, `content`, `stop_reason`, `usage`. `problem` if the response cannot be used. If the content cannot be stored, it is left out and `content_dropped` is set. | After each model call, in one statement with the `tokens_used` update |
+| `model_response` | `id`, `content`, `stop_reason`, `usage`. `problem` if the response cannot be used. If the content cannot be stored, it is replaced by an empty list and `content_dropped` is set. | After each model call, in one statement with the `tokens_used` update |
 | `tool_intent` | `tool_use_id`, `name`, `input` | Before every run of a tool. A call that is run again gets a new one. |
 | `tool_result` | `tool_use_id`, `content`, `is_error`. `recovered` when the result came from the tool's check and the tool did not run again. | After a tool ran, or could not run |
 | `approval_requested` | `tool_use_id`, `name`, `input`, `operation_id`, `reason` | When nobody can tell whether an interrupted call happened |
@@ -137,7 +137,7 @@ such as `1e22`, is read back as an int.
 
 | Status | Moves to | Used today |
 |---|---|---|
-| `queued` | `running`, `cancelled`, `failed` | Yes |
+| `queued` | `running`, `cancelled`, `failed` | To `running`, by a claim |
 | `running` | `succeeded`, `failed`, `needs_approval`, `queued`, `waiting`, `cancelled` | To `succeeded`, `failed`, `needs_approval`, and `queued` when its worker is stopped |
 | `needs_approval` | `queued`, `cancelled` | Yes: to `queued` by an approval |
 | `waiting` | `running`, `cancelled`, `failed` | No, planned |
@@ -146,7 +146,7 @@ such as `1e22`, is read back as an int.
 A job becomes `running` only through a claim. A `running` job is moved only by
 the worker that holds it, through a fenced write, or by a claim that finds its
 lease expired. `update_status` moves jobs that no worker holds and checks the
-move inside its `UPDATE`.
+move inside its `UPDATE`. Nothing calls it yet: it is there for cancel.
 
 ## Mechanisms
 
@@ -179,6 +179,7 @@ order (`worker/recovery.py`):
 
 | Case | What the worker does |
 |---|---|
+| The worker has no tool of that name | Runs the call again under a new intent. The run only yields the "unknown tool" error result. |
 | A person approved (`approval_given` follows the intent) | Runs the call again under a new intent. |
 | The tool is idempotent | Runs the call again under a new intent. |
 | The check answers done | Writes the `tool_result` from the check, marked `recovered`. The tool does not run. |
@@ -258,9 +259,10 @@ stack by accident. See `.env.example`.
 | `tests/chaos` | `make chaos` | Workers that are killed at random times, end themselves at failpoints, are paused past their lease, crash on every run, and get SIGTERM. See the [results](../README.md#results). |
 | `tests/contract` | `make up`, a Claude API key | The fake provider against the Claude API. Run by hand. It has not been run yet, so the fake's match with the real API is not tested. |
 
-Postgres is never mocked. A test that checks what happened outside the worker
-reads a record the worker did not write: the fake provider's request log, the
-fake tracker's list of issues, or the `crash_worker` log file.
+The integration and chaos suites never mock Postgres. A test that checks what
+happened outside a job reads a record other than the job's step log: the fake
+provider's request log, the fake tracker's list of issues, the `crash_worker`
+tool's log file, or a worker's container log.
 
 ## Known limits
 
@@ -307,6 +309,8 @@ Not built or not closed:
 - A workspace can be left behind: when the write that makes a job final
   reaches the database but its answer does not reach the worker, and when two
   workers use different workspace roots.
+- `not_before` and `cancel_requested` are columns that nothing reads or sets
+  yet.
 - `runtime submit --follow` and `runtime logs --follow` wait for a final
   status. They keep waiting while a job is in `needs_approval`.
 - All workers have to see the same workspace directory. The stack does that

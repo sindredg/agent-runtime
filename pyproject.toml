@@ -1,7 +1,7 @@
 [project]
 name = "agent-runtime"
 version = "0.0.0"
-description = "Runs long AI agent jobs so they survive crashes, rate limits, and bad tool output."
+description = "Runs long AI agent jobs and continues them from a step log when a worker goes away."
 readme = "README.md"
 requires-python = "==3.15.*"
 dependencies = [

@@ -27,7 +27,7 @@ integration:
 
 # Kills, pauses and crashes workers on purpose and checks what is left.
 # Starts the stack with three workers and a short lease first. CHAOS_RUNS
-# sets the number of random kills (default 20), CHAOS_SEED their times.
+# sets the number of runs with a random kill time (default 20), CHAOS_SEED the times.
 # `make up` afterwards brings the normal stack back.
 chaos:
 	mkdir -p .chaos
