@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from runtime.store.payload import check_json
 from runtime.store.schema import jobs, steps
 from runtime.store.status import JobStatus, sources_of
-from runtime.store.steps import StepKind
+from runtime.store.steps import StepKind, next_seq
 
 log = logging.getLogger("runtime.store")
 
@@ -157,14 +157,13 @@ async def _append_next_step(
     transaction. Until that transaction ends no worker can write a step for
     the job, so the next `seq` cannot be taken in between.
     """
-    next_seq = (
-        select(func.coalesce(func.max(steps.c.seq), 0) + 1)
-        .where(steps.c.job_id == job.id)
-        .scalar_subquery()
-    )
     await conn.execute(
         insert(steps).values(
-            job_id=job.id, seq=next_seq, kind=kind, payload=payload, lease_epoch=job.lease_epoch
+            job_id=job.id,
+            seq=next_seq(job.id),
+            kind=kind,
+            payload=payload,
+            lease_epoch=job.lease_epoch,
         )
     )
 
@@ -228,8 +227,8 @@ async def update_status(
     Raises InvalidTransition when no row was updated.
 
     A `running` job is never moved here. Only the worker that holds it moves
-    it, through `runtime.store.held.leave_running`, which checks the lease
-    epoch. A job becomes `running` only through `claim_job`.
+    it, through `leave_running` or `fail` in `runtime.store.held`, which check
+    the lease epoch. A job becomes `running` only through `claim_job`.
     """
     if new_status is JobStatus.RUNNING:
         raise ValueError("a job becomes running through claim_job, not update_status")

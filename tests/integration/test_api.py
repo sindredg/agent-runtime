@@ -65,7 +65,13 @@ class Api:
                 )
 
     async def finish(self, job: Job, status: JobStatus = JobStatus.SUCCEEDED) -> None:
-        """Finish the job the way its worker does: a fenced move out of `running`."""
+        """Finish the job the way its worker does: a fenced move out of `running`.
+
+        A failure brings its `error` step, as it does from a worker.
+        """
+        if status is JobStatus.FAILED:
+            await held.fail(self.engine, job_id=job.id, lease_epoch=job.lease_epoch, error="boom")
+            return
         await held.leave_running(
             self.engine, job_id=job.id, lease_epoch=job.lease_epoch, new_status=status
         )
@@ -251,12 +257,8 @@ def test_read_job_returns_the_current_state(database_url: str) -> None:
         async with api.engine.begin() as conn:
             claimed = await claim_job(conn, worker_id="w1")
         assert claimed is not None
-        await held.leave_running(
-            api.engine,
-            job_id=claimed.id,
-            lease_epoch=claimed.lease_epoch,
-            new_status=JobStatus.FAILED,
-            error="boom",
+        await held.fail(
+            api.engine, job_id=claimed.id, lease_epoch=claimed.lease_epoch, error="boom"
         )
         return submitted, read, (await api.client.get(f"/jobs/{submitted['id']}")).json()
 
@@ -387,11 +389,12 @@ def test_event_stream_delivers_every_step_in_order_while_the_job_runs(database_u
 def test_event_stream_reads_a_long_log_in_pages_without_a_gap(database_url: str) -> None:
     async def body(api: Api) -> list[Any]:
         job = await api.new_job()
-        await api.add_steps(job, 1, 23)
+        await api.add_steps(job, 1, 22)
         await api.finish(job, JobStatus.FAILED)
         return await api.events(job.id)
 
-    # 23 steps with a page of 5: four full pages, then a short one.
+    # 23 steps, the last one the failure's own. With a page of 5 that is
+    # four full pages, then a short one.
     events = api_test(database_url, body, page_size=5)
     assert [event_id for event_id, _, _ in events[:-1]] == list(range(1, 24))
     assert events[-1] == (None, "end", {"status": "failed"})
@@ -579,20 +582,24 @@ def test_approve_queues_the_job_and_records_the_approval_as_a_step(database_url:
 def test_approve_refuses_a_job_that_is_not_waiting_for_approval(
     database_url: str, status: JobStatus
 ) -> None:
-    async def body(api: Api) -> tuple[httpx2.Response, Job | None, list[Any]]:
+    async def body(api: Api) -> tuple[httpx2.Response, Job | None, list[Any], list[Any]]:
         job = await api.new_job()
         if status is not JobStatus.RUNNING:
             await api.finish(job, status)
+        async with api.engine.begin() as conn:
+            before = await read_steps(conn, job.id)
         response = await api.client.post(f"/jobs/{job.id}/approve")
         async with api.engine.begin() as conn:
-            return response, await get_job(conn, job.id), await read_steps(conn, job.id)
+            return response, await get_job(conn, job.id), before, await read_steps(conn, job.id)
 
-    response, job, steps = api_test(database_url, body)
+    response, job, before, steps = api_test(database_url, body)
     assert response.status_code == 409
     assert status.value in response.json()["detail"]
     assert job is not None
     assert job.status is status
-    assert steps == []
+    # No step was added. A failed job has the one its failure wrote.
+    assert steps == before
+    assert len(steps) == (1 if status is JobStatus.FAILED else 0)
 
 
 def test_approve_of_an_unknown_job_is_404_and_of_a_bad_id_422(database_url: str) -> None:
