@@ -7,14 +7,16 @@ that the tests can outlast them.
 import asyncio
 import threading
 import time
+from collections.abc import Callable
 from datetime import timedelta
 from typing import Any
 
 import asyncpg
-from sqlalchemy import text
+import pytest
+from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from runtime.provider.base import ModelRequest, ModelResponse
+from runtime.provider.base import ModelRequest, ModelResponse, ProviderError
 from runtime.provider.messages import AnthropicProvider
 from runtime.store.jobs import Job, claim_job, get_job
 from runtime.store.status import JobStatus
@@ -23,7 +25,7 @@ from runtime.tools.base import ToolCall, ToolRegistry, ToolResult
 from runtime.worker.agent import run_job
 from runtime.worker.loop import work
 
-from .conftest import FIXED, HELLO, Stack, stub_tool
+from .conftest import FIXED, HELLO, Stack, expire_lease, stub_tool
 
 K = StepKind
 S = JobStatus
@@ -293,6 +295,91 @@ def test_a_database_error_in_the_middle_of_a_job_drops_it_instead_of_failing_it(
     assert (job.status, job.lease_owner, job.error) == (S.RUNNING, "w1", None)
     assert [step.kind for step in steps] == [K.MODEL_REQUEST, K.MODEL_RESPONSE, K.TOOL_INTENT]
     assert workspace_kept
+
+
+class AlwaysDown:
+    """A provider whose every call fails. `failing` is called just before it does."""
+
+    def __init__(self, failing: Callable[[], None] = lambda: None) -> None:
+        self.failing = failing
+
+    async def complete(self, request: ModelRequest) -> ModelResponse:
+        self.failing()
+        raise ProviderError("the provider is down", status=503, retryable=False)
+
+    async def aclose(self) -> None:
+        return None
+
+
+@pytest.mark.parametrize("statements_left", [0, 1, 2])
+def test_a_worker_that_stops_while_it_fails_a_job_leaves_it_failed_or_untouched(
+    stack: Stack, statements_left: int
+) -> None:
+    """The model call fails, and the worker gets `statements_left` more statements through.
+
+    After that its database is gone, which leaves the job as a worker that
+    stopped there would. Wherever the stop lands, the job is `failed` and
+    has its `error` step, or it is `running` and has none. An `error` step
+    on a job that runs on would be ignored by the worker that takes it over.
+    """
+
+    async def body(
+        engine: AsyncEngine, _: AnthropicProvider
+    ) -> tuple[JobStatus | None, tuple[Job, list[Step]], tuple[Job, list[Step]]]:
+        job, sent_at = await claim(engine, stack, "w1", lease=30)
+        left: int | None = None
+
+        def count() -> None:
+            nonlocal left
+            left = statements_left
+
+        def stop(*statement: Any) -> None:
+            nonlocal left
+            if left is None:
+                return
+            if left == 0:
+                raise OSError("the worker stopped")
+            left -= 1
+
+        event.listen(engine.sync_engine, "before_cursor_execute", stop)
+        try:
+            status = await run_job(
+                engine,
+                AlwaysDown(count),
+                ToolRegistry(),
+                job,
+                stack.settings(),
+                claimed_at=sent_at,
+            )
+        finally:
+            event.remove(engine.sync_engine, "before_cursor_execute", stop)
+        after_the_stop = await read(engine, job)
+
+        # A second worker takes the job if it is there to take.
+        async with engine.begin() as conn:
+            await expire_lease(conn, job.id)
+            taken = await claim_job(conn, worker_id="w2", lease=timedelta(seconds=30))
+        if taken is not None:
+            await run_job(engine, AlwaysDown(), ToolRegistry(), taken, stack.settings())
+        return status, after_the_stop, await read(engine, job)
+
+    status, (job, steps), (final, final_steps) = stack.run(body)
+    errors = [step for step in steps if step.kind is K.ERROR]
+    if job.status is S.FAILED:
+        assert status is S.FAILED
+        assert errors == [steps[-1]]
+        assert errors[0].payload == {"message": job.error}
+        # Nothing was left for a second worker.
+        assert (final, final_steps) == (job, steps)
+    else:
+        assert status is None
+        assert (job.status, job.lease_owner, job.error) == (S.RUNNING, "w1", None)
+        assert errors == []
+    # In the end the job is failed once, and the failure is its last step.
+    assert final.status is S.FAILED
+    assert [step.kind for step in final_steps].count(K.ERROR) == 1
+    assert final_steps[-1].payload == {"message": final.error}
+    assert "the provider is down" in (final.error or "")
 
 
 class EndsTheJobItself:
