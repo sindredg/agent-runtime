@@ -147,6 +147,25 @@ def test_two_rounds_then_the_final_answer() -> None:
     assert not state.needs_model_call
 
 
+def test_the_call_ids_of_every_response_are_remembered() -> None:
+    state = replay(
+        "go",
+        log(
+            request(),
+            response(call("t1"), call("t2")),
+            intent("t1"),
+            result("t1"),
+            intent("t2"),
+            result("t2"),
+            request(3),
+            response(call("t3")),
+        ),
+    )
+    assert state.used_ids == {"t1", "t2", "t3"}
+    # Answered or not: only t3 is still open.
+    assert state.pending == [call("t3")]
+
+
 def test_error_steps_do_not_enter_the_conversation() -> None:
     state = replay("go", log(request(), (StepKind.ERROR, {"message": "boom"})))
     assert state.messages == [PROMPT]

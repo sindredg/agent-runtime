@@ -257,8 +257,30 @@ def commit() -> str:
     return f"{head}{' (uncommitted changes)' if dirty else ''}"
 
 
+# The results of the test that is running. They are written when it is over.
+_pending: list[dict[str, Any]] = []
+# How the body of a test ended, kept on the test for the fixture below.
+_PASSED = pytest.StashKey[bool]()
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[None]) -> Any:
+    report = yield
+    if report.when == "call":
+        item.stash[_PASSED] = report.passed
+    return report
+
+
 def record(name: str, result: dict[str, Any]) -> None:
-    """Keep a result with what is needed to judge and repeat it."""
+    """Keep a result with what is needed to judge and repeat it.
+
+    It is written to the results file when the test is over, with how the
+    test ended in `verdict`: `passed`, `failed`, or `void` when the clock
+    was set. A result may not use that field, or `void`, for its own data.
+    """
+    for taken in ("verdict", "void"):
+        if taken in result:
+            raise ValueError(f"a result may not have a field called {taken!r}")
     entry = {
         "test": name,
         "commit": commit(),
@@ -269,14 +291,24 @@ def record(name: str, result: dict[str, Any]) -> None:
         "where": "GitHub Actions" if os.environ.get("GITHUB_ACTIONS") else "local Docker Compose",
         **result,
     }
+    _pending.append(entry)
+
+
+def _write_results(verdict: str, void: str | None = None) -> None:
+    """Append the finished test's results to the results file, each with its verdict."""
     CHAOS_DIR.mkdir(exist_ok=True)
     with (CHAOS_DIR / "results.jsonl").open("a", encoding="utf-8") as file:
-        file.write(json.dumps(entry) + "\n")
-    print(f"\nRESULT {json.dumps(entry)}")
+        for entry in _pending:
+            entry["verdict"] = verdict
+            if void is not None:
+                entry["void"] = void
+            file.write(json.dumps(entry) + "\n")
+            print(f"\nRESULT {json.dumps(entry)}")
+    _pending.clear()
 
 
 @pytest.fixture(autouse=True)
-def steady_clock() -> Iterator[None]:
+def steady_clock(request: pytest.FixtureRequest) -> Iterator[None]:
     """Void a run during which the machine's clock was set.
 
     A lease ends by the database's wall clock. If that clock is set forward
@@ -285,15 +317,22 @@ def steady_clock() -> Iterator[None]:
     the design, not what these tests are about, and a run it happens in
     proves nothing either way. The wall clock is compared with the monotonic
     clock, which is never set.
+
+    The test's results are written here, after that check, so that a line in
+    the results file never reads like a pass when the run was void or failed.
     """
+    _pending.clear()
     wall, monotonic = time.time(), time.monotonic()
     yield
     step = (time.time() - wall) - (time.monotonic() - monotonic)
     if abs(step) > CLOCK_STEP_LIMIT:
+        moved = f"the wall clock moved {step:+.1f} s against the monotonic clock"
+        _write_results("void", void=moved)
         pytest.fail(
-            f"void run: the wall clock moved {step:+.1f} s against the monotonic clock"
-            " during this test. Leases run on the wall clock, so the result does not count."
+            f"void run: {moved} during this test."
+            " Leases run on the wall clock, so the result does not count."
         )
+    _write_results("passed" if request.node.stash.get(_PASSED, False) else "failed")
 
 
 def host_can_write(directory: Path) -> bool:

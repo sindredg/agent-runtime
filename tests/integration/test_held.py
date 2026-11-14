@@ -13,6 +13,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import event, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.util import await_only
 
@@ -20,11 +21,12 @@ from runtime.store import held
 from runtime.store.engine import sqlalchemy_url
 from runtime.store.held import LeaseLost
 from runtime.store.jobs import Job, claim_job, get_job, job_from_row
+from runtime.store.payload import InvalidPayload
 from runtime.store.schema import jobs
 from runtime.store.status import JobStatus
 from runtime.store.steps import Step, StepConflict, StepKind, read_steps
 
-from .conftest import expire_lease, new_job, with_engine
+from .conftest import add_step, expire_lease, new_job, with_engine
 
 S = JobStatus
 
@@ -49,7 +51,18 @@ async def renew(engine: AsyncEngine, job_id: UUID, epoch: int) -> datetime:
     )
 
 
+FAILURE = "the model declined the request"
+
+
+async def fail(engine: AsyncEngine, job_id: UUID, epoch: int) -> Step:
+    return await held.fail(engine, job_id=job_id, lease_epoch=epoch, error=FAILURE)
+
+
 def leave(new_status: JobStatus) -> Write:
+    if new_status is S.FAILED:
+        # A job is failed together with its `error` step, by its own write.
+        return fail
+
     async def write(engine: AsyncEngine, job_id: UUID, epoch: int) -> Job:
         return await held.leave_running(
             engine, job_id=job_id, lease_epoch=epoch, new_status=new_status
@@ -63,6 +76,7 @@ WRITES = {
     "step": write_step,
     "renewal": renew,
     "finish": leave(S.SUCCEEDED),
+    "failure": fail,
     "release": leave(S.QUEUED),
 }
 each_write = pytest.mark.parametrize("write", WRITES.values(), ids=WRITES.keys())
@@ -148,29 +162,19 @@ def test_an_expired_lease_nobody_took_is_still_the_holders(database_url: str) ->
 
 
 @pytest.mark.parametrize(
-    ("new_status", "error"),
-    [
-        (S.SUCCEEDED, None),
-        (S.FAILED, "the model declined"),
-        (S.CANCELLED, None),
-        (S.NEEDS_APPROVAL, None),
-        (S.WAITING, None),
-        (S.QUEUED, None),
-    ],
+    "new_status", [S.SUCCEEDED, S.CANCELLED, S.NEEDS_APPROVAL, S.WAITING, S.QUEUED]
 )
-def test_the_holder_moves_its_job_out_of_running(
-    database_url: str, new_status: JobStatus, error: str | None
-) -> None:
+def test_the_holder_moves_its_job_out_of_running(database_url: str, new_status: JobStatus) -> None:
     async def body(engine: AsyncEngine) -> tuple[Job, Job]:
         job = await held_job(engine)
         returned = await held.leave_running(
-            engine, job_id=job.id, lease_epoch=1, new_status=new_status, error=error
+            engine, job_id=job.id, lease_epoch=1, new_status=new_status
         )
         return returned, (await stored(engine, job.id))[0]
 
     returned, job = with_engine(database_url, body)
     assert returned == job
-    assert (job.status, job.error) == (new_status, error)
+    assert (job.status, job.error) == (new_status, None)
     # The lease is given up, and the move is neither a claim nor a takeover.
     assert (job.lease_owner, job.lease_expires_at) == (None, None)
     assert (job.lease_epoch, job.takeovers) == (1, 0)
@@ -187,6 +191,97 @@ def test_a_released_job_is_claimed_again_without_counting_a_takeover(database_ur
     assert job is not None
     assert (job.status, job.lease_owner) == (S.RUNNING, "w2")
     assert (job.lease_epoch, job.takeovers) == (2, 0)
+
+
+def test_the_holder_fails_its_job_and_writes_the_error_step_together(database_url: str) -> None:
+    async def body(engine: AsyncEngine) -> tuple[Step, Job, list[Step]]:
+        job = await held_job(engine)
+        await write_step(engine, job.id, 1)
+        step = await fail(engine, job.id, 1)
+        return step, *await stored(engine, job.id)
+
+    step, job, steps = with_engine(database_url, body)
+    # The step takes the next seq by itself, after the one that was there.
+    assert [found.seq for found in steps] == [1, 2]
+    assert steps[1] == step
+    assert (step.kind, step.payload, step.lease_epoch) == (StepKind.ERROR, {"message": FAILURE}, 1)
+    assert (job.status, job.error) == (S.FAILED, FAILURE)
+    assert (job.lease_owner, job.lease_expires_at) == (None, None)
+    assert (job.lease_epoch, job.takeovers, job.tokens_used) == (1, 0, 7)
+
+
+def test_a_failure_that_cannot_be_stored_is_refused_before_it_is_sent(database_url: str) -> None:
+    async def body(engine: AsyncEngine) -> tuple[Job, list[Step]]:
+        job = await held_job(engine)
+        with pytest.raises(InvalidPayload):
+            await held.fail(engine, job_id=job.id, lease_epoch=1, error="bad byte \x00")
+        return await stored(engine, job.id)
+
+    job, steps = with_engine(database_url, body)
+    assert (job.status, job.error, steps) == (S.RUNNING, None, [])
+
+
+def test_a_failure_that_waits_for_the_job_row_goes_through_when_it_is_free(
+    database_url: str,
+) -> None:
+    async def body(engine: AsyncEngine) -> tuple[bool, Step, Job, list[Step]]:
+        job = await held_job(engine)
+        async with engine.connect() as other:
+            await other.execute(select(jobs.c.id).where(jobs.c.id == job.id).with_for_update())
+            waiting = asyncio.create_task(fail(engine, job.id, 1))
+            await asyncio.sleep(0.5)
+            waited = not waiting.done()
+            await other.commit()
+            async with asyncio.timeout(10):
+                step = await waiting
+        return waited, step, *await stored(engine, job.id)
+
+    waited, step, job, steps = with_engine(database_url, body)
+    assert waited
+    assert steps == [step]
+    assert (step.seq, step.kind) == (1, StepKind.ERROR)
+    assert (job.status, job.error) == (S.FAILED, FAILURE)
+
+
+def test_a_failure_whose_seq_was_taken_while_it_waited_changes_nothing(database_url: str) -> None:
+    """The failure picks its `seq` from the log as it was when the statement was sent.
+
+    Here another session holds the job row, writes the step with that `seq`
+    and commits. No worker does this: the holder writes its steps one after
+    another. If it happens, the step is refused, and the status change must
+    go with it. A job that is `failed` without its `error` step is the
+    state this write exists to rule out.
+    """
+
+    async def body(engine: AsyncEngine) -> tuple[bool, Job, list[Step]]:
+        job = await held_job(engine)
+        async with engine.connect() as other:
+            await other.execute(select(jobs.c.id).where(jobs.c.id == job.id).with_for_update())
+            await add_step(other, job.id, 1)
+            waiting = asyncio.create_task(fail(engine, job.id, 1))
+            await asyncio.sleep(0.5)
+            waited = not waiting.done()
+            await other.commit()
+            with pytest.raises(IntegrityError):
+                async with asyncio.timeout(10):
+                    await waiting
+        return waited, *await stored(engine, job.id)
+
+    waited, job, steps = with_engine(database_url, body)
+    assert waited
+    assert (job.status, job.error, job.lease_owner) == (S.RUNNING, None, "w1")
+    assert [(step.seq, step.kind) for step in steps] == [(1, StepKind.MODEL_REQUEST)]
+
+
+def test_leave_running_does_not_fail_a_job(database_url: str) -> None:
+    """`failed` goes through `fail`, so that no job is failed without its `error` step."""
+
+    async def body(engine: AsyncEngine) -> None:
+        job = await held_job(engine)
+        await held.leave_running(engine, job_id=job.id, lease_epoch=1, new_status=S.FAILED)
+
+    with pytest.raises(ValueError, match=r"held\.fail"):
+        with_engine(database_url, body)
 
 
 @pytest.mark.parametrize("new_status", [S.RUNNING, "paused"])
@@ -229,16 +324,19 @@ def test_a_write_to_a_job_that_is_no_longer_running_is_refused(
 ) -> None:
     """The epoch still matches: the job left `running` without being claimed again."""
 
-    async def body(engine: AsyncEngine) -> tuple[Job, Job, list[Step]]:
+    async def body(
+        engine: AsyncEngine,
+    ) -> tuple[tuple[Job, list[Step]], tuple[Job, list[Step]]]:
         job = await held_job(engine)
-        left = await leave(status)(engine, job.id, 1)
+        await leave(status)(engine, job.id, 1)
+        left = await stored(engine, job.id)
         with pytest.raises(LeaseLost):
             await write(engine, job.id, 1)
-        return left, *await stored(engine, job.id)
+        return left, await stored(engine, job.id)
 
-    left, job, steps = with_engine(database_url, body)
-    assert job == left
-    assert steps == []
+    left, found = with_engine(database_url, body)
+    assert found == left
+    assert left[0].status is status
 
 
 @each_write
