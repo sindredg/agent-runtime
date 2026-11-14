@@ -1,4 +1,4 @@
-"""A worker's writes to the job it holds: steps, lease renewals, status changes.
+"""A worker's writes to the job it holds: steps, lease renewals, status changes, failure.
 
 Each write is fenced. It is one statement that updates the job row, and the
 update only matches while the job is `running` under the writer's own
@@ -29,7 +29,7 @@ from runtime.store.jobs import Job, job_from_row
 from runtime.store.payload import check_json
 from runtime.store.schema import jobs, steps
 from runtime.store.status import JobStatus, can_move
-from runtime.store.steps import Step, StepConflict, StepKind, step_from_row
+from runtime.store.steps import Step, StepConflict, StepKind, next_seq, step_from_row
 
 # Postgres reports a broken unique constraint with this SQLSTATE.
 _UNIQUE_VIOLATION = "23505"
@@ -145,22 +145,64 @@ async def leave_running(
     job_id: UUID,
     lease_epoch: int,
     new_status: JobStatus,
-    error: str | None = None,
 ) -> Job:
     """Move the held job from `running` to `new_status` and give up the lease.
 
     This is how a worker finishes a job, parks it for an approval, and
-    releases it back to `queued`. `error` replaces the stored error.
+    releases it back to `queued`. A stored error is cleared.
+
+    Not to `failed`: that is `fail`, which writes the `error` step with it.
     """
+    if new_status is JobStatus.FAILED:
+        raise ValueError("a job is failed with held.fail, which also writes its error step")
     if not isinstance(new_status, JobStatus) or not can_move(JobStatus.RUNNING, new_status):
         raise ValueError(f"a running job cannot move to {new_status!r}")
     statement = (
         update(jobs)
         .where(*_held(job_id, lease_epoch))
-        .values(status=new_status.value, error=error, lease_owner=None, lease_expires_at=None)
+        .values(status=new_status.value, error=None, lease_owner=None, lease_expires_at=None)
         .returning(*jobs.c)
     )
     return job_from_row(await _send(engine, statement, job_id, lease_epoch))
 
 
-__all__ = ["LeaseLost", "append_step", "leave_running", "renew_lease"]
+async def fail(engine: AsyncEngine, *, job_id: UUID, lease_epoch: int, error: str) -> Step:
+    """Fail the held job: the `error` step and the move to `failed`, in one statement.
+
+    Returns the step. One statement, so a worker that stops while it fails
+    a job leaves both or neither. A job that was still `running` with an
+    `error` step in its log would be taken over and run on.
+
+    The step takes the next free `seq` by itself, as the statement saw the
+    log when it was sent. The holder writes its steps one after another, so
+    nothing takes that `seq` in between. If a step did, while this statement
+    waited for the job row, the unique constraint refuses the step with
+    IntegrityError and the status change is undone with it.
+    """
+    payload = {"message": error}
+    check_json(payload)
+    held = (
+        update(jobs)
+        .where(*_held(job_id, lease_epoch))
+        .values(status=JobStatus.FAILED.value, error=error, lease_owner=None, lease_expires_at=None)
+        .returning(jobs.c.id)
+        .cte("held")
+    )
+    statement = (
+        insert(steps)
+        .from_select(
+            ["job_id", "seq", "kind", "payload", "lease_epoch"],
+            select(
+                held.c.id,
+                next_seq(job_id),
+                literal(StepKind.ERROR.value, Text),
+                literal(payload, JSONB),
+                literal(lease_epoch, Integer),
+            ),
+        )
+        .returning(*steps.c)
+    )
+    return step_from_row(await _send(engine, statement, job_id, lease_epoch))
+
+
+__all__ = ["LeaseLost", "append_step", "fail", "leave_running", "renew_lease"]

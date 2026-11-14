@@ -237,8 +237,11 @@ async def _next_tool_call(
     return True
 
 
-def _response_problem(response: ModelResponse) -> str | None:
-    """What is wrong with a response's shape, or None. Checked before any tool runs."""
+def _response_problem(response: ModelResponse, used_ids: set[str]) -> str | None:
+    """What is wrong with a response's shape, or None. Checked before any tool runs.
+
+    `used_ids` are the ids of the tool calls of earlier responses in the job.
+    """
     if not response.stop_reason:
         return "it has no stop_reason"
     content: Any = response.content
@@ -256,6 +259,11 @@ def _response_problem(response: ModelResponse) -> str | None:
         ids.append(tool_use_id)
     if len(set(ids)) != len(ids):
         return "two tool_use blocks have the same id"
+    # A call's operation id is the job's id and the call's id. A second call
+    # under the same id would be taken for the first one when a tool's
+    # check looks it up.
+    if not used_ids.isdisjoint(ids):
+        return "a tool_use block has the id of an earlier call"
     return None
 
 
@@ -359,7 +367,7 @@ async def _loop(
                     "output_tokens": response.output_tokens,
                 },
             }
-            problem = _response_problem(response)
+            problem = _response_problem(response, state.used_ids)
             try:
                 check_json(payload)
             except InvalidPayload as error:
@@ -444,17 +452,18 @@ async def _run(
             check_json(failure)
         except InvalidPayload:
             failure = "the job failed with an error that cannot be stored as text"
-        # Read the log again first: if the failure was a step that did
-        # not go in, the writer's idea of the next seq may be wrong.
-        steps = await _stored(_read_log(engine, job.id))
-        writer.last_seq = steps[-1].seq if steps else 0
-        writer.state = None
-        await writer.append(StepKind.ERROR, {"message": failure})
-    await _stored(
-        held.leave_running(
-            engine, job_id=job.id, lease_epoch=lease.epoch, new_status=status, error=failure
+        # One statement for the `error` step and the status: a worker that
+        # stops here leaves the job failed, or not failed at all. The step
+        # takes the next free seq by itself, also when the failure was a
+        # step that did not go in at the seq the writer expected.
+        step = await _stored(
+            held.fail(engine, job_id=job.id, lease_epoch=lease.epoch, error=failure)
         )
-    )
+        log.info("step", extra={"job_id": job.id, "seq": step.seq, "kind": step.kind.value})
+    else:
+        await _stored(
+            held.leave_running(engine, job_id=job.id, lease_epoch=lease.epoch, new_status=status)
+        )
     log.info(
         "job finished" if status in FINAL_STATUSES else "job handed back",
         extra={"job_id": job.id, "status": status.value, "error": failure},

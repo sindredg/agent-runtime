@@ -265,6 +265,23 @@ def run_with(
     return stack.run(body)
 
 
+class InTurn:
+    """A provider that gives the responses it was made with, one per call."""
+
+    def __init__(self, *responses: ModelResponse) -> None:
+        self.responses = responses
+        self.calls = 0
+
+    async def complete(self, request: ModelRequest) -> ModelResponse:
+        self.calls += 1
+        if self.calls > len(self.responses):
+            raise RuntimeError("the model was called once too often")
+        return self.responses[self.calls - 1]
+
+    async def aclose(self) -> None:
+        return None
+
+
 def tool_call(tool_use_id: Any = "toolu_1", **changes: Any) -> dict[str, Any]:
     block = {"type": "tool_use", "id": tool_use_id, "name": "read_file", "input": {"path": "a"}}
     return {**block, **changes}
@@ -301,6 +318,41 @@ def test_a_malformed_response_fails_the_job_before_any_tool_runs(
     # One call, not a loop of them, and its tokens are counted.
     assert provider.calls == 1
     assert job.tokens_used == 12
+
+
+def test_a_call_id_reused_in_a_later_turn_fails_the_job_before_the_call_runs(stack: Stack) -> None:
+    """The operation id of a call is the job's id and the call's id.
+
+    A second call with the id of the first would get the first one's
+    operation id. If it were interrupted, a tool's check would find the
+    first call's effect and the second would never happen.
+    """
+    ran: list[str] = []
+
+    def record(call: ToolCall) -> ToolResult:
+        ran.append(call.operation_id)
+        return ToolResult("ok")
+
+    provider = InTurn(
+        ModelResponse("msg_1", "m", [tool_call("same")], "tool_use", 5, 7),
+        ModelResponse("msg_2", "m", [tool_call("same")], "tool_use", 5, 7),
+    )
+    job, steps = run_with(stack, provider, stub_tool(record))
+    assert [step.kind for step in steps] == [
+        K.MODEL_REQUEST,
+        K.MODEL_RESPONSE,
+        K.TOOL_INTENT,
+        K.TOOL_RESULT,
+        K.MODEL_REQUEST,
+        K.MODEL_RESPONSE,
+        K.ERROR,
+    ]
+    assert job.status is JobStatus.FAILED
+    assert "the id of an earlier call" in (job.error or "")
+    # The first call ran once. The second, with the same id, did not run.
+    assert ran == [f"{job.id}:same"]
+    assert provider.calls == 2
+    assert job.tokens_used == 24
 
 
 @pytest.mark.parametrize("bad", ["nul \x00 byte", "lone surrogate \ud800"])
