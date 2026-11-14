@@ -42,6 +42,9 @@ class ToolCall:
     # worker stopped. A tool that changes something outside should store it
     # with the change, or send it as an idempotency key.
     operation_id: str
+    # The lease epoch of the worker that runs the call. A sandboxed call
+    # labels its container with it.
+    lease_epoch: int
 
 
 def operation_id(job_id: object, tool_use_id: str) -> str:

@@ -16,6 +16,7 @@ CALL = ToolCall(
     workspace=Path("unused"),
     input={"title": "CI is red", "body": "test_x failed"},
     operation_id="job-1:toolu_1",
+    lease_epoch=1,
 )
 
 
@@ -88,7 +89,7 @@ def test_it_is_not_idempotent_and_brings_a_check(tracker: Tracker) -> None:
 def test_input_without_a_title_and_a_body_is_an_error_result_and_sends_nothing(
     tracker: Tracker, tool_input: dict[str, Any]
 ) -> None:
-    result = tool(tracker).run(ToolCall(Path("unused"), tool_input, "job-1:toolu_1"))
+    result = tool(tracker).run(ToolCall(Path("unused"), tool_input, "job-1:toolu_1", 1))
     assert result.is_error
     assert tracker.requests == []
 
@@ -183,7 +184,7 @@ def test_the_check_answers_done_with_the_result_when_the_issue_exists(tracker: T
 
 def test_the_check_answers_not_done_when_the_tracker_has_no_such_issue(tracker: Tracker) -> None:
     built = tool(tracker)
-    built.run(ToolCall(Path("unused"), CALL.input, "another-job:toolu_1"))
+    built.run(ToolCall(Path("unused"), CALL.input, "another-job:toolu_1", 1))
     assert built.check(CALL) is CheckOutcome.NOT_DONE
 
 

@@ -6,6 +6,7 @@ log once, then folds in each step it writes itself.
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from runtime.store.steps import Step, StepKind
@@ -25,12 +26,21 @@ class Replay:
     # The payload of a `tool_intent` step that no `tool_result` has followed.
     # A worker that finds one here did not write it: the call was interrupted.
     interrupted: dict[str, Any] | None = None
+    # When that `tool_intent` step was written, by the database clock.
+    interrupted_at: datetime | None = None
     # What was done about that interrupted call: None, "requested" (a person
     # was asked) or "given" (a person approved running it again).
     approval: str | None = None
     # Why the last assistant message cannot be used, as its `model_response`
     # step recorded it. None when it is fine.
     problem: str | None = None
+    # Input plus output tokens of the last response, and the length of the
+    # conversation then, its own message included. The budget's bound of
+    # the next call starts from them (`runtime.worker.budget`).
+    counted: int | None = None
+    counted_messages: int = 0
+    # `max_tokens` of the last request, which the budget may have lowered.
+    requested_max_tokens: int | None = None
     # `seq` of the last step folded in, 0 before the first.
     last_seq: int = 0
     # The id of every tool call the model has made in this job. A call's
@@ -53,14 +63,20 @@ class Replay:
 
         Only `model_response` and `tool_result` steps shape the conversation.
         The results of one assistant message go into one user message, as
-        the API requires. A `model_request` and an `error` change nothing: a
-        request without a response is simply sent again.
+        the API requires. A `model_request` only records its `max_tokens`,
+        and an `error` changes nothing: a request without a response is
+        simply sent again.
         """
         self.last_seq = step.seq
         payload = step.payload
-        if step.kind is StepKind.MODEL_RESPONSE:
+        if step.kind is StepKind.MODEL_REQUEST:
+            self.requested_max_tokens = payload.get("max_tokens")
+        elif step.kind is StepKind.MODEL_RESPONSE:
             content = payload["content"]
             self.messages.append({"role": "assistant", "content": content})
+            usage = payload.get("usage") or {}
+            self.counted = int(usage.get("input_tokens", 0)) + int(usage.get("output_tokens", 0))
+            self.counted_messages = len(self.messages)
             self.problem = payload.get("problem")
             # A response with a problem is stored as it came and may not have
             # the shape of a message. No call is taken from it.
@@ -71,11 +87,12 @@ class Replay:
             )
             self.used_ids.update(block["id"] for block in self.pending)
             self.stop_reason = payload["stop_reason"]
-            self.interrupted, self.approval = None, None
+            self.interrupted, self.interrupted_at, self.approval = None, None, None
         elif step.kind is StepKind.TOOL_INTENT:
             # Every run of a tool has its own intent. A new one starts with
             # no approval, also when it reruns an approved call.
             self.interrupted, self.approval = payload, None
+            self.interrupted_at = step.created_at
         elif step.kind is StepKind.TOOL_RESULT:
             tool_use_id = payload["tool_use_id"]
             if self.messages[-1]["role"] != "user" or len(self.messages) == 1:
@@ -89,7 +106,7 @@ class Replay:
                 }
             )
             self.pending = [block for block in self.pending if block["id"] != tool_use_id]
-            self.interrupted, self.approval = None, None
+            self.interrupted, self.interrupted_at, self.approval = None, None, None
         elif step.kind is StepKind.APPROVAL_REQUESTED:
             self.approval = "requested"
         elif step.kind is StepKind.APPROVAL_GIVEN:

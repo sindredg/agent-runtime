@@ -22,13 +22,12 @@ and only the job's workspace directory. Each call has a timeout, and its
 output is cut at 64 KiB. `read_file` and `create_issue` still run in the
 worker process.
 
-Not built: retry on provider errors and rate limits, token budgets, deadlines,
-and cancel. The full list is in
+Not built: retry on provider errors and rate limits, deadlines, and cancel.
+The full list is in
 [Known limits](docs/architecture.md#known-limits).
 
-Decided and not built: removal of the tool containers a stopped worker leaves
-behind, a target scope that the tools cannot leave, a way to halt a job, and
-approval before a risky tool call. See ADR 0007 to 0011 under
+Decided and not built: a target scope that the tools cannot leave, a way to
+halt a job, and approval before a risky tool call. See ADR 0007 to 0011 under
 [Design](#design).
 
 Locally the model provider is a fake that answers from scenario files, so
@@ -103,7 +102,7 @@ clean` stops the stack and deletes its database.
 | `system` | no | System prompt. Not empty if given. |
 | `model` | no | Model id. Default: the worker's `MODEL`. With the fake provider it names a scenario. |
 | `files` | no | Text files written into the job's workspace before it starts: relative path to content. 1 MiB in total, paths included. Paths are plain relative paths: no `..`, no `./`, no trailing `/`, and no path that is also a directory of another. |
-| `token_budget` | no | At least 1. Stored with the job. Not enforced yet. |
+| `token_budget` | no | At least 1. A model call is not made when the upper bound of its input does not fit what is left; the job then fails. See [Limits](docs/architecture.md). |
 | `timeout_seconds` | no | 1 to 604800 (one week). Sets the job's deadline. Not enforced yet. |
 
 Any other field is refused.
@@ -131,8 +130,8 @@ tool's own log file, and for the paused worker its container log.
 | A job that crashes its worker every time does not loop forever | Tested | A job whose tool ends the worker's process: `failed` after 5 takeovers, with 6 runs in the tool's own log. | Limit removed: the job was still running after 180 s and had been taken over 34 times. |
 | Provider rate limits slow jobs, they do not fail them | Not built | | |
 | Throughput scales with workers | Not measured | | |
-| Every job stays inside its token budget and deadline, and can be cancelled | Not built | | |
-| A tool cannot leave its sandbox | Partly built, not proven | `run_shell` and `list_dir` run in a container per call. The escape tests are not written yet. | |
+| Every job stays inside its token budget and deadline, and can be cancelled | Budget tested; deadline and cancel not built | A job that loops (thirty rounds of reading a 2 KB file) with a budget of 20,000 tokens: `failed` with "the token budget does not cover the next model call" after 7 calls, at 13,636 tokens by the fake provider's own count, which equals the job's `tokens_used`. For each call the provider's input stayed within the recorded bound, and the count, the bound and `max_tokens` together fit the budget. At `dfe2936` on 2026-11-14, `tests/integration/test_budget.py`, Linux aarch64 under WSL2. | Bound removed (`max_tokens` never cut, no check): the job ran all 31 calls and spent 282,118 tokens, and the test fails. |
+| A tool cannot leave its sandbox | Tested without a target scope; the scope is not built | `make escape`: 12 escape attempts, each as a `run_shell` call: DNS, TCP out, the cloud metadata address, a network interface besides loopback, the Docker socket, a write to the root file system, a mount, capabilities, gaining privileges, running as root, 200 forks, 512 MiB of memory. Each was stopped and came back as a failed tool result; 61 of 200 forks ran, the memory hog was killed (137). The host's canary file and another job's file were not found, while the same search found a file of the job's own, and both stayed unchanged. No metadata service runs on this machine, so the metadata attempt shows only that the address was unreachable. The job's own workspace stayed readable and writable. 15 of 15 tests passed at `bcc62bb` on 2026-11-14, Linux aarch64 under WSL2, Docker 29.1.3, kernel.yama.ptrace_scope 1. | Docker's default container settings with only the workspace mounted (`ESCAPE_DOCKER_DEFAULTS=1`): DNS, TCP out, an `eth0` interface, privileges, 200 forks and 512 MiB got out; 6 attempts failed the test. The socket, mount, capability, root, root-write and host-file attempts were still stopped there: the image's user is not root and nothing else is mounted. |
 | Bad tool output does not break a job | Built for `run_shell` and `list_dir`, no result recorded yet | An integration test runs one job whose commands run past the timeout, exit non-zero, print 100 MB and print bytes that are not UTF-8. Each becomes a tool result of at most 64 KiB, the 100 MB one flagged `truncated`, and the job succeeds. `read_file` and `create_issue` run in the worker and have no general timeout. | |
 
 Also tested, outside the table: a worker stopped with `docker stop` (SIGTERM)
@@ -202,8 +201,7 @@ What these results do not show:
   Not built.
 - [ADR 0008](docs/adr/0008-run-each-tool-call-in-its-own-container.md): run
   each tool call in its own container, started by the worker. Built for
-  `run_shell` and `list_dir`, except the handling of containers that a
-  stopped worker leaves behind.
+  `run_shell` and `list_dir`.
 - [ADR 0009](docs/adr/0009-enforce-the-target-scope-in-the-network-namespace.md):
   enforce a job's target scope in the network namespace of its tools. Not
   built.
@@ -225,7 +223,8 @@ uv installs the pinned Python and tools into `.venv`.
 | `make clean` | Stop the services, delete the database volume |
 | `make test` | Unit tests |
 | `make integration` | Integration tests. Needs the stack from `make up`. |
-| `make chaos` | Chaos tests. Starts the stack with three workers and a 2 second lease, then kills, pauses and crashes workers. `CHAOS_RUNS` sets the number of runs with a random kill time (default 20), `CHAOS_SEED` the times. Run `make up` afterwards to get the normal stack back. |
+| `make escape` | Escape tests: tries to get out of the sandbox. Builds the sandbox image; needs no stack. `ESCAPE_DOCKER_DEFAULTS=1` runs the same attempts with Docker's default container settings, which must fail. |
+| `make chaos` | Chaos tests. Starts the stack with three workers, a 2 second lease and a 10 second sandbox timeout, then kills, pauses and crashes workers. `CHAOS_RUNS` sets the number of runs with a random kill time (default 20), `CHAOS_SEED` the times. Run `make up` afterwards to get the normal stack back. |
 
 The stack publishes four ports, all on `127.0.0.1` only: the API on 8000,
 Postgres on 5432, the fake provider on 8001 and the fake tracker on 8002.

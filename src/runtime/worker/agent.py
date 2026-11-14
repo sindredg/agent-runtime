@@ -10,15 +10,17 @@ its lease gone, or cannot reach the database, drops the job: it writes
 nothing more and leaves the status and the workspace to whoever holds the
 job next.
 
-Not built yet: budget and deadline are not enforced.
+The token budget is kept with an upper bound of each call's input
+(`runtime.worker.budget`). Not built yet: the deadline is not enforced.
 """
 
 import asyncio
 import logging
+import math
 import time
 from collections.abc import Awaitable
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -28,8 +30,11 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from runtime.failpoints import Failpoints
 from runtime.provider.base import ModelRequest, ModelResponse, Provider, ProviderError
+from runtime.sandbox.docker import SandboxError
+from runtime.sandbox.runner import LONGEST_BOUND, ends_within
 from runtime.spec import JobSpec
 from runtime.store import held
+from runtime.store.clock import seconds_until
 from runtime.store.held import LeaseLost
 from runtime.store.jobs import Job
 from runtime.store.payload import InvalidPayload, check_json
@@ -37,6 +42,7 @@ from runtime.store.status import FINAL_STATUSES, JobStatus
 from runtime.store.steps import Step, StepKind, read_steps
 from runtime.tools.base import AnyTool, ToolCall, ToolRegistry, ToolResult, operation_id
 from runtime.tools.sandboxed import SandboxTool
+from runtime.worker.budget import input_bound, max_tokens_within
 from runtime.worker.lease import Lease, keep_renewing
 from runtime.worker.recovery import Ask, Recovered, decide
 from runtime.worker.replay import Replay, replay
@@ -89,9 +95,11 @@ class _StepWriter:
     """Appends steps for one job with rising `seq`. Every step is one fenced statement."""
 
     def __init__(self, engine: AsyncEngine, lease: Lease, last_seq: int) -> None:
-        self._engine = engine
+        self.engine = engine
         self._lease = lease
         self.last_seq = last_seq
+        # Tokens this worker added to the job's count.
+        self.tokens_added = 0
         # Set once the conversation is known. Each step written is folded
         # into it, so the log is replayed once and not after every step.
         self.state: Replay | None = None
@@ -102,7 +110,7 @@ class _StepWriter:
         # cannot disagree.
         step = await _stored(
             held.append_step(
-                self._engine,
+                self.engine,
                 job_id=self._lease.job_id,
                 lease_epoch=self._lease.epoch,
                 seq=seq,
@@ -112,6 +120,7 @@ class _StepWriter:
             )
         )
         self.last_seq = seq
+        self.tokens_added += tokens
         if self.state is not None:
             self.state.apply(step)
         log.info("step", extra={"job_id": self._lease.job_id, "seq": seq, "kind": kind.value})
@@ -154,6 +163,89 @@ async def _run_tool(tool: AnyTool | None, name: str, call: ToolCall) -> ToolResu
     return _usable(result)
 
 
+async def _wait_unless_stopped(seconds: float, stop: asyncio.Event, lease: Lease) -> bool:
+    """Wait `seconds`. False if `stop` was set first. Raises LeaseLost when the lease goes."""
+    slept = asyncio.ensure_future(asyncio.sleep(seconds))
+    stopped = asyncio.ensure_future(stop.wait())
+    lost = asyncio.ensure_future(lease.wait_lost())
+    try:
+        await asyncio.wait({slept, stopped, lost}, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for waiter in (slept, stopped, lost):
+            waiter.cancel()
+        await asyncio.gather(slept, stopped, lost, return_exceptions=True)
+    for waiter in (slept, stopped, lost):
+        # A watcher that failed says nothing about the time, a stop or the
+        # lease. Read as the end of the wait, the call would be decided early.
+        if not waiter.cancelled() and (broken := waiter.exception()) is not None:
+            raise broken
+    if lease.lost:
+        raise LeaseLost(lease.job_id, lease.epoch)
+    return not stop.is_set()
+
+
+def _bound(tool: AnyTool | None, intent: dict[str, Any]) -> float | None:
+    """Seconds after its intent by which an interrupted call's container has ended.
+
+    None when the call ran no container. The intent's own number is used,
+    so a worker with other settings waits as long as the one that started
+    the call. A number above what any settings give is cut to that.
+    """
+    recorded = intent.get("ends_within")
+    if (
+        isinstance(recorded, int | float)
+        and not isinstance(recorded, bool)
+        and math.isfinite(recorded)
+        and recorded >= 0
+    ):
+        return min(float(recorded), LONGEST_BOUND)
+    if isinstance(tool, SandboxTool):
+        return ends_within(tool.sandbox.settings)
+    return None
+
+
+async def _outlast_container(
+    writer: _StepWriter,
+    tool: AnyTool | None,
+    job: Job,
+    lease: Lease,
+    intent: dict[str, Any],
+    written: datetime | None,
+    stop: asyncio.Event,
+) -> bool:
+    """Make sure the interrupted call's container has ended. False if `stop` came first.
+
+    The container may still run: the worker that started it stopped, the
+    container did not (ADR 0008). Containers of earlier lease epochs on this
+    host are removed. One on another host, or one whose start request was
+    still on its way, cannot be, so the worker also waits until the call's
+    bound has passed since its intent, by the database clock.
+    """
+    bound = _bound(tool, intent)
+    if bound is None or written is None:
+        return True
+    lease.check()
+    if isinstance(tool, SandboxTool):
+        try:
+            removed = await tool.sandbox.remove_older(job.id, lease.epoch)
+        except SandboxError:
+            # The wait below still covers the container.
+            log.exception("containers of an earlier lease not removed", extra={"job_id": job.id})
+        else:
+            log.info(
+                "containers of an earlier lease removed",
+                extra={"job_id": job.id, "removed": removed},
+            )
+    left = await _stored(seconds_until(writer.engine, written + timedelta(seconds=bound)))
+    if left <= 0:
+        return True
+    log.info(
+        "waiting for an interrupted call's container to end",
+        extra={"job_id": job.id, "seconds": round(left, 1)},
+    )
+    return await _wait_unless_stopped(left, stop, lease)
+
+
 async def _next_tool_call(
     writer: _StepWriter,
     tools: ToolRegistry,
@@ -175,11 +267,19 @@ async def _next_tool_call(
     tool_use_id, name = block["id"], block["name"]
     tool = tools.get(name)
     call = ToolCall(
-        workspace=workspace, input=block["input"], operation_id=operation_id(job.id, tool_use_id)
+        workspace=workspace,
+        input=block["input"],
+        operation_id=operation_id(job.id, tool_use_id),
+        lease_epoch=lease.epoch,
     )
 
     interrupted = state.interrupted
     if interrupted is not None and interrupted.get("tool_use_id") == tool_use_id:
+        # Nothing is decided while the interrupted call may still be running.
+        if not await _outlast_container(
+            writer, tool, job, lease, interrupted, state.interrupted_at, stop
+        ):
+            return True
         lease.check()
         decision = await asyncio.to_thread(decide, tool, call, approved=state.approval == "given")
         log.info(
@@ -228,10 +328,12 @@ async def _next_tool_call(
     # written the worker is committed to the run, also if it is told to
     # stop while writing it: the tool runs and its result is stored.
     lease.check()
-    await writer.append(
-        StepKind.TOOL_INTENT,
-        {"tool_use_id": tool_use_id, "name": name, "input": block["input"]},
-    )
+    intent: dict[str, Any] = {"tool_use_id": tool_use_id, "name": name, "input": block["input"]}
+    if isinstance(tool, SandboxTool):
+        # A worker that takes the job over waits this long after the intent
+        # before it decides about the call.
+        intent["ends_within"] = ends_within(tool.sandbox.settings)
+    await writer.append(StepKind.TOOL_INTENT, intent)
     failpoints.hit("after_tool_intent", takeovers=job.takeovers, tool=name)
     # And immediately before the run, in case the write was slow.
     lease.check()
@@ -355,12 +457,28 @@ async def _loop(
             return JobStatus.QUEUED
 
         if state.needs_model_call:
+            definitions = tools.definitions()
+            used = job.tokens_used + writer.tokens_added
+            bound = input_bound(
+                system=spec.system,
+                tools=definitions,
+                messages=state.messages,
+                counted=state.counted,
+                counted_messages=state.counted_messages,
+            )
+            max_tokens = max_tokens_within(job.token_budget, used, bound, settings.max_tokens)
+            if max_tokens is None:
+                # Before the request step: a call that is not made leaves none.
+                raise _JobFailed(
+                    f"the token budget does not cover the next model call: {used} of"
+                    f" {job.token_budget} tokens used, and its input can take up to {bound}"
+                )
             request = ModelRequest(
                 model=model,
-                max_tokens=settings.max_tokens,
+                max_tokens=max_tokens,
                 messages=state.messages,
                 system=spec.system,
-                tools=tools.definitions(),
+                tools=definitions,
                 user_id=str(job.id),
                 mid_stream=(
                     (lambda: failpoints.hit("mid_stream", takeovers=job.takeovers))
@@ -371,7 +489,15 @@ async def _loop(
             lease.check()
             await writer.append(
                 StepKind.MODEL_REQUEST,
-                {"model": model, "max_tokens": request.max_tokens, "messages": len(state.messages)},
+                {
+                    "model": model,
+                    "max_tokens": request.max_tokens,
+                    "messages": len(state.messages),
+                    # The upper bound of the input and the count before the
+                    # call, so the log shows the budget was kept.
+                    "input_bound": bound,
+                    "tokens_used": used,
+                },
             )
             failpoints.hit("after_model_request", takeovers=job.takeovers)
             # Immediately before the call: a worker that was paused past its
@@ -424,9 +550,17 @@ async def _loop(
 
         if state.stop_reason in _FINISHED:
             return JobStatus.SUCCEEDED
-        raise _JobFailed(
-            _FAILURES.get(state.stop_reason or "", f"unexpected stop_reason: {state.stop_reason}")
+        failure = _FAILURES.get(
+            state.stop_reason or "", f"unexpected stop_reason: {state.stop_reason}"
         )
+        lowered = state.requested_max_tokens
+        if (
+            state.stop_reason == "max_tokens"
+            and lowered is not None
+            and lowered < settings.max_tokens
+        ):
+            failure += f", which the token budget had lowered to {lowered}"
+        raise _JobFailed(failure)
 
 
 async def _run(

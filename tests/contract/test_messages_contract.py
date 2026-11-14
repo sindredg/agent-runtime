@@ -21,6 +21,7 @@ import pytest
 
 from runtime.provider.base import ModelRequest, ModelResponse
 from runtime.provider.messages import AnthropicProvider
+from runtime.worker.budget import input_bound
 
 FAKE_URL = os.environ.get("FAKE_PROVIDER_URL", "http://127.0.0.1:8001")
 CLAUDE_URL = "https://api.anthropic.com"
@@ -108,6 +109,29 @@ def test_tool_call_then_answer(name: str) -> None:
     # and the provider accepted it.
     assert second.stop_reason == "end_turn"
     assert any(block["type"] == "text" and block["text"] for block in second.content)
+
+    # The budget's bound (ADR 0010) holds against the provider's own count.
+    # It rests on a token never being shorter than a byte.
+    results = [
+        {"type": "tool_result", "tool_use_id": call["id"], "content": "Hello from the file."}
+        for call in calls
+    ]
+    first_bound = input_bound(
+        system=None, tools=[TOOL], messages=[PROMPT], counted=None, counted_messages=0
+    )
+    second_bound = input_bound(
+        system=None,
+        tools=[TOOL],
+        messages=[
+            PROMPT,
+            {"role": "assistant", "content": first.content},
+            {"role": "user", "content": results},
+        ],
+        counted=first.input_tokens + first.output_tokens,
+        counted_messages=2,
+    )
+    assert first.input_tokens <= first_bound
+    assert second.input_tokens <= second_bound
 
 
 def raw_message(

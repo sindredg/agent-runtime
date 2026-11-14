@@ -20,7 +20,9 @@ class Runner(Protocol):
     @property
     def settings(self) -> SandboxSettings: ...
 
-    async def run(self, job_id: UUID, argv: Sequence[str]) -> Run: ...
+    async def run(self, job_id: UUID, lease_epoch: int, argv: Sequence[str]) -> Run: ...
+
+    async def remove_older(self, job_id: UUID, lease_epoch: int) -> int: ...
 
 
 # The command's arguments, or an error result for input that cannot be used.
@@ -84,7 +86,7 @@ class SandboxTool:
         except ValueError:
             return ToolResult("the workspace is not a job's workspace", is_error=True)
         try:
-            run = await self.sandbox.run(job_id, argv)
+            run = await self.sandbox.run(job_id, call.lease_epoch, argv)
         except NotStarted as error:
             return ToolResult(f"the sandbox could not start the command: {error}", True)
         except SandboxError as error:
