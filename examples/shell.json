@@ -1,0 +1,7 @@
+{
+  "prompt": "List the workspace, read hello.txt with a shell command, and leave a note.",
+  "model": "shell",
+  "files": {
+    "hello.txt": "Hello from the workspace.\n"
+  }
+}

@@ -9,7 +9,7 @@ which. The decision is made here, from what the tool says about itself.
 from dataclasses import dataclass
 
 from runtime.store.payload import InvalidPayload, check_json
-from runtime.tools.base import CheckOutcome, Tool, ToolCall, ToolResult
+from runtime.tools.base import AnyTool, CheckOutcome, Tool, ToolCall, ToolResult
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,7 +36,7 @@ class Ask:
 type Decision = Rerun | Recovered | Ask
 
 
-def decide(tool: Tool | None, call: ToolCall, *, approved: bool) -> Decision:
+def decide(tool: AnyTool | None, call: ToolCall, *, approved: bool) -> Decision:
     """Decide about an interrupted call. Runs the tool's `check`, so it may block.
 
     In this order:
@@ -54,10 +54,12 @@ def decide(tool: Tool | None, call: ToolCall, *, approved: bool) -> Decision:
         return Rerun("a person approved running the call again")
     if tool.idempotent:
         return Rerun("the tool is idempotent")
-    if tool.check is None:
+    # Only a tool that is runtime code can bring a check.
+    check = tool.check if isinstance(tool, Tool) else None
+    if check is None:
         return Ask("the tool is not idempotent and has no check")
     try:
-        answer = tool.check(call)
+        answer = check(call)
     # SystemExit too: a check that calls sys.exit() must not take the worker down.
     except (Exception, SystemExit) as error:
         reason = f"the tool's check failed: {type(error).__name__}: {error}"

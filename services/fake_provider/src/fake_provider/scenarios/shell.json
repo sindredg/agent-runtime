@@ -1,0 +1,22 @@
+{
+  "description": "List the workspace, then read a file and write one with a shell command in the sandbox.",
+  "turns": [
+    {
+      "content": [
+        {"type": "text", "text": "I will list the workspace first."},
+        {"type": "tool_use", "name": "list_dir", "input": {}}
+      ]
+    },
+    {
+      "content": [
+        {"type": "text", "text": "Now I read hello.txt and write a note next to it."},
+        {"type": "tool_use", "name": "run_shell", "input": {"command": "cat hello.txt && echo seen > note.txt && ls"}}
+      ]
+    },
+    {
+      "content": [
+        {"type": "text", "text": "hello.txt holds a short greeting, and note.txt is written. The job is done."}
+      ]
+    }
+  ]
+}

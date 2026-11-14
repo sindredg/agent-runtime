@@ -89,8 +89,13 @@ services:
     command: [python, -m, runtime.worker]
     # On SIGTERM the worker waits for a running tool, stores its result and
     # gives the job back. After this long Docker kills it, and the job is
-    # taken over when its lease runs out.
-    stop_grace_period: 30s
+    # taken over when its lease runs out. Longer than the tool timeout.
+    stop_grace_period: 45s
+    # The group that owns the Docker socket, so the worker can start a
+    # container for each sandboxed tool call. Whoever controls the worker
+    # controls the host (ADR 0008). `make` sets the variable.
+    group_add:
+      - "${DOCKER_GID:?set DOCKER_GID to the group id of /var/run/docker.sock}"
     environment:
       DATABASE_URL: *database-url
       # The fake provider unless .env says otherwise. The compose variables
@@ -108,8 +113,15 @@ services:
       LEASE_SECONDS: ${LEASE_SECONDS:-30}
       # Seconds between two renewals of the lease. Shorter than the lease.
       HEARTBEAT_SECONDS: ${HEARTBEAT_SECONDS:-10}
+      # Sandboxed tools run in this image. Each call gets its job's
+      # directory of the workspace volume, and nothing else of the host.
+      SANDBOX_IMAGE: agent-runtime-sandbox:dev
+      SANDBOX_VOLUME: agent-runtime_workspaces
+      # Seconds a sandboxed command may run before it is killed.
+      SANDBOX_TIMEOUT_SECONDS: ${SANDBOX_TIMEOUT_SECONDS:-30}
     volumes:
       - workspaces:/workspaces
+      - /var/run/docker.sock:/var/run/docker.sock
     healthcheck:
       # Healthy while the liveness file was touched in the last 15 seconds.
       test:
@@ -130,6 +142,22 @@ services:
         condition: service_healthy
       fake-tracker:
         condition: service_healthy
+      sandbox-image:
+        condition: service_completed_successfully
+
+  # One-shot: builds the image that sandboxed tool calls run in, and shows
+  # that it starts. The worker starts those containers, not compose.
+  sandbox-image:
+    build: images/sandbox
+    image: agent-runtime-sandbox:dev
+    pull_policy: build
+    command: ["true"]
+    network_mode: none
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
 
   fake-provider:
     <<: *runtime
@@ -151,5 +179,7 @@ services:
 
 volumes:
   postgres-data:
-  # Job workspaces, one directory per job, shared by the workers.
+  # Job workspaces, one directory per job, shared by the workers. Named
+  # explicitly: the worker passes this name to Docker for each tool container.
   workspaces:
+    name: agent-runtime_workspaces

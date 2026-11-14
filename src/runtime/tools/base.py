@@ -1,10 +1,18 @@
-"""What a tool is: a name and schema for the model, and a function for the worker."""
+"""What a tool is: a name and schema for the model, and what runs a call.
+
+There are two kinds. A `Tool` is a function that runs in the worker, for
+tools that are runtime code. A `SandboxTool` (`runtime.tools.sandboxed`)
+turns the model's input into a command that runs in a container of its own.
+"""
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from runtime.tools.sandboxed import SandboxTool
 
 
 @dataclass(frozen=True, slots=True)
@@ -13,6 +21,8 @@ class ToolResult:
 
     content: str
     is_error: bool = False
+    # True when the output was cut to fit the result. The content says so too.
+    truncated: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,13 +82,17 @@ class Tool:
         }
 
 
+# Either kind of tool.
+type AnyTool = Tool | SandboxTool
+
+
 class ToolRegistry:
     """The tools a worker offers, by name."""
 
-    def __init__(self, tools: Iterable[Tool] = ()) -> None:
+    def __init__(self, tools: Iterable[AnyTool] = ()) -> None:
         self._tools = {tool.name: tool for tool in tools}
 
-    def get(self, name: str) -> Tool | None:
+    def get(self, name: str) -> AnyTool | None:
         return self._tools.get(name)
 
     def definitions(self) -> tuple[dict[str, Any], ...]:

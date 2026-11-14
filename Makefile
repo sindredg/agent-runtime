@@ -1,9 +1,13 @@
 .PHONY: all up down clean logs test integration chaos
 
+# The group that owns the Docker socket. The worker joins it to start a
+# container for each sandboxed tool call. Every compose command needs it.
+export DOCKER_GID ?= $(shell stat -c %g /var/run/docker.sock)
+
 # The default target runs the unit tests.
 all: test
 
-# Build the image, start every service, and wait until all are healthy.
+# Build the images, start every service, and wait until all are healthy.
 up:
 	docker compose up --build --wait
 

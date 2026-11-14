@@ -9,6 +9,8 @@ from runtime.config import WorkerConfig
 from runtime.failpoints import Failpoints
 from runtime.logs import configure_logging
 from runtime.provider.messages import AnthropicProvider
+from runtime.sandbox.docker import Docker
+from runtime.sandbox.runner import Sandbox
 from runtime.store.engine import create_engine
 from runtime.tools import default_tools
 from runtime.worker.agent import AgentSettings
@@ -40,6 +42,12 @@ async def run(config: WorkerConfig) -> None:
         heartbeat=config.heartbeat_seconds,
         failpoints=Failpoints(config.failpoint, tool=config.failpoint_tool),
     )
+    docker: Docker | None = None
+    sandbox: Sandbox | None = None
+    if config.sandbox is not None:
+        # One Docker client for the worker's life, shared by every sandboxed call.
+        docker = Docker(config.sandbox.docker_socket)
+        sandbox = Sandbox(docker, config.sandbox.settings)
     if config.failpoint or config.chaos_log_dir:
         log.warning(
             "chaos settings are on; this worker is for failure tests",
@@ -53,7 +61,9 @@ async def run(config: WorkerConfig) -> None:
                     engine,
                     provider,
                     default_tools(
-                        tracker_url=config.tracker_url, chaos_log_dir=config.chaos_log_dir
+                        tracker_url=config.tracker_url,
+                        chaos_log_dir=config.chaos_log_dir,
+                        sandbox=sandbox,
                     ),
                     settings,
                     worker_id=config.worker_id,
@@ -62,6 +72,8 @@ async def run(config: WorkerConfig) -> None:
                 )
             )
     finally:
+        if docker is not None:
+            await docker.aclose()
         await provider.aclose()
         await engine.dispose()
 
