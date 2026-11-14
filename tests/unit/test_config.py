@@ -57,6 +57,7 @@ def test_worker_defaults() -> None:
     assert config.heartbeat_seconds == 10.0
     assert config.tracker_url is None
     assert config.sandbox is None
+    assert config.sweep_interval == 300.0
 
 
 def test_worker_settings_are_read() -> None:
@@ -70,6 +71,7 @@ def test_worker_settings_are_read() -> None:
             "LEASE_SECONDS": "2.5",
             "HEARTBEAT_SECONDS": "0.5",
             "TRACKER_URL": "http://fake-tracker:8000/",
+            "SWEEP_INTERVAL_SECONDS": "60",
         }
     )
     assert config.worker_id == "w7"
@@ -79,6 +81,7 @@ def test_worker_settings_are_read() -> None:
     assert config.lease_seconds == 2.5
     assert config.heartbeat_seconds == 0.5
     assert config.tracker_url == "http://fake-tracker:8000"
+    assert config.sweep_interval == 60.0
 
 
 def test_worker_needs_a_database_url() -> None:
@@ -90,6 +93,12 @@ def test_worker_needs_a_database_url() -> None:
 def test_poll_interval_must_be_a_positive_number(value: str) -> None:
     with pytest.raises(ConfigError, match="POLL_INTERVAL_SECONDS"):
         WorkerConfig.from_env({**WORKER_ENV, "POLL_INTERVAL_SECONDS": value})
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "often", "nan", "inf"])
+def test_sweep_interval_must_be_a_positive_number(value: str) -> None:
+    with pytest.raises(ConfigError, match="SWEEP_INTERVAL_SECONDS"):
+        WorkerConfig.from_env({**WORKER_ENV, "SWEEP_INTERVAL_SECONDS": value})
 
 
 @pytest.mark.parametrize("value", ["0", "-1", "long", "nan", "inf"])
