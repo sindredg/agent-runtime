@@ -50,6 +50,8 @@ def test_the_container_is_locked_down() -> None:
     assert host["Tmpfs"] == {"/tmp": "rw,noexec,nosuid,nodev,size=16m"}  # noqa: S108
     assert "Binds" not in host
     assert "Devices" not in host
+    # `timeout` is PID 1, so the command cannot stop it (see the runner).
+    assert host["Init"] is False
 
 
 def test_the_one_mount_is_the_jobs_own_directory_of_the_volume() -> None:
@@ -127,6 +129,8 @@ def test_a_user_that_is_root_or_not_numeric_is_refused(user: str) -> None:
         {"start_within": 0},
         {"start_within": float("nan")},
         {"start_within": float("inf")},
+        {"timeout": 86_400.5},
+        {"start_within": 86_401},
         {"output_limit": 0},
         {"cpus": 0},
         {"cpus": 0.001},

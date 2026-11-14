@@ -40,6 +40,8 @@ TIMEOUT_PROGRAM = "/usr/bin/timeout"
 # Seconds the timeout inside the container waits beyond the worker's own, so
 # that a worker that is still there stops the command first and reports it.
 KILL_MARGIN = 2.0
+# The longest timeout or start bound accepted: one day.
+MAX_SECONDS = 86_400.0
 MIB = 1024 * 1024
 _USER = re.compile(r"([0-9]+):([0-9]+)")
 
@@ -78,8 +80,11 @@ class SandboxSettings:
         # `not value > 0` also refuses NaN.
         for name in ("timeout", "start_within"):
             value = getattr(self, name)
-            if not value > 0 or math.isinf(value):
-                raise ValueError(f"{name} must be a positive number, got {value!r}")
+            # `not value > 0` also refuses NaN.
+            if not value > 0 or value > MAX_SECONDS:
+                raise ValueError(
+                    f"{name} must be above 0 and at most {MAX_SECONDS:g}, got {value!r}"
+                )
         # Docker reads a CPU limit of 0 as no limit, and refuses less than 0.01.
         if not 0.01 <= self.cpus < math.inf:
             raise ValueError(f"cpus must be at least 0.01, got {self.cpus!r}")
@@ -139,8 +144,13 @@ def container_config(
             "Memory": settings.memory,
             "MemorySwap": settings.memory,
             "PidsLimit": settings.pids,
-            # A small init as PID 1 reaps the processes the command leaves.
-            "Init": True,
+            # No init: `timeout` is PID 1. The kernel does not deliver a
+            # signal it has no handler for, SIGSTOP and SIGKILL among them, to
+            # the init of a namespace from inside it, so the command cannot
+            # stop its own timeout. When `timeout` ends, every process left in
+            # the container ends with it. The cost: nothing reaps orphaned
+            # processes during the call, and they count toward `pids`.
+            "Init": False,
             "IpcMode": "private",
             "LogConfig": {"Type": "none", "Config": {}},
             # In the container's memory, not on the host.
@@ -213,16 +223,23 @@ class Sandbox:
 
         Running ones are killed. Returns how many were removed. A container
         whose epoch cannot be read is removed too: it is not this worker's.
-        Raises SandboxError.
+        One that cannot be removed does not stop the others. Raises
+        SandboxError when the list cannot be read or any removal failed.
         """
-        found = await self.docker.containers({JOB_LABEL: str(job_id)})
-        removed = 0
+        found = await self.docker.containers({LABEL: "1", JOB_LABEL: str(job_id)})
+        removed, failed = 0, []
         for container in found:
             epoch = _epoch(container)
             if epoch is not None and epoch >= lease_epoch:
                 continue
-            await self.docker.remove(str(container["Id"]))
+            try:
+                await self.docker.remove(str(container["Id"]))
+            except SandboxError as error:
+                failed.append(f"{container['Id']}: {error}")
+                continue
             removed += 1
+        if failed:
+            raise SandboxError(f"{len(failed)} container(s) not removed: {'; '.join(failed)}")
         return removed
 
     async def run(self, job_id: UUID, lease_epoch: int, argv: Sequence[str]) -> Run:
@@ -252,7 +269,15 @@ class Sandbox:
                     async with deadline:
                         # From here on the command may run, whatever Docker answers.
                         started = True
-                        await self.docker.start(name)
+                        # The whole request, not each phase of it: the start
+                        # bound in `ends_within` counts on it.
+                        try:
+                            async with asyncio.timeout(REQUEST_TIMEOUT):
+                                await self.docker.start(name)
+                        except TimeoutError as error:
+                            raise SandboxError(
+                                f"Docker did not answer the start in {REQUEST_TIMEOUT:g} s"
+                            ) from error
                         async for chunk in stream:
                             output.feed(chunk)
                         exit_code = await self.docker.wait(name)

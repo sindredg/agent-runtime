@@ -391,8 +391,9 @@ def test_the_next_worker_removes_a_dead_workers_container_and_waits_out_the_call
     stack: Stack, workspace_volume: tuple[Path, str], settings: SandboxSettings
 ) -> None:
     assert stack.workspace_root == workspace_volume[0]
-    # A short bound, so the test waits seconds and not a minute.
-    short = dataclasses.replace(settings, timeout=5.0, start_within=2.0)
+    # A short bound, so the test waits seconds and not a minute. The command's
+    # own timeout (10 s plus the margin) ends it far later than the removal.
+    short = dataclasses.replace(settings, timeout=10.0, start_within=2.0)
     bound = ends_within(short)
 
     taken = kill_during_a_call_then_take_over(stack, workspace_volume, short)
@@ -417,8 +418,16 @@ def test_the_next_worker_removes_a_dead_workers_container_and_waits_out_the_call
     assert (question.created_at - intent.created_at).total_seconds() >= bound
 
 
+@pytest.mark.parametrize(
+    "script",
+    [
+        "sleep 300 & sleep 300",
+        # The command tries to stop or kill the timeout that bounds it.
+        "kill -STOP $PPID; kill -STOP 1; kill -KILL 1; sleep 300",
+    ],
+)
 def test_a_container_left_by_a_dead_worker_ends_at_its_own_timeout(
-    settings: SandboxSettings, workspace_volume: tuple[Path, str]
+    settings: SandboxSettings, workspace_volume: tuple[Path, str], script: str
 ) -> None:
     """Nobody removes it, and it still does not run on: the timeout is inside the container."""
     job_id = new_workspace(workspace_volume[0])
@@ -426,7 +435,7 @@ def test_a_container_left_by_a_dead_worker_ends_at_its_own_timeout(
 
     async def abandon() -> str:
         call = asyncio.ensure_future(
-            DyingWorkersSandbox(short).run(job_id, 1, ["/bin/sh", "-c", "sleep 300 & sleep 300"])
+            DyingWorkersSandbox(short).run(job_id, 1, ["/bin/sh", "-c", script])
         )
         async with asyncio.timeout(30):
             while not (found := await asyncio.to_thread(our_containers, workspace_volume[1])):  # noqa: ASYNC110 - Docker has no event to wait on

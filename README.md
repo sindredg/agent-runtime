@@ -223,7 +223,7 @@ uv installs the pinned Python and tools into `.venv`.
 | `make clean` | Stop the services, delete the database volume |
 | `make test` | Unit tests |
 | `make integration` | Integration tests. Needs the stack from `make up`. |
-| `make chaos` | Chaos tests. Starts the stack with three workers, a 2 second lease and a 5 second sandbox timeout, then kills, pauses and crashes workers. `CHAOS_RUNS` sets the number of runs with a random kill time (default 20), `CHAOS_SEED` the times. Run `make up` afterwards to get the normal stack back. |
+| `make chaos` | Chaos tests. Starts the stack with three workers, a 2 second lease and a 10 second sandbox timeout, then kills, pauses and crashes workers. `CHAOS_RUNS` sets the number of runs with a random kill time (default 20), `CHAOS_SEED` the times. Run `make up` afterwards to get the normal stack back. |
 
 The stack publishes four ports, all on `127.0.0.1` only: the API on 8000,
 Postgres on 5432, the fake provider on 8001 and the fake tracker on 8002.

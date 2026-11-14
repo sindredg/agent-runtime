@@ -165,7 +165,7 @@ move inside its `UPDATE`. Nothing calls it yet: it is there for cancel.
 | Duplicate steps | A second step with the same (`job_id`, `seq`) is refused. In a fenced write the refusal undoes the token count with it. |
 | Resume | See [What happens when a worker goes away](#what-happens-when-a-worker-goes-away). |
 | Graceful stop | On SIGTERM the worker claims nothing more. At the next step boundary it releases the job: `running` to `queued`, fenced, so the next claim is not a takeover. A model call in flight is cancelled at once. A running tool is waited for and its result stored. The compose stack gives the worker 45 seconds before Docker kills it, longer than the sandbox timeout of 30. |
-| Sandbox | Each `run_shell` or `list_dir` call is one container (`sandbox/runner.py`), created from fixed settings: the model's input becomes only the command's arguments. No network, a read-only root with an in-memory `/tmp` of 16 MiB, all capabilities dropped, `no-new-privileges`, uid 10001, 1 CPU, 256 MiB of memory and no swap, 64 processes, no log driver. The one mount is the job's directory of the workspace volume, by `volume-subpath`, at `/workspace`. The worker names the container itself, reads stdout and stderr from the attach stream as one stream, and keeps the first 64 KiB. The timeout counts from the start to the exit status; when it passes, the container is killed. The command also runs under `timeout` inside the container, at the timeout plus 2 s, so a container whose worker is gone ends by itself; when that kill ends the command, the container's init exits and Docker stops every process left in it. Docker is not asked to start the command later than `start_within` (15 s) after the call began. Each container carries the job id and the lease epoch as labels. It is removed by name after every call, also when the call was cancelled, in a task that a second cancel does not stop. The result is the output, then the exit status or the timeout, and a note if the output was cut. Invalid UTF-8 and NUL bytes become U+FFFD, and the whole text is at most 64 KiB. A non-zero exit, a timeout, or a Docker failure is an error result, and the job goes on. A Docker failure before the start says the command did not run; after it, that it may have run. |
+| Sandbox | Each `run_shell` or `list_dir` call is one container (`sandbox/runner.py`), created from fixed settings: the model's input becomes only the command's arguments. No network, a read-only root with an in-memory `/tmp` of 16 MiB, all capabilities dropped, `no-new-privileges`, uid 10001, 1 CPU, 256 MiB of memory and no swap, 64 processes, no log driver. The one mount is the job's directory of the workspace volume, by `volume-subpath`, at `/workspace`. The worker names the container itself, reads stdout and stderr from the attach stream as one stream, and keeps the first 64 KiB. The timeout counts from the start to the exit status; when it passes, the container is killed. The command also runs under `timeout` inside the container, at the timeout plus 2 s, so a container whose worker is gone ends by itself. `timeout` is the container's PID 1, with no other init: the kernel does not let a process in the container stop or kill its namespace's init, so the command cannot freeze its own timeout, and when `timeout` exits every process left in the container ends. Nothing reaps orphaned processes during a call; they count toward the 64. Docker is not asked to start the command later than `start_within` (15 s) after the call began, and the start request as a whole has 10 s. Each container carries the job id and the lease epoch as labels. It is removed by name after every call, also when the call was cancelled, in a task that a second cancel does not stop. The result is the output, then the exit status or the timeout, and a note if the output was cut. Invalid UTF-8 and NUL bytes become U+FFFD, and the whole text is at most 64 KiB. A non-zero exit, a timeout, or a Docker failure is an error result, and the job goes on. A Docker failure before the start says the command did not run; after it, that it may have run. |
 | Tool calls | A response is checked before any of its tools run: every tool call needs an id, a name and an object input, ids must differ, and no id may repeat one from an earlier response of the job. A response that fails the check fails the job. The calls of one response run one after another. A failed call is an error result for the model, and the job goes on. |
 | Provider errors | A failed model call fails the job with an `error` step. There is no retry. |
 | Limits | `token_budget` and `deadline` are stored and not enforced. `tokens_used` is counted from the usage of each response that was received in full. A call that fails or is abandoned part way is not counted. |
@@ -188,8 +188,9 @@ Docker request timeout (10 s) plus the sandbox timeout plus 2 s. 57 s with the
 defaults. Before it decides anything about such a call, the worker that took
 the job over (`worker/agent.py`):
 
-1. Removes the job's containers whose lease epoch label is lower than its own,
-   running or not. A failure to remove is logged, and the wait still applies.
+1. Removes the job's sandbox containers whose lease epoch label is lower than
+   its own, running or not. A failure to remove one is logged, the others are
+   still removed, and the wait still applies.
 2. Waits until `ends_within` has passed since the intent, by the database
    clock. A container on another host, or one whose start request was still
    on its way, cannot be removed from here. A stop or a lost lease ends the
@@ -311,9 +312,9 @@ Accepted, with the reason in the decision records:
   command runs until it ends, reaches its timeout, or a worker that takes the
   job over on the same host removes its container.
 - The wait before a decision about an interrupted sandboxed call assumes the
-  worker that started it was not paused between the intent and the start
-  request, and that Docker does not act on a request after the worker gave up
-  on it. A container that starts later than that can still run when the
+  worker that started it was not paused or slowed between the intent and the
+  start of the call, for example by a slow commit of the intent, and that
+  Docker does not act on a request after the worker gave up on it. A container that starts later than that can still run when the
   decision is made. A takeover during a sandboxed call costs up to
   `ends_within` (57 s with the defaults) before the job goes on.
 - The worker holds the Docker socket. Whoever controls the worker controls

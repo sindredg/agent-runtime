@@ -169,6 +169,11 @@ async def _wait_unless_stopped(seconds: float, stop: asyncio.Event, lease: Lease
         for waiter in (slept, stopped, lost):
             waiter.cancel()
         await asyncio.gather(slept, stopped, lost, return_exceptions=True)
+    for waiter in (slept, stopped, lost):
+        # A watcher that failed says nothing about the time, a stop or the
+        # lease. Read as the end of the wait, the call would be decided early.
+        if not waiter.cancelled() and (broken := waiter.exception()) is not None:
+            raise broken
     if lease.lost:
         raise LeaseLost(lease.job_id, lease.epoch)
     return not stop.is_set()
