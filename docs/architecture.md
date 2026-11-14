@@ -196,6 +196,12 @@ is asked again.
 | `create_issue` | No | Asks the tracker for an issue with the operation id. Found: done. A clear answer with none: not done. Anything else: unknown. |
 | `crash_worker` | Yes, on purpose | |
 
+`create_issue` uses the same lookup when its own request gets no answer: a
+timeout or a broken connection. Found: the result says the issue was created.
+Not found, or no clear answer: the result is an error that says the issue may
+exist. The model is then not told that a call failed which went through. The
+tool can take two request timeouts this way, 20 seconds.
+
 ### Failure tests
 
 These exist for the tests in `tests/chaos` and do nothing unless switched on.

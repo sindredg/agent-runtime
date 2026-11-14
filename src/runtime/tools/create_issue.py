@@ -3,6 +3,10 @@
 The one tool here that changes something outside the runtime. It sends the
 call's operation id with the issue and brings a check that looks the id up,
 so a call that was interrupted is not repeated when the issue already exists.
+
+The run uses the same lookup when its request got no answer. The tracker may
+have stored the issue by then, and a model that is told the call failed may
+make it again: a new call, which no operation id connects to the first.
 """
 
 from typing import Any
@@ -42,7 +46,16 @@ def create_issue_tool(tracker_url: str, *, transport: httpx2.BaseTransport | Non
                 return ToolResult(f"the tracker answered {response.status_code}", is_error=True)
             return _created(response.json())
         except httpx2.HTTPError as error:
-            return ToolResult(f"the tracker could not be reached: {error!r}", is_error=True)
+            # No answer is not a no: the request may have arrived. Ask for
+            # the issue before telling the model that the call failed.
+            found = check(call)
+            if isinstance(found, ToolResult):
+                return found
+            # Not found is not a no either. The request may still arrive.
+            return ToolResult(
+                f"the tracker could not be reached: {error!r}. The issue may exist all the same.",
+                is_error=True,
+            )
         except (ValueError, LookupError, TypeError) as error:
             return ToolResult(f"the tracker's answer was not an issue: {error!r}", is_error=True)
 
