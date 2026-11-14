@@ -271,3 +271,7 @@ SQL without a database:
 ```sh
 DATABASE_URL=postgresql://user:pass@host/db uv run alembic upgrade head --sql
 ```
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).
