@@ -8,6 +8,7 @@ directory of it by subpath, as it does with the stack's workspace volume.
 
 import asyncio
 import dataclasses
+import ipaddress
 import os
 import subprocess
 import time
@@ -15,6 +16,7 @@ import uuid
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -23,6 +25,7 @@ from runtime.provider.base import ModelRequest, ModelResponse
 from runtime.provider.messages import AnthropicProvider
 from runtime.sandbox.docker import Docker
 from runtime.sandbox.runner import LABEL, Run, Sandbox, SandboxSettings, ends_within
+from runtime.scope import FIXED_DENY, Resolved
 from runtime.store.jobs import claim_job
 from runtime.store.status import JobStatus
 from runtime.store.steps import Step, StepKind, read_steps
@@ -116,10 +119,16 @@ class OwnClientSandbox:
     def __init__(self, settings: SandboxSettings) -> None:
         self.settings = settings
 
-    async def run(self, job_id: uuid.UUID, lease_epoch: int, argv: Sequence[str]) -> Run:
+    async def run(
+        self,
+        job_id: uuid.UUID,
+        lease_epoch: int,
+        argv: Sequence[str],
+        scope: Resolved | None = None,
+    ) -> Run:
         docker = Docker(SOCKET)
         try:
-            return await self.kind(docker, self.settings).run(job_id, lease_epoch, argv)
+            return await self.kind(docker, self.settings).run(job_id, lease_epoch, argv, scope)
         finally:
             await docker.aclose()
 
@@ -519,3 +528,113 @@ def test_the_command_cannot_trace_its_timeout_but_can_trace_its_own_child(
     done = shell(settings, job_id, script)
 
     assert done.output.decode().splitlines() == ["refused: Operation not permitted", "attached"]
+
+
+# A job with a scope (ADR 0009): the worker resolves it before the intent,
+# writes the addresses into the log, and stores the guard's count.
+
+GUARD_IMAGE = os.environ.get("GUARD_IMAGE", "agent-runtime-guard:dev")
+
+
+@pytest.fixture
+def guard_network() -> Iterator[tuple[str, str]]:
+    """A network for guards, with one listening target on it: (network, target address)."""
+    network = f"test-guards-{uuid.uuid4().hex}"
+    target = f"test-target-{uuid.uuid4().hex[:8]}"
+    docker_cli("network", "create", network)
+    try:
+        docker_cli(
+            "run", "--detach", "--name", target, "--network", network, IMAGE, "perl",
+            "-MIO::Socket::INET", "-e",
+            '$| = 1; $s = IO::Socket::INET->new(LocalPort => 8080, Listen => 5, ReuseAddr => 1)'
+            ' or die; print "listening\\n"; while ($c = $s->accept) { print $c "hi\\n"; close $c }',
+        )  # fmt: skip
+        deadline = time.monotonic() + 30
+        while "listening" not in docker_cli("logs", target):
+            assert time.monotonic() < deadline
+            time.sleep(0.1)
+        address = docker_cli(
+            "inspect", "-f", f'{{{{(index .NetworkSettings.Networks "{network}").IPAddress}}}}',
+            target,
+        ).strip()  # fmt: skip
+        yield network, address
+    finally:
+        for container in docker_cli("ps", "-aq", "--filter", f"network={network}").split():
+            docker_cli("rm", "--force", container)
+        docker_cli("network", "rm", network)
+
+
+def scoped_job(
+    stack: Stack, settings: SandboxSettings, scope: list[dict[str, Any]], command: str
+) -> TakenOver:
+    provider = OneLongCommand(command)
+
+    async def body(engine: AsyncEngine, _: AnthropicProvider) -> TakenOver:
+        async with engine.begin() as conn:
+            await stack.create(conn, {"prompt": "reach it", "scope": scope})
+            claimed = await claim_job(conn, worker_id="w1")
+        assert claimed is not None
+        status = await run_job(
+            engine,
+            provider,
+            default_tools(sandbox=OwnClientSandbox(settings)),
+            claimed,
+            stack.settings(),
+        )
+        async with engine.connect() as conn:
+            steps = await read_steps(conn, claimed.id)
+        return TakenOver(status, steps, None, 0.0)
+
+    return stack.run(body)
+
+
+def test_a_scoped_call_records_its_addresses_and_the_dropped_packets(
+    stack: Stack,
+    workspace_volume: tuple[Path, str],
+    settings: SandboxSettings,
+    guard_network: tuple[str, str],
+) -> None:
+    assert stack.workspace_root == workspace_volume[0]
+    network, target = guard_network
+    scoped = dataclasses.replace(settings, guard_image=GUARD_IMAGE, network=network)
+
+    ran = scoped_job(
+        stack,
+        scoped,
+        [{"host": target, "ports": [8080]}],
+        f"timeout 3 bash -c 'exec 3<>/dev/tcp/{target}/8080 && head -1 <&3';"
+        " timeout 3 bash -c 'exec 3<>/dev/tcp/1.1.1.1/443' || echo blocked",
+    )
+
+    assert ran.status is JobStatus.SUCCEEDED
+    intent = next(step for step in ran.steps if step.kind is StepKind.TOOL_INTENT)
+    result = next(step for step in ran.steps if step.kind is StepKind.TOOL_RESULT)
+    assert intent.payload["scope"] == [
+        {"host": target, "addresses": [f"{target}/32"], "ports": [8080]}
+    ]
+    assert result.payload["content"].startswith("hi\nblocked\n[exit status 0]")
+    assert result.payload["dropped_packets"] > 0
+
+
+def test_a_scope_that_touches_the_workers_deny_list_starts_no_call(
+    stack: Stack,
+    workspace_volume: tuple[Path, str],
+    settings: SandboxSettings,
+    guard_network: tuple[str, str],
+) -> None:
+    assert stack.workspace_root == workspace_volume[0]
+    network, target = guard_network
+    # As in the stack: the guards' own network is in the deny list.
+    denied = ipaddress.ip_network(f"{target}/16", strict=False)
+    scoped = dataclasses.replace(
+        settings, guard_image=GUARD_IMAGE, network=network, deny=(*FIXED_DENY, denied)
+    )
+
+    ran = scoped_job(stack, scoped, [{"host": target}], "echo should not run")
+
+    kinds = [step.kind for step in ran.steps]
+    assert StepKind.TOOL_INTENT not in kinds
+    result = next(step for step in ran.steps if step.kind is StepKind.TOOL_RESULT)
+    assert result.payload["is_error"] is True
+    assert "is in the deny list" in result.payload["content"]
+    assert our_containers(workspace_volume[1]) == []

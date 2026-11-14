@@ -23,7 +23,9 @@ def run_shell_tool(sandbox: Runner) -> SandboxTool:
         name="run_shell",
         description=(
             "Run a command with /bin/sh in the job workspace and return its output and exit"
-            f" status. It has no network. It is stopped after {settings.timeout:g} seconds,"
+            " status. It reaches only the job's scope on the network, and has no name"
+            " lookup: names in the scope resolve as given, nothing else does. Without a"
+            f" scope it has no network. It is stopped after {settings.timeout:g} seconds,"
             f" and output past {settings.output_limit} bytes is cut. Only files in the"
             " workspace are kept between calls."
         ),
@@ -40,4 +42,5 @@ def run_shell_tool(sandbox: Runner) -> SandboxTool:
         # A command can change anything in the workspace. An interrupted one
         # is not run again without a person.
         idempotent=False,
+        networked=True,
     )

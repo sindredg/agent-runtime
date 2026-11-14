@@ -197,3 +197,45 @@ def test_api_settings_are_read() -> None:
 def test_api_needs_a_database_url() -> None:
     with pytest.raises(ConfigError, match="DATABASE_URL"):
         ApiConfig.from_env({})
+
+
+SANDBOX_ENV = {**WORKER_ENV, "SANDBOX_IMAGE": "sandbox:dev", "SANDBOX_VOLUME": "workspaces"}
+
+
+def test_a_sandbox_without_a_guard_cannot_scope_a_call() -> None:
+    config = WorkerConfig.from_env(SANDBOX_ENV)
+
+    assert config.sandbox is not None
+    assert config.sandbox.settings.guard_image is None
+    assert config.sandbox.settings.network is None
+
+
+def test_the_guard_settings_are_read() -> None:
+    config = WorkerConfig.from_env(
+        {
+            **SANDBOX_ENV,
+            "GUARD_IMAGE": "guard:dev",
+            "SANDBOX_NETWORK": "sandbox-net",
+            "SANDBOX_DENY_NETWORKS": "stack-net, other-net",
+        }
+    )
+
+    assert config.sandbox is not None
+    assert config.sandbox.settings.guard_image == "guard:dev"
+    assert config.sandbox.settings.network == "sandbox-net"
+    assert config.sandbox.deny_networks == ("stack-net", "other-net")
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"GUARD_IMAGE": "guard:dev"},
+        {"SANDBOX_NETWORK": "sandbox-net"},
+        # The runtime's own network has to be in the deny list.
+        {"GUARD_IMAGE": "guard:dev", "SANDBOX_NETWORK": "sandbox-net"},
+        {"GUARD_IMAGE": "guard:dev", "SANDBOX_NETWORK": "n", "SANDBOX_DENY_NETWORKS": " , "},
+    ],
+)
+def test_guard_settings_that_do_not_fit_together_are_refused(changes: dict[str, str]) -> None:
+    with pytest.raises(ConfigError, match=r"GUARD_IMAGE|SANDBOX_DENY_NETWORKS"):
+        WorkerConfig.from_env({**SANDBOX_ENV, **changes})

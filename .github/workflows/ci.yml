@@ -84,7 +84,7 @@ jobs:
             "https://github.com/hadolint/hadolint/releases/download/v${HADOLINT_VERSION}/hadolint-linux-x86_64"
           echo "$HADOLINT_SHA256  $RUNNER_TEMP/hadolint" | sha256sum --check --strict
           chmod +x "$RUNNER_TEMP/hadolint"
-          "$RUNNER_TEMP/hadolint" Dockerfile images/sandbox/Dockerfile
+          "$RUNNER_TEMP/hadolint" Dockerfile images/sandbox/Dockerfile images/guard/Dockerfile
       - name: checkmake
         run: |
           curl -fsSL -o "$RUNNER_TEMP/checkmake" \

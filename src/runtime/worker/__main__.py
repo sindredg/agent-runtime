@@ -1,6 +1,7 @@
 """Worker entry point: `python -m runtime.worker`."""
 
 import asyncio
+import dataclasses
 import logging
 import signal
 from datetime import timedelta
@@ -10,7 +11,7 @@ from runtime.failpoints import Failpoints
 from runtime.logs import configure_logging
 from runtime.provider.messages import AnthropicProvider
 from runtime.sandbox.docker import Docker
-from runtime.sandbox.runner import Sandbox, check_host
+from runtime.sandbox.runner import Sandbox, check_host, deny_list
 from runtime.store.engine import create_engine
 from runtime.tools import default_tools
 from runtime.worker.agent import AgentSettings
@@ -52,7 +53,18 @@ async def run(config: WorkerConfig) -> None:
     if config.sandbox is not None:
         # One Docker client for the worker's life, shared by every sandboxed call.
         docker = Docker(config.sandbox.docker_socket)
-        sandbox = Sandbox(docker, config.sandbox.settings)
+        sandbox_settings = config.sandbox.settings
+        if sandbox_settings.network is not None:
+            # The guard network's own subnet too: tools of other jobs are on it.
+            names = (sandbox_settings.network, *config.sandbox.deny_networks)
+            sandbox_settings = dataclasses.replace(
+                sandbox_settings, deny=await deny_list(docker, names)
+            )
+            log.info(
+                "scoped calls enabled",
+                extra={"deny": [str(network) for network in sandbox_settings.deny]},
+            )
+        sandbox = Sandbox(docker, sandbox_settings)
     if config.failpoint or config.chaos_log_dir:
         log.warning(
             "chaos settings are on; this worker is for failure tests",

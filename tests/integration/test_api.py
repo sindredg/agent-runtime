@@ -217,6 +217,14 @@ def test_submit_applies_the_configured_defaults(database_url: str) -> None:
         {"prompt": "go", "files": {"a/": "1"}},
         {"prompt": "go", "files": {"n" * 3_000_000: "1"}},
         {"prompt": "x" * 1_000_001},
+        # Scopes that cannot be read, or that ask for the deny list.
+        {"prompt": "go", "scope": []},
+        {"prompt": "go", "scope": [{"host": "*.example"}]},
+        {"prompt": "go", "scope": [{"host": "10.0.0.5/24"}]},
+        {"prompt": "go", "scope": [{"host": "10.0.0.5", "ports": [70000]}]},
+        {"prompt": "go", "scope": [{"host": "169.254.169.254"}]},
+        {"prompt": "go", "scope": [{"host": "0.0.0.0/0"}]},
+        {"prompt": "go", "scope": "10.0.0.5"},
     ],
 )
 def test_submit_refuses_with_422_and_stores_nothing(
@@ -629,3 +637,22 @@ def test_two_approvals_at_once_approve_once(database_url: str) -> None:
     assert sorted(codes) == [200, 409, 409, 409, 409]
     assert [step.kind for step in steps].count(StepKind.APPROVAL_GIVEN) == 1
     assert [step.seq for step in steps] == [1, 2, 3]
+
+
+def test_a_scope_is_stored_with_the_job_in_its_plain_form(database_url: str) -> None:
+    async def body(api: Api) -> httpx2.Response:
+        return await api.client.post(
+            "/jobs",
+            json={
+                "prompt": "go",
+                "scope": [{"host": "Lab.Example", "ports": [443, 80]}, {"host": "10.0.1.0/24"}],
+            },
+        )
+
+    response = api_test(database_url, body)
+
+    assert response.status_code == 201
+    assert response.json()["spec"]["scope"] == [
+        {"host": "lab.example", "ports": [80, 443]},
+        {"host": "10.0.1.0/24"},
+    ]

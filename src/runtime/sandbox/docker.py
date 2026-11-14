@@ -127,6 +127,22 @@ class Docker:
             raise SandboxError("Docker's list of containers has an unexpected shape")
         return found
 
+    async def kill(self, container_id: str, signal: str) -> None:
+        """Send `signal` to the container's main process."""
+        await self._send("POST", f"/containers/{container_id}/kill", 204, params={"signal": signal})
+
+    async def network_subnets(self, name: str) -> list[str]:
+        """The subnets of a Docker network, as its IPAM configuration gives them."""
+        response = await self._send("GET", f"/networks/{name}", 200)
+        try:
+            configs = response.json()["IPAM"]["Config"] or []
+            subnets = [config["Subnet"] for config in configs if "Subnet" in config]
+        except (ValueError, LookupError, TypeError) as error:
+            raise SandboxError(f"Docker's answer for network {name!r} has no subnets") from error
+        if not subnets or not all(isinstance(subnet, str) for subnet in subnets):
+            raise SandboxError(f"Docker's answer for network {name!r} has no subnets")
+        return subnets
+
     async def remove(self, container_id: str) -> None:
         """Remove the container, killing it first if it still runs. Gone already is fine."""
         await self._send("DELETE", f"/containers/{container_id}", 204, 404, params={"force": "1"})

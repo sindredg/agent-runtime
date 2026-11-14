@@ -92,6 +92,10 @@ class SandboxConfig:
 
     docker_socket: str
     settings: SandboxSettings
+    # Docker networks whose subnets no scope can reach: the runtime's own.
+    # The worker adds them, and the guard network's, to the deny list when
+    # it starts (ADR 0009).
+    deny_networks: tuple[str, ...] = ()
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> SandboxConfig | None:
@@ -99,13 +103,26 @@ class SandboxConfig:
         image = env.get("SANDBOX_IMAGE", "")
         if not image:
             return None
+        guard_image = env.get("GUARD_IMAGE") or None
+        network = env.get("SANDBOX_NETWORK") or None
+        if (guard_image is None) != (network is None):
+            raise ConfigError("GUARD_IMAGE and SANDBOX_NETWORK are set together or not at all")
+        deny_networks = tuple(
+            name.strip() for name in env.get("SANDBOX_DENY_NETWORKS", "").split(",") if name.strip()
+        )
+        if guard_image is not None and not deny_networks:
+            # A scoped tool on the runtime's own network could reach Postgres.
+            raise ConfigError("SANDBOX_DENY_NETWORKS must name the runtime's own networks")
         return cls(
             docker_socket=env.get("DOCKER_SOCKET") or "/var/run/docker.sock",
             settings=SandboxSettings(
                 image=image,
                 volume=_required(env, "SANDBOX_VOLUME"),
                 timeout=_positive_float(env, "SANDBOX_TIMEOUT_SECONDS", 30.0),
+                guard_image=guard_image,
+                network=network,
             ),
+            deny_networks=deny_networks,
         )
 
 

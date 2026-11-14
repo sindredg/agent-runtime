@@ -15,20 +15,21 @@ was interrupted is run again only when that is known to be safe; otherwise
 the job waits for a person to approve. A job that takes its worker down every
 time is failed after five takeovers. See [Results](#results).
 
-Built, escape tests not written yet: `run_shell` and `list_dir` run each call
-in a container of its own, with no network, a read-only root, no
-capabilities, a user that is not root, limits on CPU, memory and processes,
-and only the job's workspace directory. Each call has a timeout, and its
-output is cut at 64 KiB. `read_file` and `create_issue` still run in the
+`run_shell` and `list_dir` run each call in a container of its own, with a
+read-only root, no capabilities, a user that is not root, limits on CPU,
+memory and processes, and only the job's workspace directory. Each call has a
+timeout, and its output is cut at 64 KiB. Without a scope a call has no
+network. A job's `scope` lets `run_shell` reach its targets and nothing else:
+a guard container per call holds the firewall, and the count of dropped
+packets goes into the log. `read_file` and `create_issue` still run in the
 worker process.
 
 Not built: retry on provider errors and rate limits, deadlines, and cancel.
 The full list is in
 [Known limits](docs/architecture.md#known-limits).
 
-Decided and not built: a target scope that the tools cannot leave, a way to
-halt a job, and approval before a risky tool call. See ADR 0007 to 0011 under
-[Design](#design).
+Decided and not built: a way to halt a job, and approval before a risky tool
+call. See ADR 0010 and 0011 under [Design](#design).
 
 Locally the model provider is a fake that answers from scenario files, so
 nothing here calls a paid API.
@@ -102,6 +103,7 @@ clean` stops the stack and deletes its database.
 | `system` | no | System prompt. Not empty if given. |
 | `model` | no | Model id. Default: the worker's `MODEL`. With the fake provider it names a scenario. |
 | `files` | no | Text files written into the job's workspace before it starts: relative path to content. 1 MiB in total, paths included. Paths are plain relative paths: no `..`, no `./`, no trailing `/`, and no path that is also a directory of another. |
+| `scope` | no | What `run_shell` may reach on the network: a list of targets, each `{"host": ..., "ports": [...]}`. `host` is an address (`10.0.0.5`), a range (`10.0.0.0/24`) or a host name (`lab.example`, resolved by the worker once per call, no wildcards); `ports` are TCP and UDP ports, left out for all. At most 64 targets. A target in the fixed deny list (link-local and the cloud metadata address) is refused here; one in the runtime's own networks is refused when a call starts. Left out: no network. |
 | `token_budget` | no | At least 1. A model call is not made when the upper bound of its input does not fit what is left; the job then fails. See [Limits](docs/architecture.md). |
 | `timeout_seconds` | no | 1 to 604800 (one week). Sets the job's deadline. Not enforced yet. |
 
@@ -203,8 +205,8 @@ What these results do not show:
   each tool call in its own container, started by the worker. Built for
   `run_shell` and `list_dir`.
 - [ADR 0009](docs/adr/0009-enforce-the-target-scope-in-the-network-namespace.md):
-  enforce a job's target scope in the network namespace of its tools. Not
-  built.
+  enforce a job's target scope in the network namespace of its tools. Built
+  for `run_shell`.
 - [ADR 0010](docs/adr/0010-one-halt-path-and-a-budget-bound.md): halt a job
   through one path, and bound a model call's tokens before it is sent. Not
   built.

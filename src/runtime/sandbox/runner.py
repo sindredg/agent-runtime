@@ -13,10 +13,12 @@ epoch, so that the worker that takes the job over can remove it.
 """
 
 import asyncio
+import contextlib
+import ipaddress
 import logging
 import math
 import re
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -24,6 +26,7 @@ from uuid import UUID, uuid4
 
 from runtime.sandbox.docker import REQUEST_TIMEOUT, Docker, SandboxError
 from runtime.sandbox.output import Output
+from runtime.scope import FIXED_DENY, Network, Resolved, parse_dropped, ruleset
 
 log = logging.getLogger("runtime.sandbox")
 
@@ -69,6 +72,13 @@ class SandboxSettings:
     pids: int = 64
     # The in-memory /tmp. It counts toward `memory`.
     tmp_size: int = 16 * MIB
+    # For a job with a scope (ADR 0009): the image of the guard container
+    # that holds the firewall, and the Docker network it joins. Both unset:
+    # no call can be scoped.
+    guard_image: str | None = None
+    network: str | None = None
+    # Addresses no scope can open. Always holds FIXED_DENY.
+    deny: tuple[Network, ...] = FIXED_DENY
 
     def __post_init__(self) -> None:
         if not self.image:
@@ -94,6 +104,10 @@ class SandboxSettings:
         if self.output_limit < 1024:
             # The result's notes about the cut and the exit need room.
             raise ValueError(f"output_limit must be at least 1024, got {self.output_limit!r}")
+        if (self.guard_image is None) != (self.network is None):
+            raise ValueError("guard_image and network are set together or not at all")
+        if not set(FIXED_DENY) <= set(self.deny):
+            raise ValueError("deny must hold the fixed deny list")
         for name in ("memory", "pids"):
             if getattr(self, name) < 1:
                 raise ValueError(f"{name} must be at least 1, got {getattr(self, name)!r}")
@@ -115,10 +129,83 @@ def ends_within(settings: SandboxSettings) -> float:
 LONGEST_BOUND = 2 * MAX_SECONDS + REQUEST_TIMEOUT + KILL_MARGIN
 
 
-def container_config(
-    settings: SandboxSettings, job_id: UUID, lease_epoch: int, argv: Sequence[str]
+# What a guard runs: set the rules, say so, wait. On TERM it prints the count
+# of dropped packets and ends. Fixed text: the scope reaches it only as the
+# rules in RULES, built from addresses and ports.
+GUARD_PROGRAM = """set -eu
+printf '%s' "$RULES" | nft -f -
+trap 'nft list counter inet guard dropped; exit 0' TERM
+echo ready
+sleep "$LIFETIME" &
+wait $!
+"""
+
+
+def _labels(job_id: UUID, lease_epoch: int) -> dict[str, str]:
+    return {LABEL: "1", JOB_LABEL: str(job_id), EPOCH_LABEL: str(lease_epoch)}
+
+
+def guard_config(
+    settings: SandboxSettings, job_id: UUID, lease_epoch: int, scope: Resolved
 ) -> dict[str, Any]:
-    """The body of `POST /containers/create` for one call. Only `argv` comes from the model."""
+    """The body of `POST /containers/create` for a scoped call's guard.
+
+    It sets the rules in its network namespace and waits. It is root with
+    NET_ADMIN only, in a namespace of its own; the command never runs in it.
+    The scope reaches it as rules built from addresses and ports, and as
+    pinned host names.
+    """
+    assert settings.guard_image is not None and settings.network is not None  # noqa: S101
+    return {
+        "Image": settings.guard_image,
+        "Cmd": ["/bin/sh", "-c", GUARD_PROGRAM],
+        "Env": [
+            f"RULES={ruleset(scope, settings.deny)}",
+            # It goes away by itself, at the latest when the command must have.
+            f"LIFETIME={math.ceil(ends_within(settings))}",
+        ],
+        "Labels": _labels(job_id, lease_epoch),
+        "AttachStdin": False,
+        "AttachStdout": True,
+        "AttachStderr": True,
+        "OpenStdin": False,
+        "Tty": False,
+        "HostConfig": {
+            "NetworkMode": settings.network,
+            "ReadonlyRootfs": True,
+            "CapDrop": ["ALL"],
+            "CapAdd": ["NET_ADMIN"],
+            "SecurityOpt": ["no-new-privileges:true"],
+            "Privileged": False,
+            "NanoCpus": 250_000_000,
+            "Memory": 32 * MIB,
+            "MemorySwap": 32 * MIB,
+            "PidsLimit": 16,
+            "Init": False,
+            "IpcMode": "private",
+            "LogConfig": {"Type": "none", "Config": {}},
+            # The command shares this namespace and its hosts file: names in
+            # the scope resolve to what the worker resolved, and nothing else.
+            "ExtraHosts": [
+                f"{name}:{address}" for name, addresses in scope.hosts for address in addresses
+            ],
+        },
+    }
+
+
+def container_config(
+    settings: SandboxSettings,
+    job_id: UUID,
+    lease_epoch: int,
+    argv: Sequence[str],
+    *,
+    guard: str | None = None,
+) -> dict[str, Any]:
+    """The body of `POST /containers/create` for one call. Only `argv` comes from the model.
+
+    With `guard`, the command joins that guard's network namespace and gets
+    what its rules allow. Without, it has no network.
+    """
     return {
         "Image": settings.image,
         # `--` ends timeout's options, so the command cannot add any.
@@ -131,15 +218,15 @@ def container_config(
         ],
         "User": settings.user,
         "WorkingDir": WORKDIR,
-        "Labels": {LABEL: "1", JOB_LABEL: str(job_id), EPOCH_LABEL: str(lease_epoch)},
-        "NetworkDisabled": True,
+        "Labels": _labels(job_id, lease_epoch),
+        "NetworkDisabled": guard is None,
         "AttachStdin": False,
         "AttachStdout": True,
         "AttachStderr": True,
         "OpenStdin": False,
         "Tty": False,
         "HostConfig": {
-            "NetworkMode": "none",
+            "NetworkMode": "none" if guard is None else f"container:{guard}",
             "ReadonlyRootfs": True,
             "CapDrop": ["ALL"],
             "SecurityOpt": ["no-new-privileges:true"],
@@ -185,6 +272,9 @@ class Run:
     total: int
     # None when the command was killed at its timeout.
     exit_code: int | None
+    # For a scoped call: packets the guard dropped, to the deny list or
+    # outside the scope. None without a scope, or when the count was lost.
+    dropped: int | None = None
 
     @property
     def timed_out(self) -> bool:
@@ -197,6 +287,20 @@ class Run:
 
 # Yama's ptrace setting of the host kernel. Not namespaced: a container reads the host's.
 PTRACE_SCOPE = Path("/proc/sys/kernel/yama/ptrace_scope")
+
+
+async def deny_list(docker: Docker, networks: Sequence[str]) -> tuple[Network, ...]:
+    """The fixed deny list plus every subnet of these Docker networks. Raises SandboxError."""
+    deny = list(FIXED_DENY)
+    for name in networks:
+        for subnet in await docker.network_subnets(name):
+            try:
+                network = ipaddress.ip_network(subnet, strict=False)
+            except ValueError as error:
+                raise SandboxError(f"network {name!r} has a subnet that cannot be read") from error
+            if network not in deny:
+                deny.append(network)
+    return tuple(deny)
 
 
 def check_host(ptrace_scope: Path = PTRACE_SCOPE) -> None:
@@ -274,57 +378,123 @@ class Sandbox:
             raise SandboxError(f"{len(failed)} container(s) not removed: {'; '.join(failed)}")
         return removed
 
-    async def run(self, job_id: UUID, lease_epoch: int, argv: Sequence[str]) -> Run:
+    async def _start(self, name: str) -> None:
+        """Start a container. The whole request is bounded, not each phase of it."""
+        try:
+            async with asyncio.timeout(REQUEST_TIMEOUT):
+                await self.docker.start(name)
+        except TimeoutError as error:
+            raise SandboxError(
+                f"Docker did not answer the start in {REQUEST_TIMEOUT:g} s"
+            ) from error
+
+    async def _guard_ready(self, name: str, stream: AsyncIterator[bytes], start_by: float) -> None:
+        """Start the guard and wait until its rules are in place, at the latest by `start_by`."""
+        said = Output(4096)
+        try:
+            async with asyncio.timeout_at(start_by):
+                await self._start(name)
+                async for chunk in stream:
+                    said.feed(chunk)
+                    if b"ready\n" in said.kept:
+                        return
+        except TimeoutError as error:
+            raise SandboxError("the guard was not ready in time") from error
+        text = bytes(said.kept).decode("utf-8", "replace")
+        raise SandboxError(f"the guard ended before its rules were in place: {text[:500]}")
+
+    async def _dropped(self, name: str, stream: AsyncIterator[bytes]) -> int | None:
+        """Stop the guard and read its count of dropped packets. None if it cannot be had."""
+        said = Output(4096)
+        try:
+            async with asyncio.timeout(REQUEST_TIMEOUT):
+                await self.docker.kill(name, "TERM")
+                async for chunk in stream:
+                    said.feed(chunk)
+        except SandboxError, TimeoutError:
+            log.exception("guard count not read", extra={"container": name})
+            return None
+        return parse_dropped(bytes(said.kept).decode("utf-8", "replace"))
+
+    def _remove_later(self, name: str) -> asyncio.Future[None]:
+        removal = asyncio.ensure_future(self._remove(name))
+        self._removals.add(removal)
+        removal.add_done_callback(self._removals.discard)
+        return removal
+
+    async def run(
+        self,
+        job_id: UUID,
+        lease_epoch: int,
+        argv: Sequence[str],
+        scope: Resolved | None = None,
+    ) -> Run:
         """Run `argv` in a new container with the job's workspace. Raises SandboxError.
 
-        The container is removed afterwards, also when the call fails or is
-        cancelled. A command still running at the timeout is killed. Docker
-        is not asked to start it once `start_within` has passed.
+        Without `scope` the command has no network. With it, a guard
+        container holds the rules for the scope, and the command joins its
+        network namespace (ADR 0009).
+
+        The containers are removed afterwards, also when the call fails or
+        is cancelled. A command still running at the timeout is killed.
+        Docker is not asked to start it once `start_within` has passed.
         """
         settings = self.settings
+        if scope is not None and settings.guard_image is None:
+            raise NotStarted("this sandbox has no guard image, so it cannot enforce a scope")
         start_by = asyncio.get_running_loop().time() + settings.start_within
         # Chosen here, not by Docker: a container whose create was cut off
         # before Docker's answer arrived can still be removed by its name.
         name = f"agent-runtime-sandbox-{uuid4().hex}"
+        guard = f"agent-runtime-guard-{uuid4().hex}" if scope is not None else None
         output = Output(settings.output_limit)
         deadline = asyncio.timeout(settings.timeout)
         exit_code: int | None = None
+        dropped: int | None = None
         started = False
         try:
-            await self.docker.create(name, container_config(settings, job_id, lease_epoch, argv))
-            async with self.docker.attach(name) as stream:
-                if asyncio.get_running_loop().time() > start_by:
-                    raise SandboxError(
-                        f"Docker took more than {settings.start_within:g} s to set up the container"
+            async with contextlib.AsyncExitStack() as guarded:
+                guard_stream = None
+                if guard is not None and scope is not None:
+                    await self.docker.create(
+                        guard, guard_config(settings, job_id, lease_epoch, scope)
                     )
-                try:
-                    async with deadline:
-                        # From here on the command may run, whatever Docker answers.
-                        started = True
-                        # The whole request, not each phase of it: the start
-                        # bound in `ends_within` counts on it.
-                        try:
-                            async with asyncio.timeout(REQUEST_TIMEOUT):
-                                await self.docker.start(name)
-                        except TimeoutError as error:
-                            raise SandboxError(
-                                f"Docker did not answer the start in {REQUEST_TIMEOUT:g} s"
-                            ) from error
-                        async for chunk in stream:
-                            output.feed(chunk)
-                        exit_code = await self.docker.wait(name)
-                except TimeoutError:
-                    if not deadline.expired():
-                        raise
+                    guard_stream = await guarded.enter_async_context(self.docker.attach(guard))
+                    await self._guard_ready(guard, guard_stream, start_by)
+                await self.docker.create(
+                    name, container_config(settings, job_id, lease_epoch, argv, guard=guard)
+                )
+                async with self.docker.attach(name) as stream:
+                    if asyncio.get_running_loop().time() > start_by:
+                        raise SandboxError(
+                            f"Docker took more than {settings.start_within:g} s"
+                            " to set up the container"
+                        )
+                    try:
+                        async with deadline:
+                            # From here on the command may run, whatever Docker answers.
+                            started = True
+                            await self._start(name)
+                            async for chunk in stream:
+                                output.feed(chunk)
+                            exit_code = await self.docker.wait(name)
+                    except TimeoutError:
+                        if not deadline.expired():
+                            raise
+                if guard is not None and guard_stream is not None:
+                    # The command has ended: its container is stopped first,
+                    # so nothing is sent after the count is read.
+                    await self._remove_later(name)
+                    dropped = await self._dropped(guard, guard_stream)
         except SandboxError as error:
             if not started:
                 raise NotStarted(str(error)) from error
             raise
         finally:
-            # Kills a command that still runs. Shielded, so that a second
-            # cancel does not stop the removal half way.
-            removal = asyncio.ensure_future(self._remove(name))
-            self._removals.add(removal)
-            removal.add_done_callback(self._removals.discard)
-            await asyncio.shield(removal)
-        return Run(bytes(output.kept), output.total, exit_code)
+            # Kills a command that still runs, then its guard. Shielded, so
+            # that a second cancel does not stop the removal half way.
+            removals = [self._remove_later(name)]
+            if guard is not None:
+                removals.append(self._remove_later(guard))
+            await asyncio.shield(asyncio.gather(*removals))
+        return Run(bytes(output.kept), output.total, exit_code, dropped)
