@@ -15,6 +15,7 @@ import time
 import uuid
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +27,7 @@ from runtime.provider.messages import AnthropicProvider
 from runtime.sandbox.docker import Docker
 from runtime.sandbox.runner import LABEL, Run, Sandbox, SandboxSettings, ends_within
 from runtime.scope import FIXED_DENY, Resolved
-from runtime.store.jobs import claim_job
+from runtime.store.jobs import DEADLINE_ERROR, Job, cancel_job, claim_job, create_job, get_job
 from runtime.store.status import JobStatus
 from runtime.store.steps import Step, StepKind, read_steps
 from runtime.tools import default_tools
@@ -638,3 +639,97 @@ def test_a_scope_that_touches_the_workers_deny_list_starts_no_call(
     assert result.payload["is_error"] is True
     assert "is in the deny list" in result.payload["content"]
     assert our_containers(workspace_volume[1]) == []
+
+
+# G7: a cancel or the deadline in the middle of a sandboxed call kills the
+# command and removes its container within 5 s (ADR 0010).
+
+
+def halted_during_a_call(
+    stack: Stack,
+    workspace_volume: tuple[Path, str],
+    settings: SandboxSettings,
+    *,
+    cancel: bool,
+    deadline_in: timedelta,
+) -> tuple[JobStatus | None, Job, list[Step], float]:
+    provider = OneLongCommand("sleep 300")
+    volume = workspace_volume[1]
+
+    async def body(engine: AsyncEngine, _: AnthropicProvider) -> tuple[Any, ...]:
+        async with engine.begin() as conn:
+            await create_job(
+                conn,
+                spec={"prompt": "wait"},
+                token_budget=100_000,
+                deadline=datetime.now(UTC) + deadline_in,
+            )
+            claimed = await claim_job(conn, worker_id="w1")
+        assert claimed is not None
+        run = asyncio.create_task(
+            run_job(
+                engine,
+                provider,
+                default_tools(sandbox=OwnClientSandbox(settings)),
+                claimed,
+                stack.settings(),
+            )
+        )
+        async with asyncio.timeout(30):
+            while not (found := await asyncio.to_thread(our_containers, volume)):  # noqa: ASYNC110 - Docker has no event to wait on
+                await asyncio.sleep(0.1)
+            while not await asyncio.to_thread(running, found[0]):  # noqa: ASYNC110 - Docker has no event to wait on
+                await asyncio.sleep(0.1)
+        if cancel:
+            started = time.monotonic()
+            async with engine.begin() as conn:
+                await cancel_job(conn, claimed.id)
+        status = await asyncio.wait_for(run, 60)
+        took = (
+            time.monotonic() - started
+            if cancel
+            else (datetime.now(UTC) - claimed.deadline).total_seconds()
+        )
+        async with engine.connect() as conn:
+            job = await get_job(conn, claimed.id)
+            steps = await read_steps(conn, claimed.id)
+        assert job is not None
+        return status, job, steps, took
+
+    status, job, steps, took = stack.run(body)
+    return status, job, steps, took
+
+
+def test_a_cancel_kills_a_running_command_and_its_container(
+    stack: Stack, workspace_volume: tuple[Path, str], settings: SandboxSettings
+) -> None:
+    assert stack.workspace_root == workspace_volume[0]
+
+    status, job, steps, took = halted_during_a_call(
+        stack, workspace_volume, settings, cancel=True, deadline_in=timedelta(hours=1)
+    )
+
+    assert status is JobStatus.CANCELLED
+    assert job.status is JobStatus.CANCELLED
+    assert took < 5.0
+    assert our_containers(workspace_volume[1]) == []
+    # Killed, not finished: the intent has no result, and the job is final.
+    kinds = [step.kind for step in steps]
+    assert StepKind.TOOL_INTENT in kinds
+    assert StepKind.TOOL_RESULT not in kinds
+
+
+def test_the_deadline_kills_a_running_command_and_fails_the_job(
+    stack: Stack, workspace_volume: tuple[Path, str], settings: SandboxSettings
+) -> None:
+    assert stack.workspace_root == workspace_volume[0]
+
+    status, job, steps, late = halted_during_a_call(
+        stack, workspace_volume, settings, cancel=False, deadline_in=timedelta(seconds=4)
+    )
+
+    assert status is JobStatus.FAILED
+    assert (job.status, job.error) == (JobStatus.FAILED, DEADLINE_ERROR)
+    assert 0 <= late < 5.0
+    assert our_containers(workspace_volume[1]) == []
+    assert steps[-1].kind is StepKind.ERROR

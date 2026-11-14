@@ -11,6 +11,7 @@ import pytest
 from runtime.provider.base import ModelRequest, ModelResponse, ProviderError
 from runtime.store.held import LeaseLost
 from runtime.worker.agent import _complete_unless_stopped
+from runtime.worker.halt import Halt
 from runtime.worker.lease import Lease
 
 REQUEST = ModelRequest(model="m", max_tokens=10, messages=[{"role": "user", "content": "go"}])
@@ -60,7 +61,9 @@ def run[T](body: Callable[[], Awaitable[T]]) -> T:
 
 def test_an_answer_is_returned_when_nothing_gets_in_the_way() -> None:
     async def body() -> ModelResponse | None:
-        return await _complete_unless_stopped(Model(0.01), REQUEST, asyncio.Event(), new_lease())
+        return await _complete_unless_stopped(
+            Model(0.01), REQUEST, asyncio.Event(), new_lease(), Halt()
+        )
 
     assert run(body) is ANSWER
 
@@ -68,7 +71,9 @@ def test_an_answer_is_returned_when_nothing_gets_in_the_way() -> None:
 def test_a_stop_cancels_the_call_and_returns_nothing() -> None:
     async def body() -> tuple[ModelResponse | None, bool]:
         model, stop = Model(), asyncio.Event()
-        call = asyncio.ensure_future(_complete_unless_stopped(model, REQUEST, stop, new_lease()))
+        call = asyncio.ensure_future(
+            _complete_unless_stopped(model, REQUEST, stop, new_lease(), Halt())
+        )
         await model.started.wait()
         stop.set()
         return await call, model.cancelled
@@ -80,7 +85,7 @@ def test_a_stop_that_is_already_set_means_the_call_is_not_made() -> None:
     async def body() -> tuple[ModelResponse | None, bool]:
         model, stop = Model(), asyncio.Event()
         stop.set()
-        return await _complete_unless_stopped(model, REQUEST, stop, new_lease()), (
+        return await _complete_unless_stopped(model, REQUEST, stop, new_lease(), Halt()), (
             model.started.is_set()
         )
 
@@ -93,7 +98,7 @@ def test_a_lost_lease_cancels_the_call_and_drops_the_job(stopped_too: bool) -> N
 
     async def body() -> bool:
         model, stop, lease = Model(), asyncio.Event(), new_lease()
-        call = asyncio.ensure_future(_complete_unless_stopped(model, REQUEST, stop, lease))
+        call = asyncio.ensure_future(_complete_unless_stopped(model, REQUEST, stop, lease, Halt()))
         await model.started.wait()
         if stopped_too:
             stop.set()
@@ -109,7 +114,7 @@ def test_a_lost_lease_cancels_the_call_and_drops_the_job(stopped_too: bool) -> N
 def test_a_provider_error_passes_through() -> None:
     async def body() -> None:
         failing = Model(0.01, ProviderError("overloaded", status=529, retryable=True))
-        await _complete_unless_stopped(failing, REQUEST, asyncio.Event(), new_lease())
+        await _complete_unless_stopped(failing, REQUEST, asyncio.Event(), new_lease(), Halt())
 
     with pytest.raises(ProviderError, match="overloaded"):
         run(body)
@@ -124,7 +129,7 @@ def test_a_watcher_that_fails_is_an_error_and_not_a_stop() -> None:
 
     async def body() -> None:
         lease = Broken(uuid4(), 1, timedelta(seconds=30), claimed_at=time.monotonic())
-        await _complete_unless_stopped(Model(), REQUEST, asyncio.Event(), lease)
+        await _complete_unless_stopped(Model(), REQUEST, asyncio.Event(), lease, Halt())
 
     with pytest.raises(RuntimeError, match="the watcher broke"):
         run(body)

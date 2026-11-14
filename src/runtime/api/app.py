@@ -20,7 +20,14 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from runtime.api.models import JobSubmission, JobView, StepList, StepView
 from runtime.config import ApiConfig
 from runtime.store.engine import create_engine
-from runtime.store.jobs import InvalidTransition, approve_job, create_job, get_job
+from runtime.store.jobs import (
+    InvalidTransition,
+    JobNotFound,
+    approve_job,
+    cancel_job,
+    create_job,
+    get_job,
+)
 from runtime.store.payload import InvalidPayload
 from runtime.store.status import FINAL_STATUSES, JobStatus
 from runtime.store.steps import read_progress
@@ -140,6 +147,29 @@ def create_app(
                     detail=f"job is {found.status.value};"
                     " only a job that needs approval can be approved",
                 ) from None
+        return JobView.model_validate(job)
+
+    @app.post("/jobs/{job_id}/cancel")
+    async def cancel(job_id: UUID, response: Response) -> JobView:
+        """Cancel a job (ADR 0010).
+
+        A job that no worker holds is `cancelled` at once: 200. A `running`
+        job has its cancel requested: 202, and its worker stops it within a
+        few seconds, killing a running sandboxed command. A job that is
+        already final is refused with 409.
+        """
+        async with engine().begin() as conn:
+            try:
+                job, done = await cancel_job(conn, job_id)
+            except JobNotFound:
+                raise HTTPException(status_code=404, detail="job not found") from None
+            except InvalidTransition:
+                found = await get_job(conn, job_id)
+                status = found.status.value if found is not None else "gone"
+                raise HTTPException(
+                    status_code=409, detail=f"job is {status}; it cannot be cancelled"
+                ) from None
+        response.status_code = 200 if done else 202
         return JobView.model_validate(job)
 
     @app.get("/jobs/{job_id}/steps")

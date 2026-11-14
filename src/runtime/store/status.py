@@ -23,7 +23,8 @@ TRANSITIONS: dict[JobStatus, frozenset[JobStatus]] = {
         {_S.WAITING, _S.NEEDS_APPROVAL, _S.SUCCEEDED, _S.FAILED, _S.CANCELLED, _S.QUEUED}
     ),
     _S.WAITING: frozenset({_S.RUNNING, _S.CANCELLED, _S.FAILED}),
-    _S.NEEDS_APPROVAL: frozenset({_S.QUEUED, _S.CANCELLED}),
+    # `failed`: nobody answered before the job's deadline.
+    _S.NEEDS_APPROVAL: frozenset({_S.QUEUED, _S.CANCELLED, _S.FAILED}),
     _S.SUCCEEDED: frozenset(),
     _S.FAILED: frozenset(),
     _S.CANCELLED: frozenset(),

@@ -84,6 +84,17 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     approve.add_argument("job_id", type=_job_id)
+
+    cancel = commands.add_parser(
+        "cancel",
+        help="cancel a job",
+        description=(
+            "A job that no worker holds is cancelled at once. A running job is stopped by its"
+            " worker within a few seconds; a running tool command is killed. Prints the"
+            " status the job has now: cancelled, or running while its worker stops it."
+        ),
+    )
+    cancel.add_argument("job_id", type=_job_id)
     return parser
 
 
@@ -290,6 +301,16 @@ def _approve(client: httpx2.Client, args: argparse.Namespace, out: TextIO) -> in
     return 0
 
 
+def _cancel(client: httpx2.Client, args: argparse.Namespace, out: TextIO) -> int:
+    response = _check(client.post(f"/jobs/{args.job_id}/cancel"))
+    status = response.json()["status"]
+    if response.status_code == 202:
+        print(f"{status}; cancel requested, its worker stops it", file=out)
+    else:
+        print(status, file=out)
+    return 0
+
+
 def main(
     argv: Sequence[str] | None = None,
     *,
@@ -301,7 +322,13 @@ def main(
     out = sys.stdout if out is None else out
     err = sys.stderr if err is None else err
     args = build_parser().parse_args(argv)
-    handlers = {"submit": _submit, "status": _status, "logs": _logs, "approve": _approve}
+    handlers = {
+        "submit": _submit,
+        "status": _status,
+        "logs": _logs,
+        "approve": _approve,
+        "cancel": _cancel,
+    }
     handler = handlers[args.command]
     try:
         with httpx2.Client(base_url=args.api_url, timeout=30.0, transport=transport) as client:
