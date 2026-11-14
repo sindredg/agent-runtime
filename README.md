@@ -131,7 +131,7 @@ tool's own log file, and for the paused worker its container log.
 | Provider rate limits slow jobs, they do not fail them | Not built | | |
 | Throughput scales with workers | Not measured | | |
 | Every job stays inside its token budget and deadline, and can be cancelled | Not built | | |
-| A tool cannot leave its sandbox | Partly built, not proven | `run_shell` and `list_dir` run in a container per call. The escape tests are not written yet. | |
+| A tool cannot leave its sandbox | Tested without a target scope; the scope is not built | `make escape`: 12 escape attempts, each as a `run_shell` call: DNS, TCP out, the cloud metadata address, a network interface besides loopback, the Docker socket, a write to the root file system, a mount, capabilities, gaining privileges, running as root, 200 forks, 512 MiB of memory. Each was stopped and came back as a failed tool result; 61 of 200 forks ran, the memory hog was killed (137). The host's canary file and another job's file were not found, while the same search found a file of the job's own, and both stayed unchanged. No metadata service runs on this machine, so the metadata attempt shows only that the address was unreachable. The job's own workspace stayed readable and writable. 15 of 15 tests passed at `bcc62bb` on 2026-11-14, Linux aarch64 under WSL2, Docker 29.1.3, kernel.yama.ptrace_scope 1. | Docker's default container settings with only the workspace mounted (`ESCAPE_DOCKER_DEFAULTS=1`): DNS, TCP out, an `eth0` interface, privileges, 200 forks and 512 MiB got out; 6 attempts failed the test. The socket, mount, capability, root, root-write and host-file attempts were still stopped there: the image's user is not root and nothing else is mounted. |
 | Bad tool output does not break a job | Built for `run_shell` and `list_dir`, no result recorded yet | An integration test runs one job whose commands run past the timeout, exit non-zero, print 100 MB and print bytes that are not UTF-8. Each becomes a tool result of at most 64 KiB, the 100 MB one flagged `truncated`, and the job succeeds. `read_file` and `create_issue` run in the worker and have no general timeout. | |
 
 Also tested, outside the table: a worker stopped with `docker stop` (SIGTERM)
@@ -223,6 +223,7 @@ uv installs the pinned Python and tools into `.venv`.
 | `make clean` | Stop the services, delete the database volume |
 | `make test` | Unit tests |
 | `make integration` | Integration tests. Needs the stack from `make up`. |
+| `make escape` | Escape tests: tries to get out of the sandbox. Builds the sandbox image; needs no stack. `ESCAPE_DOCKER_DEFAULTS=1` runs the same attempts with Docker's default container settings, which must fail. |
 | `make chaos` | Chaos tests. Starts the stack with three workers, a 2 second lease and a 10 second sandbox timeout, then kills, pauses and crashes workers. `CHAOS_RUNS` sets the number of runs with a random kill time (default 20), `CHAOS_SEED` the times. Run `make up` afterwards to get the normal stack back. |
 
 The stack publishes four ports, all on `127.0.0.1` only: the API on 8000,
