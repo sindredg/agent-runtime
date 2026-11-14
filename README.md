@@ -93,21 +93,54 @@ the job's workspace. `create_issue` opens an issue in the tracker at
 
 ## Results
 
-Each guarantee gets a test with a pass line that is fixed before the run, and
-a run with the mechanism switched off to show the test can fail. A row is
-filled in when that test has run. None has.
+Each guarantee has a test with a pass line that was fixed before the run, and
+a run with the mechanism switched off to show that the test can fail. What
+happened is read from records the worker does not write: the fake provider's
+request log, the fake tracker's list of issues, and the crash tool's log file.
 
-| Guarantee | Result |
+| Guarantee | Status | Test and result | With the mechanism off |
+|---|---|---|---|
+| A job survives a worker stopping | Tested | 200 jobs. The worker holding each one was killed with `docker kill` at a random time from a seed. 200 of 200 succeeded, each with the same final conversation as a job nobody interrupted, and the provider was never asked an earlier turn again. 116 of the jobs were taken over in the middle. The other 84 were not interrupted: 29 kill times fell before the claim or after the end, and 55 kills landed just after the job had finished. One more run per failpoint, with the worker ending its own process: 6 of 6. | Resume switched off (the log is not replayed): the provider is asked turns 0, 1, 0, 1, 2 and the test fails. |
+| A tool call that is unsafe to repeat never runs twice without approval | Tested | The same 206 runs: no operation id has more than one issue in the tracker, and no approval was needed. Worker stopped after the tool ran: the check finds the issue and the result is recovered. Worker stopped after the intent: the check finds nothing and the call runs once more, one issue. One run with the tracker frozen so the check gets no answer: the job waits in `needs_approval`, and after the approval the tracker holds two issues for one approval. | Intent write skipped: two issues for one operation id. Every tool treated as idempotent: two issues for one operation id. |
+| A stale worker cannot corrupt a job | Tested | A worker waiting for a model answer was paused with `docker pause` for 45 s under the default 30 s lease. Another worker took the job over after 29.3 s. The first was woken while the second was in the middle of the job. It wrote no step after the takeover, sent no further request to the provider and opened no issue. The job succeeded with one takeover. | Epoch check removed from the fence: the woken worker marks the job `failed` under the second worker. |
+| A job that crashes its worker every time does not loop forever | Tested | A job whose tool ends the worker's process: `failed` after 5 takeovers, with 6 runs in the tool's own log. | Limit removed: the job was still running after 180 s and had been taken over 34 times. |
+| Provider rate limits slow jobs, they do not fail them | Not built | | |
+| Throughput scales with workers | Not measured | | |
+| Every job stays inside its token budget and deadline, and can be cancelled | Not built | | |
+| A tool cannot leave its sandbox | Not built | | |
+| Bad tool output does not break a job | Partly built, not proven | A tool call that fails becomes an error result and the job goes on. The output cap and the tool timeout are not built. | |
+
+Also tested, outside the table: a worker stopped with `docker stop` (SIGTERM)
+handed its job back in 1.2 s and the job finished on another worker with no
+takeover counted.
+
+| | |
 |---|---|
-| A job survives a worker stopping | Not built |
-| A tool call that is unsafe to repeat never runs twice without approval | Not built |
-| A stale worker cannot corrupt a job | Not built |
-| A job that crashes its worker every time does not loop forever | Not built |
-| Provider rate limits slow jobs, they do not fail them | Not built |
-| Throughput scales with workers | Not measured |
-| Every job stays inside its token budget and deadline, and can be cancelled | Not built |
-| A tool cannot leave its sandbox | Not built |
-| Bad tool output does not break a job | Partly built, not proven. A tool call that fails becomes an error result and the job goes on. The output cap and the tool timeout are not built. |
+| Command | `CHAOS_RUNS=200 make chaos` |
+| Commit | `256fe08` for the 200 kills. Review fixes came after it. The short run (20 kills and every other test, 11 of 11 tests) passed on them at `665bf6a`. |
+| Runs and seed | 200 random kills, seed `20261113`. Every other test: 1 run. |
+| Workers | 3 |
+| Provider | The fake provider. Scenario `ci-triage-slow` (each answer 0.5 s late) for the kills, `ci-triage-stall` (two answers 10 s late) for the pause and the stop. |
+| Lease | 2 s, renewed every 0.5 s, for the kills, the failpoints and the crash loop. The default 30 s, renewed every 10 s, for the pause and the stop. |
+| Where | Docker Compose on one machine, Linux aarch64 under WSL2, 8 CPUs, 2026-11-13 |
+
+What these results do not show:
+
+- Nothing ran against a real model provider or a real issue tracker.
+- Everything ran on one host with one clock. A lost network between a worker
+  and the database is covered by an integration test that cuts the database
+  sessions, not by a chaos run.
+- The pause test passed in this run and in six earlier ones. In one earlier
+  run the job was taken over twice: the machine's clock was set forward by
+  36.6 s during the test, which ended the second worker's lease early. The
+  paused worker still wrote nothing and the job succeeded with one issue. A
+  lease ends by the database's clock, so a clock that is set forward is a
+  [known limit](docs/architecture.md#known-limits). The tests now detect a
+  clock step and do not count such a run.
+- The limits that the design accepts are listed under
+  [Known limits](docs/architecture.md#known-limits). The main one: fencing
+  protects the database, not the outside world. A worker that is paused at
+  the wrong instant can still run one tool once after it wakes.
 
 ## Design
 
