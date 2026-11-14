@@ -22,7 +22,8 @@ and only the job's workspace directory. Each call has a timeout, and its
 output is cut at 64 KiB. `read_file` and `create_issue` still run in the
 worker process.
 
-Not built: retry on provider errors and rate limits, deadlines, and cancel. The full list is in
+Not built: retry on provider errors and rate limits, deadlines, and cancel.
+The full list is in
 [Known limits](docs/architecture.md#known-limits).
 
 Decided and not built: removal of the tool containers a stopped worker leaves
@@ -130,7 +131,7 @@ tool's own log file, and for the paused worker its container log.
 | A job that crashes its worker every time does not loop forever | Tested | A job whose tool ends the worker's process: `failed` after 5 takeovers, with 6 runs in the tool's own log. | Limit removed: the job was still running after 180 s and had been taken over 34 times. |
 | Provider rate limits slow jobs, they do not fail them | Not built | | |
 | Throughput scales with workers | Not measured | | |
-| Every job stays inside its token budget and deadline, and can be cancelled | Not built | | |
+| Every job stays inside its token budget and deadline, and can be cancelled | Budget tested; deadline and cancel not built | A job that loops (thirty rounds of reading a 2 KB file) with a budget of 20,000 tokens: `failed` with "the token budget does not cover the next model call" after 7 calls, at 13,636 tokens by the fake provider's own count, which equals the job's `tokens_used`. For each call the provider's input stayed within the recorded bound, and the count, the bound and `max_tokens` together fit the budget. At `dfe2936` on 2026-11-14, `tests/integration/test_budget.py`, Linux aarch64 under WSL2. | Bound removed (`max_tokens` never cut, no check): the job ran all 31 calls and spent 282,118 tokens, and the test fails. |
 | A tool cannot leave its sandbox | Partly built, not proven | `run_shell` and `list_dir` run in a container per call. The escape tests are not written yet. | |
 | Bad tool output does not break a job | Built for `run_shell` and `list_dir`, no result recorded yet | An integration test runs one job whose commands run past the timeout, exit non-zero, print 100 MB and print bytes that are not UTF-8. Each becomes a tool result of at most 64 KiB, the 100 MB one flagged `truncated`, and the job succeeds. `read_file` and `create_issue` run in the worker and have no general timeout. | |
 
