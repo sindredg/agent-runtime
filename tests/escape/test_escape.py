@@ -8,6 +8,8 @@ every attempt, the canary file on the host is unchanged.
 With ESCAPE_DOCKER_DEFAULTS=1 (see conftest.py) the same attempts must fail.
 """
 
+import uuid
+
 import pytest
 
 from .conftest import Host
@@ -79,11 +81,14 @@ def test_files_outside_the_jobs_workspace_cannot_be_found(host: Host, target: st
     """The host's files and another job's workspace are not in the container at all."""
     path = host.canary if target == "canary" else host.other_secret
     before = path.read_text(), path.stat().st_mtime_ns
+    # The control: the same search finds a file the job may see.
+    own = host.root / str(host.job) / f"own-{uuid.uuid4().hex}.txt"
+    own.write_text("mine\n")
 
-    result = host.shell(found(path.name) + "; ls -a /workspace/..")
+    result = host.shell(f"{found(path.name)}; {found(own.name)}; ls -a /workspace/..")
     print(f"\n{target}: {result.content!r}")
 
-    assert "ESCAPED" not in result.content
+    assert f"/workspace/{own.name}" in result.content
     assert path.name not in result.content
     assert (path.read_text(), path.stat().st_mtime_ns) == before
 
