@@ -334,7 +334,17 @@ async def _next_tool_call(
     )
     # A person's answer counts for the call it names and for no other.
     answer = state.approval if state.approval_for == tool_use_id else None
+    interrupted = state.interrupted
+    resumed = interrupted is not None and interrupted.get("tool_use_id") == tool_use_id
     why_gated = gate_reason(tool, name, gated)
+    # The log binds a worker whose own tools would not have asked, for
+    # example during a deploy that changes a tool's definition: a question
+    # that came before any intent was the gate's, and so was an intent
+    # that says it ran under an approval.
+    if interrupted is not None and resumed:
+        needs_person = why_gated is not None or interrupted.get("needs_approval") is True
+    else:
+        needs_person = why_gated is not None or answer is not None
 
     async def ask(reason: str) -> None:
         # A worker may have stopped between asking and parking the job. The
@@ -357,8 +367,7 @@ async def _next_tool_call(
             {"tool_use_id": tool_use_id, "content": content, "is_error": True, "denied": True},
         )
 
-    interrupted = state.interrupted
-    if interrupted is not None and interrupted.get("tool_use_id") == tool_use_id:
+    if interrupted is not None and resumed:
         # Nothing is decided while the interrupted call may still be running.
         if not await _outlast_container(
             writer, tool, job, lease, interrupted, state.interrupted_at, stop, halt
@@ -373,9 +382,7 @@ async def _next_tool_call(
         # Raced: a halt does not wait for a slow check. The check runs on in
         # its thread; it only asks, it changes nothing.
         _, found = await _race(
-            asyncio.to_thread(
-                decide, tool, call, approved=answer == "given", gated=why_gated is not None
-            ),
+            asyncio.to_thread(decide, tool, call, approved=answer == "given", gated=needs_person),
             lease=lease,
             halt=halt,
         )
@@ -415,11 +422,12 @@ async def _next_tool_call(
         lease.check()
         await refuse(DENIED)
         return True
-    elif why_gated is not None and answer != "given":
+    elif needs_person and answer != "given":
         # The gate. No intent is written, so nothing of the call has
-        # happened and nothing looks interrupted.
+        # happened and nothing looks interrupted. Without a reason of this
+        # worker's own, the question is already in the log.
         lease.check()
-        await ask(why_gated)
+        await ask(why_gated or "a person was asked about this call before it ran")
         return False
 
     # Before the intent: a call that will not start must not leave an
@@ -428,6 +436,10 @@ async def _next_tool_call(
     # stop while writing it: the tool runs and its result is stored.
     lease.check()
     intent: dict[str, Any] = {"tool_use_id": tool_use_id, "name": name, "input": block["input"]}
+    if needs_person:
+        # This run has an approval. If it is interrupted, whoever takes the
+        # job over asks again, whatever its own tools say.
+        intent["needs_approval"] = True
     if isinstance(tool, SandboxTool):
         # A worker that takes the job over waits this long after the intent
         # before it decides about the call.

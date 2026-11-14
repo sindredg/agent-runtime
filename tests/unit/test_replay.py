@@ -459,3 +459,10 @@ def test_a_new_response_starts_without_an_answer() -> None:
         ),
     )
     assert (state.approval, state.approval_for) == (None, None)
+
+
+def test_an_answer_that_names_another_call_than_the_question_answers_nothing() -> None:
+    asked = log(request(), response(call("t1"), call("t2")), approval_requested("t1"))
+    for answer in (approval_given("t2"), approval_denied("t2")):
+        state = replay("go", [*asked, *log(answer)])
+        assert (state.approval, state.approval_for) == ("requested", "t1")

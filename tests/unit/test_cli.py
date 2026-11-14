@@ -295,7 +295,7 @@ ASKED = step(
     {
         "tool_use_id": "t2",
         "name": "run_shell",
-        "input": {"command": "rm -rf build\n\x1b[2J" + "x" * 200},
+        "input": {"command": "rm -rf  build\n\x1b[2J\u202e" + "x" * 200},
         "operation_id": f"{JOB_ID}:t2",
         "reason": "the job's spec asks for a person's approval before this tool runs",
     },
@@ -323,7 +323,8 @@ def test_following_a_job_that_stops_for_approval_shows_the_call_and_exits_with_3
         "needs_approval  tokens_used=19",
         "The job waits for a person to decide about a tool call.",
         "  tool:   run_shell",
-        '  input:  {"command": "rm -rf build\\n\\u001b[2J' + "x" * 200 + '"}',
+        # Exactly as given, two spaces included.
+        '  input:  {"command": "rm -rf  build\\n\\u001b[2J\\u202e' + "x" * 200 + '"}',
         "  reason: the job's spec asks for a person's approval before this tool runs",
         f"To let the call run: runtime approve {JOB_ID}",
         f"To refuse it:        runtime deny {JOB_ID}",
@@ -629,8 +630,8 @@ def test_approval_steps_show_the_call_and_the_reason() -> None:
     )
     given = step(6, "approval_given", {"tool_use_id": "t1", "operation_id": "0190:t1"})
     assert format_step(asked) == (
-        "   5  approval_requested  create_issue 0190:t1:"
-        " the tool is not idempotent and has no check"
+        "   5  approval_requested  create_issue:"
+        " the tool is not idempotent and has no check (0190:t1)"
     )
     assert format_step(given) == "   6  approval_given  0190:t1"
     denied = step(6, "approval_denied", {"tool_use_id": "t1", "operation_id": "0190:t1"})
@@ -660,7 +661,7 @@ def test_a_denial_the_api_refuses_exits_with_2_and_shows_why() -> None:
 
 
 def test_a_job_that_waits_without_a_question_in_its_log_still_says_how_to_answer() -> None:
-    """The steps are read after the stream. A log that cannot be read that way is not fatal."""
+    """The question is taken from the stream. A stream without one is not fatal."""
     api = StubApi(final=job("needs_approval"), end=None)
     api.status = "needs_approval"
     code, out, err = run("logs", JOB_ID, "--follow", api=api)

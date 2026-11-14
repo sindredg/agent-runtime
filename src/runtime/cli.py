@@ -141,7 +141,8 @@ def _detail(kind: str, payload: dict[str, Any]) -> str:
     if kind == "error":
         return _preview(payload["message"])
     if kind == "approval_requested":
-        return _preview(f"{payload['name']} {payload['operation_id']}: {payload['reason']}")
+        # The reason first: it says whether the call has run before.
+        return _preview(f"{payload['name']}: {payload['reason']} ({payload['operation_id']})")
     if kind in ("approval_given", "approval_denied"):
         return _preview(payload["operation_id"])
     return _preview(json.dumps(payload))
@@ -206,11 +207,12 @@ def _lines(response: httpx2.Response) -> Iterator[str]:
         yield buffer.removesuffix("\r")
 
 
-def _follow(client: httpx2.Client, job_id: str, out: TextIO) -> str:
-    """Print steps from the event stream as they arrive. Returns the status it stopped at.
+def _follow(client: httpx2.Client, job_id: str, out: TextIO) -> tuple[str, Any]:
+    """Print steps from the event stream as they arrive. Returns the status it
+    stopped at, and the payload of the last `approval_requested` step it printed.
 
-    That is the job's final status, or `needs_approval`: such a job goes on
-    only when a person approves it, so following it would wait without end.
+    The status is the job's final one, or `needs_approval`: such a job goes
+    on only when a person answers, so following it would wait without end.
 
     A stream that breaks is opened again after the last step that was
     printed. It is given up after FOLLOW_ATTEMPTS tries in a row that
@@ -218,6 +220,7 @@ def _follow(client: httpx2.Client, job_id: str, out: TextIO) -> str:
     """
     after = 0
     failures = 0
+    asked: Any = None
     # The API sends a comment line at least every 15 seconds. A read that
     # waits much longer than that is a dead connection.
     timeout = httpx2.Timeout(10.0, read=FOLLOW_READ_TIMEOUT)
@@ -241,11 +244,13 @@ def _follow(client: httpx2.Client, job_id: str, out: TextIO) -> str:
                             step = json.loads(data)
                             print(format_step(step), file=out, flush=True)
                             after = step["seq"]
+                            if step["kind"] == "approval_requested":
+                                asked = step["payload"]
                         elif event == "end":
                             status: str = json.loads(data)["status"]
-                            return status
+                            return status, asked
                         elif event == "status" and json.loads(data)["status"] == "needs_approval":
-                            return "needs_approval"
+                            return "needs_approval", asked
                         event, data = "", ""
             problem = "the event stream ended before the job did"
         except httpx2.TransportError as error:
@@ -267,11 +272,14 @@ def _submit(client: httpx2.Client, args: argparse.Namespace, out: TextIO) -> int
     print(job["id"], file=out, flush=True)
     if not args.follow:
         return 0
-    return _finish(_follow(client, job["id"], out), client, job["id"], out)
+    return _finish(*_follow(client, job["id"], out), client, job["id"], out)
 
 
-def _finish(status: str, client: httpx2.Client, job_id: str, out: TextIO) -> int:
-    """Print the line for the status the job stopped at and turn it into an exit code."""
+def _finish(status: str, asked: Any, client: httpx2.Client, job_id: str, out: TextIO) -> int:
+    """Print the line for the status the job stopped at and turn it into an exit code.
+
+    `asked` is the question the job waits on, as the stream showed it.
+    """
     job = _job(client, job_id)
     line = f"{status}  tokens_used={job['tokens_used']}"
     if job["error"]:
@@ -279,14 +287,13 @@ def _finish(status: str, client: httpx2.Client, job_id: str, out: TextIO) -> int
     print(line, file=out)
     if status == "needs_approval":
         print("The job waits for a person to decide about a tool call.", file=out)
-        asked = [s for s in _steps(client, job_id) if s["kind"] == "approval_requested"]
-        if asked:
-            # In full: this is what the person decides about. One line each,
-            # and JSON escapes what a terminal would act on.
-            call = asked[-1]["payload"]
-            print(f"  tool:   {_one_line(str(call.get('name')))}", file=out)
-            print(f"  input:  {_one_line(json.dumps(call.get('input')))}", file=out)
-            print(f"  reason: {_one_line(str(call.get('reason')))}", file=out)
+        if isinstance(asked, dict):
+            # In full: this is what the person decides about. The input is
+            # printed exactly, as JSON: that is one line of ASCII, with
+            # everything a terminal would act on escaped.
+            print(f"  tool:   {_one_line(str(asked.get('name')))}", file=out)
+            print(f"  input:  {json.dumps(asked.get('input'))}", file=out)
+            print(f"  reason: {_one_line(str(asked.get('reason')))}", file=out)
         print(f"To let the call run: runtime approve {_one_line(job_id)}", file=out)
         print(f"To refuse it:        runtime deny {_one_line(job_id)}", file=out)
         return EXIT_NEEDS_APPROVAL
@@ -307,7 +314,7 @@ def _status(client: httpx2.Client, args: argparse.Namespace, out: TextIO) -> int
 
 def _logs(client: httpx2.Client, args: argparse.Namespace, out: TextIO) -> int:
     if args.follow:
-        return _finish(_follow(client, args.job_id, out), client, args.job_id, out)
+        return _finish(*_follow(client, args.job_id, out), client, args.job_id, out)
     _job(client, args.job_id)
     for step in _steps(client, args.job_id):
         print(format_step(step), file=out)

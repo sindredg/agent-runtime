@@ -442,6 +442,87 @@ def test_an_answer_about_another_call_does_not_let_this_one_run(stack: Stack) ->
     assert steps[-1].payload == question(job, "toolu_a", "a", BY_TOOL)
 
 
+# Workers that do not agree about the tool, as during a deploy that changes its definition
+
+
+def test_an_open_question_holds_on_a_worker_whose_tool_would_not_have_asked(stack: Stack) -> None:
+    acts = Acts(gated=True)
+
+    async def body(person: Person) -> tuple[JobStatus | None, list[Step]]:
+        await person.submit()
+        assert await person.work() is S.NEEDS_APPROVAL
+        # The worker stopped after asking and before parking the job, and
+        # the one that takes over has the tool without the flag.
+        async with person.engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "UPDATE jobs SET status = 'running', lease_owner = 'gone',"
+                    " lease_expires_at = now() WHERE id = :id"
+                ),
+                {"id": person.job_id},
+            )
+        acts.gated = False
+        status = await person.work(takeover=True)
+        return status, (await person.read())[1]
+
+    status, steps = with_person(stack, acts, body)
+    assert status is S.NEEDS_APPROVAL
+    assert kinds(steps) == [K.MODEL_REQUEST, K.MODEL_RESPONSE, K.APPROVAL_REQUESTED]
+    assert acts.runs == []
+
+
+def test_an_approved_run_is_marked_so_that_any_worker_asks_again_after_it_is_interrupted(
+    stack: Stack,
+) -> None:
+    """The worker that takes over has the tool idempotent and without the flag.
+    By its own tools it would simply run the call again, on the one approval."""
+    acts = Acts(gated=True, idempotent=True)
+
+    async def body(person: Person) -> tuple[Job, list[Step]]:
+        await person.submit()
+        assert await person.work() is S.NEEDS_APPROVAL
+        await person.approve()
+        await person.abandon_in_the_tool()
+        acts.gated = False
+        assert await person.work(takeover=True) is S.NEEDS_APPROVAL
+        assert len(acts.runs) == 1
+        # Approved again, also by a worker without the flag: the rerun is marked too.
+        await person.approve()
+        await person.abandon_in_the_tool()
+        assert await person.work(takeover=True) is S.NEEDS_APPROVAL
+        return await person.read()
+
+    _, steps = with_person(stack, acts, body)
+    assert kinds(steps)[2:] == [
+        K.APPROVAL_REQUESTED,
+        K.APPROVAL_GIVEN,
+        K.TOOL_INTENT,
+        K.APPROVAL_REQUESTED,
+        K.APPROVAL_GIVEN,
+        K.TOOL_INTENT,
+        K.APPROVAL_REQUESTED,
+    ]
+    assert [step.payload.get("needs_approval") for step in steps if step.kind is K.TOOL_INTENT] == [
+        True,
+        True,
+    ]
+    assert len(acts.runs) == 2
+
+
+def test_an_intent_of_a_call_nobody_was_asked_about_is_not_marked(stack: Stack) -> None:
+    acts = Acts()
+
+    async def body(person: Person) -> list[Step]:
+        await person.submit()
+        assert await person.work() is S.SUCCEEDED
+        return (await person.read())[1]
+
+    steps = with_person(stack, acts, body)
+    intents = [step.payload for step in steps if step.kind is K.TOOL_INTENT]
+    assert len(intents) == 2
+    assert all("needs_approval" not in intent for intent in intents)
+
+
 # Nobody answers
 
 

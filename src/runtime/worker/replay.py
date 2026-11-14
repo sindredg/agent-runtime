@@ -117,10 +117,14 @@ class Replay:
             self.approval, self.approval_for = None, None
         elif step.kind is StepKind.APPROVAL_REQUESTED:
             self.approval, self.approval_for = "requested", payload.get("tool_use_id")
-        elif step.kind is StepKind.APPROVAL_GIVEN:
-            self.approval = "given"
-        elif step.kind is StepKind.APPROVAL_DENIED:
-            self.approval = "denied"
+        elif (
+            step.kind in (StepKind.APPROVAL_GIVEN, StepKind.APPROVAL_DENIED)
+            # An answer names the call it is for. One that names another
+            # call than the question did answers nothing.
+            and payload.get("tool_use_id", self.approval_for) == self.approval_for
+        ):
+            given = step.kind is StepKind.APPROVAL_GIVEN
+            self.approval = "given" if given else "denied"
 
 
 def replay(prompt: str, steps: Iterable[Step]) -> Replay:
