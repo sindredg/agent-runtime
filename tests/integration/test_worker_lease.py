@@ -191,6 +191,135 @@ class SlowToolUse:
         return None
 
 
+class NeverAnswers:
+    """A provider whose answer takes a minute. It records how its one call ended."""
+
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.cancelled = False
+        self.answered = False
+
+    async def complete(self, request: ModelRequest) -> ModelResponse:
+        self.started.set()
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+        self.answered = True
+        return ModelResponse("msg_1", "m", [{"type": "text", "text": "late"}], "end_turn", 1, 1)
+
+    async def aclose(self) -> None:
+        return None
+
+
+def test_a_worker_that_learns_its_lease_is_gone_cancels_the_model_call_at_once(
+    stack: Stack,
+) -> None:
+    """The job is taken over while its first worker waits for the model.
+
+    The first worker's next heartbeat is refused. It must not wait out the
+    call: the answer would be paid for and then refused by the fenced write.
+    """
+
+    async def body(engine: AsyncEngine, _: AnthropicProvider) -> dict[str, Any]:
+        job, sent_at = await claim(engine, stack, "w1", lease=30)
+        provider = NeverAnswers()
+        first = asyncio.create_task(
+            run_job(
+                engine,
+                provider,
+                FIXED,
+                job,
+                stack.settings(lease=30, heartbeat=0.5),
+                claimed_at=sent_at,
+            )
+        )
+        async with asyncio.timeout(20):
+            await provider.started.wait()
+        async with engine.begin() as conn:
+            await expire_lease(conn, job.id)
+            taken = await claim_job(conn, worker_id="w2", lease=timedelta(seconds=30))
+        try:
+            # Room for many heartbeats. A worker that waits out the call takes a minute.
+            async with asyncio.timeout(10):
+                status = await first
+        finally:
+            first.cancel()
+            await asyncio.gather(first, return_exceptions=True)
+        found, steps = await read(engine, job)
+        return {
+            "taken": taken,
+            "status": status,
+            "cancelled": provider.cancelled,
+            "answered": provider.answered,
+            "job": found,
+            "steps": steps,
+            "workspace_kept": (stack.workspace_root / str(job.id) / "seed.txt").is_file(),
+        }
+
+    seen = stack.run(body)
+    assert seen["taken"] is not None
+    # The call was cancelled, not waited for, and the worker dropped the job.
+    assert seen["cancelled"]
+    assert not seen["answered"]
+    assert seen["status"] is None
+    # It wrote nothing after the takeover and left the job to the second worker.
+    assert seen["job"] == seen["taken"]
+    assert [step.kind for step in seen["steps"]] == [K.MODEL_REQUEST]
+    assert seen["workspace_kept"]
+
+
+def test_a_lost_lease_ends_a_request_that_the_real_client_has_open(stack: Stack) -> None:
+    """The same, with the client the worker really uses and an answer that is 10 s away.
+
+    The fake provider holds the answer of the stall scenario back for 10
+    seconds. The worker has to be done with the job well before that.
+    """
+
+    async def body(
+        engine: AsyncEngine, provider: AnthropicProvider
+    ) -> tuple[JobStatus | None, float, Job | None, Job, list[Step]]:
+        async with engine.begin() as conn:
+            await stack.create(conn, {**HELLO, "model": "ci-triage-stall"})
+            sent_at = time.monotonic()
+            job = await claim_job(conn, worker_id="w1", lease=timedelta(seconds=30))
+        assert job is not None
+        first = asyncio.create_task(
+            run_job(
+                engine,
+                provider,
+                FIXED,
+                job,
+                stack.settings(lease=30, heartbeat=0.5),
+                claimed_at=sent_at,
+            )
+        )
+        # Until the provider has the request.
+        async with asyncio.timeout(20):
+            # The provider's log is read over HTTP: there is no event to wait on.
+            while not await asyncio.to_thread(stack.requests_for, job):  # noqa: ASYNC110
+                await asyncio.sleep(0.1)
+        async with engine.begin() as conn:
+            await expire_lease(conn, job.id)
+            taken = await claim_job(conn, worker_id="w2", lease=timedelta(seconds=30))
+        taken_at = time.monotonic()
+        try:
+            async with asyncio.timeout(8):
+                status = await first
+        finally:
+            first.cancel()
+            await asyncio.gather(first, return_exceptions=True)
+        return status, time.monotonic() - taken_at, taken, *await read(engine, job)
+
+    status, dropped_after, taken, job, steps = stack.run(body)
+    assert status is None
+    # Well inside the 10 seconds the answer was held back for.
+    assert dropped_after < 8
+    assert job == taken
+    assert [step.kind for step in steps] == [K.MODEL_REQUEST]
+
+
 def test_a_worker_past_its_own_deadline_starts_no_tool(stack: Stack) -> None:
     """Nobody took the job over, so the database would still accept the worker's writes.
 

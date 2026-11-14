@@ -268,27 +268,40 @@ def _response_problem(response: ModelResponse, used_ids: set[str]) -> str | None
 
 
 async def _complete_unless_stopped(
-    provider: Provider, request: ModelRequest, stop: asyncio.Event
+    provider: Provider, request: ModelRequest, stop: asyncio.Event, lease: Lease
 ) -> ModelResponse | None:
     """Call the model. Returns None if `stop` was set before the answer was complete.
 
     The call is then cancelled at once. Its request step stays in the log
     without a response, and such a request is sent again by whoever runs
     the job next. A complete answer is never thrown away.
+
+    The call is cancelled as well when the heartbeat learns that the lease
+    is gone: its answer would be refused by the fenced write, so there is
+    nothing to wait for. Raises LeaseLost then.
     """
     if stop.is_set():
         # The stop arrived while the request step was written. Nothing is sent.
         return None
     call = asyncio.ensure_future(provider.complete(request))
     stopped = asyncio.ensure_future(stop.wait())
+    lost = asyncio.ensure_future(lease.wait_lost())
     try:
-        await asyncio.wait({call, stopped}, return_when=asyncio.FIRST_COMPLETED)
+        await asyncio.wait({call, stopped, lost}, return_when=asyncio.FIRST_COMPLETED)
     finally:
         stopped.cancel()
+        lost.cancel()
         if not call.done():
             call.cancel()
-        await asyncio.gather(call, stopped, return_exceptions=True)
+        await asyncio.gather(call, stopped, lost, return_exceptions=True)
+    for watcher in (stopped, lost):
+        # A watcher that failed says nothing about a stop or the lease. Read
+        # as a stop, the request would be sent again and again.
+        if not watcher.cancelled() and (broken := watcher.exception()) is not None:
+            raise broken
     if call.cancelled():
+        if lease.lost:
+            raise LeaseLost(lease.job_id, lease.epoch)
         return None
     return call.result()
 
@@ -353,7 +366,7 @@ async def _loop(
             # lease must not send it.
             lease.check()
             try:
-                response = await _complete_unless_stopped(provider, request, stop)
+                response = await _complete_unless_stopped(provider, request, stop, lease)
             except ProviderError as error:
                 raise _JobFailed(f"model call failed: {error}") from error
             if response is None:
