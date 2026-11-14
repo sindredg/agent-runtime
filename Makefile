@@ -1,4 +1,4 @@
-.PHONY: all up down clean logs test integration chaos
+.PHONY: all up down clean logs test integration escape chaos
 
 # The group that owns the Docker socket. The worker joins it to start a
 # container for each sandboxed tool call. Every compose command needs it.
@@ -28,6 +28,14 @@ test:
 # Needs the stack from `make up`: the tests use its Postgres server.
 integration:
 	uv run --frozen pytest tests/integration
+
+# Tries to get out of the sandbox: the network, the host's files, another
+# job's workspace, the Docker socket, privileges, processes and memory. Builds
+# the sandbox image first; needs no stack. ESCAPE_DOCKER_DEFAULTS=1 runs the
+# same attempts with Docker's default container settings, which must fail.
+escape:
+	docker compose build sandbox-image
+	uv run --frozen pytest -v -s tests/escape
 
 # Kills, pauses and crashes workers on purpose and checks what is left.
 # Starts the stack with three workers and a short lease first. CHAOS_RUNS
