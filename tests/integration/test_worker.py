@@ -87,8 +87,26 @@ def test_scripted_job_produces_the_expected_step_sequence(stack: Stack) -> None:
             }
         ],
     }
-    assert steps[0].payload == {"model": "hello", "max_tokens": 1024, "messages": 1}
-    assert steps[4].payload == {"model": "hello", "max_tokens": 1024, "messages": 3}
+    request = steps[0].payload
+    assert {key: request[key] for key in ("model", "max_tokens", "messages")} == {
+        "model": "hello",
+        "max_tokens": 1024,
+        "messages": 1,
+    }
+    # The budget's record: the bound of the input and the count before the call.
+    assert request["tokens_used"] == 0
+    assert request["input_bound"] > 1024
+    second = steps[4].payload
+    assert {key: second[key] for key in ("model", "max_tokens", "messages")} == {
+        "model": "hello",
+        "max_tokens": 1024,
+        "messages": 3,
+    }
+    # Counted: the first response's tokens.
+    assert (
+        second["tokens_used"]
+        == steps[1].payload["usage"]["input_tokens"] + (steps[1].payload["usage"]["output_tokens"])
+    )
 
 
 def test_the_configured_model_is_used_when_the_spec_names_none(stack: Stack) -> None:
@@ -220,7 +238,7 @@ def test_a_response_that_did_not_finish_fails_the_job_and_runs_no_tool(
             await create_job(
                 conn,
                 spec={"prompt": "go"},
-                token_budget=1000,
+                token_budget=100_000,
                 deadline=datetime.now(UTC) + timedelta(hours=1),
             )
             claimed = await claim_job(conn, worker_id="test-worker")
@@ -249,7 +267,7 @@ def run_with(
             await create_job(
                 conn,
                 spec={"prompt": "go", "files": files or {}},
-                token_budget=1000,
+                token_budget=100_000,
                 deadline=datetime.now(UTC) + timedelta(hours=1),
             )
             claimed = await claim_job(conn, worker_id="test-worker")
