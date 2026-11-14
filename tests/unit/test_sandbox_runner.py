@@ -4,6 +4,7 @@ import asyncio
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -17,6 +18,7 @@ from runtime.sandbox.runner import (
     NotStarted,
     Sandbox,
     SandboxSettings,
+    check_host,
 )
 
 JOB = uuid.UUID("01a1d655-88bd-7468-afc4-5ca3a1947906")
@@ -153,3 +155,29 @@ def test_a_start_request_is_bounded_as_a_whole(monkeypatch: pytest.MonkeyPatch) 
     # Asked to start, so it may have run.
     assert not isinstance(raised.value, NotStarted)
     assert [call for call, _ in docker.calls][-1] == "remove"
+
+
+@pytest.mark.parametrize("value", ["1\n", "2\n", "3\n"])
+def test_a_host_where_a_process_can_trace_only_its_descendants_is_accepted(
+    tmp_path: Path, value: str
+) -> None:
+    scope = tmp_path / "ptrace_scope"
+    scope.write_text(value)
+
+    check_host(scope)
+
+
+@pytest.mark.parametrize("value", ["0\n", "", "x"])
+def test_a_host_where_a_command_could_trace_its_timeout_is_refused(
+    tmp_path: Path, value: str
+) -> None:
+    scope = tmp_path / "ptrace_scope"
+    scope.write_text(value)
+
+    with pytest.raises(SandboxError, match="ptrace_scope"):
+        check_host(scope)
+
+
+def test_a_host_without_yama_is_refused(tmp_path: Path) -> None:
+    with pytest.raises(SandboxError, match="Yama"):
+        check_host(tmp_path / "missing")

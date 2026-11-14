@@ -455,3 +455,32 @@ def test_a_container_left_by_a_dead_worker_ends_at_its_own_timeout(
         assert time.monotonic() - started < short.timeout + 5
     finally:
         docker_cli("rm", "--force", container)
+
+
+# PTRACE_ATTACH (16) through perl's syscall(), which needs the number of
+# ptrace on this machine's architecture. Perl tries PID 1, then a child it
+# forked itself: Yama at 1 lets a process trace only its own descendants.
+PTRACE = {"x86_64": 101, "aarch64": 117}
+ATTACH = (
+    "perl -e 'sub attach {{ my $r = syscall({nr}, 16, $_[0] + 0, 0, 0);"
+    ' print $r == 0 ? "attached\\n" : "refused: $!\\n" }}'
+    " attach(1); my $child = fork(); if ($child == 0) {{ sleep 30; exit 0 }}"
+    " attach($child); kill 9, $child'"
+)
+
+
+def test_the_command_cannot_trace_its_timeout_but_can_trace_its_own_child(
+    settings: SandboxSettings, workspace_volume: tuple[Path, str]
+) -> None:
+    """An attach stops the traced process, so a traced PID 1 would never end the call.
+
+    The worker refuses a host whose ptrace_scope allows it (`check_host`). The
+    control: tracing a child of the command works, so a refusal is not just
+    a sandbox without ptrace.
+    """
+    job_id = new_workspace(workspace_volume[0])
+    script = ATTACH.format(nr=PTRACE[os.uname().machine])
+
+    done = shell(settings, job_id, script)
+
+    assert done.output.decode().splitlines() == ["refused: Operation not permitted", "attached"]

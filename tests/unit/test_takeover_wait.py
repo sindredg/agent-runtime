@@ -7,8 +7,9 @@ from datetime import timedelta
 
 import pytest
 
+from runtime.sandbox.runner import LONGEST_BOUND
 from runtime.store.held import LeaseLost
-from runtime.worker.agent import _wait_unless_stopped
+from runtime.worker.agent import _bound, _wait_unless_stopped
 from runtime.worker.lease import Lease
 
 JOB = uuid.UUID("01a1d655-88bd-7468-afc4-5ca3a1947906")
@@ -74,3 +75,14 @@ def test_a_broken_watcher_is_raised_and_not_read_as_the_end_of_the_wait() -> Non
 
     with pytest.raises(RuntimeError, match="watcher broke"):
         asyncio.run(go())
+
+
+@pytest.mark.parametrize(
+    ("recorded", "bound"),
+    [(57.0, 57.0), (0, 0.0), (1e300, LONGEST_BOUND), (-1, None), ("57", None), (True, None)],
+)
+def test_the_bound_comes_from_the_intent_and_is_never_unbounded(
+    recorded: object, bound: float | None
+) -> None:
+    """A tool the worker does not have: only the intent's number counts."""
+    assert _bound(None, {"ends_within": recorded}) == bound

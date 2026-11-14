@@ -18,6 +18,7 @@ import math
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -77,7 +78,6 @@ class SandboxSettings:
         match = _USER.fullmatch(self.user)
         if match is None or int(match[1]) == 0 or int(match[2]) == 0:
             raise ValueError(f"user must be uid:gid, both numbers above 0, got {self.user!r}")
-        # `not value > 0` also refuses NaN.
         for name in ("timeout", "start_within"):
             value = getattr(self, name)
             # `not value > 0` also refuses NaN.
@@ -109,6 +109,10 @@ def ends_within(settings: SandboxSettings) -> float:
     daemon that acts on a request after the worker gave up on it.
     """
     return settings.start_within + REQUEST_TIMEOUT + settings.timeout + KILL_MARGIN
+
+
+# The longest `ends_within` any valid settings give.
+LONGEST_BOUND = 2 * MAX_SECONDS + REQUEST_TIMEOUT + KILL_MARGIN
 
 
 def container_config(
@@ -147,9 +151,10 @@ def container_config(
             # No init: `timeout` is PID 1. The kernel does not deliver a
             # signal it has no handler for, SIGSTOP and SIGKILL among them, to
             # the init of a namespace from inside it, so the command cannot
-            # stop its own timeout. When `timeout` ends, every process left in
-            # the container ends with it. The cost: nothing reaps orphaned
-            # processes during the call, and they count toward `pids`.
+            # stop its own timeout (ptrace is covered by `check_host`). When
+            # `timeout` ends, every process left in the container ends with
+            # it. The cost: nothing reaps orphaned processes during the call,
+            # and they count toward `pids`.
             "Init": False,
             "IpcMode": "private",
             "LogConfig": {"Type": "none", "Config": {}},
@@ -188,6 +193,33 @@ class Run:
     @property
     def truncated(self) -> bool:
         return self.total > len(self.output)
+
+
+# Yama's ptrace setting of the host kernel. Not namespaced: a container reads the host's.
+PTRACE_SCOPE = Path("/proc/sys/kernel/yama/ptrace_scope")
+
+
+def check_host(ptrace_scope: Path = PTRACE_SCOPE) -> None:
+    """Refuse a host on which a command could stop its container's timeout.
+
+    `timeout` is PID 1 and runs as the command's uid. Signals cannot stop it
+    (see `container_config`), but ptrace could: an attach stops the traced
+    process. With Yama's ptrace_scope at 1 or above a process may only trace
+    its own descendants, and PID 1 is not one. At 0, or without Yama, it may
+    trace any process of its uid. Raises SandboxError then.
+    """
+    try:
+        value = ptrace_scope.read_text().strip()
+    except OSError as error:
+        raise SandboxError(
+            f"cannot read {ptrace_scope} ({error.strerror}): the sandbox needs the Yama"
+            " LSM with kernel.yama.ptrace_scope at 1 or above"
+        ) from error
+    if value not in {"1", "2", "3"}:
+        raise SandboxError(
+            f"kernel.yama.ptrace_scope is {value!r}: the sandbox needs 1 or above, or a"
+            " command could stop its own timeout with ptrace"
+        )
 
 
 class NotStarted(SandboxError):

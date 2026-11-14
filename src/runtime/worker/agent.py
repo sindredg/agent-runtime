@@ -30,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from runtime.failpoints import Failpoints
 from runtime.provider.base import ModelRequest, ModelResponse, Provider, ProviderError
 from runtime.sandbox.docker import SandboxError
-from runtime.sandbox.runner import ends_within
+from runtime.sandbox.runner import LONGEST_BOUND, ends_within
 from runtime.spec import JobSpec
 from runtime.store import held
 from runtime.store.clock import seconds_until
@@ -184,7 +184,7 @@ def _bound(tool: AnyTool | None, intent: dict[str, Any]) -> float | None:
 
     None when the call ran no container. The intent's own number is used,
     so a worker with other settings waits as long as the one that started
-    the call.
+    the call. A number above what any settings give is cut to that.
     """
     recorded = intent.get("ends_within")
     if (
@@ -193,7 +193,7 @@ def _bound(tool: AnyTool | None, intent: dict[str, Any]) -> float | None:
         and math.isfinite(recorded)
         and recorded >= 0
     ):
-        return float(recorded)
+        return min(float(recorded), LONGEST_BOUND)
     if isinstance(tool, SandboxTool):
         return ends_within(tool.sandbox.settings)
     return None
