@@ -15,7 +15,7 @@ import platform
 import re
 import subprocess
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -296,10 +296,46 @@ def steady_clock() -> Iterator[None]:
         )
 
 
+def host_can_write(directory: Path) -> bool:
+    """True if the tests can write to `directory`, or can still create it."""
+    return not directory.exists() or os.access(directory, os.W_OK)
+
+
+def worker_can_write(container: str, run: Callable[..., str] = docker) -> bool:
+    """True if the worker in `container` can write to the crash tool's log directory."""
+    test = 'test -w "$CHAOS_LOG_DIR" && echo writable'
+    return run("docker", "exec", container, "sh", "-c", test, check=False).strip() == "writable"
+
+
+def stop_unless(writable: bool) -> None:
+    """End the test session with what to do about a `.chaos` that cannot be written to.
+
+    The crash tool logs each run there before it ends its worker, and the
+    tests keep the workers' logs there. It is a bind mount of `.chaos` on
+    the host. Docker creates that directory as root when it is missing at
+    the start of the stack, and then neither the workers nor the tests can
+    write to it. The crash tool would fail and its worker would live, and
+    the crash loop test would fail for a reason it does not name.
+    """
+    if writable:
+        return
+    pytest.exit(
+        "The workers or the tests cannot write to .chaos, the directory the crash tool"
+        " logs to. Docker creates it as root when it is missing at the start of the"
+        " stack. Run `make chaos`, which creates it first, or make it writable by hand"
+        " (`sudo chmod 777 .chaos`) and run the tests again.",
+        returncode=1,
+    )
+
+
 @pytest.fixture(scope="session")
 def chaos() -> Iterator[Chaos]:
     stack = Chaos()
+    # Before the workers are brought up: that step saves their logs to .chaos.
+    stop_unless(host_can_write(CHAOS_DIR))
     stack.workers_up()
+    running = [container for container, state in stack.workers().items() if state == "running"]
+    stop_unless(worker_can_write(running[0]))
     try:
         yield stack
     finally:
