@@ -20,6 +20,7 @@ from runtime.store import held
 from runtime.store.engine import sqlalchemy_url
 from runtime.store.held import LeaseLost
 from runtime.store.jobs import Job, claim_job, get_job, job_from_row
+from runtime.store.payload import InvalidPayload
 from runtime.store.schema import jobs
 from runtime.store.status import JobStatus
 from runtime.store.steps import Step, StepConflict, StepKind, read_steps
@@ -49,7 +50,18 @@ async def renew(engine: AsyncEngine, job_id: UUID, epoch: int) -> datetime:
     )
 
 
+FAILURE = "the model declined the request"
+
+
+async def fail(engine: AsyncEngine, job_id: UUID, epoch: int) -> Step:
+    return await held.fail(engine, job_id=job_id, lease_epoch=epoch, error=FAILURE)
+
+
 def leave(new_status: JobStatus) -> Write:
+    if new_status is S.FAILED:
+        # A job is failed together with its `error` step, by its own write.
+        return fail
+
     async def write(engine: AsyncEngine, job_id: UUID, epoch: int) -> Job:
         return await held.leave_running(
             engine, job_id=job_id, lease_epoch=epoch, new_status=new_status
@@ -63,6 +75,7 @@ WRITES = {
     "step": write_step,
     "renewal": renew,
     "finish": leave(S.SUCCEEDED),
+    "failure": fail,
     "release": leave(S.QUEUED),
 }
 each_write = pytest.mark.parametrize("write", WRITES.values(), ids=WRITES.keys())
@@ -148,29 +161,19 @@ def test_an_expired_lease_nobody_took_is_still_the_holders(database_url: str) ->
 
 
 @pytest.mark.parametrize(
-    ("new_status", "error"),
-    [
-        (S.SUCCEEDED, None),
-        (S.FAILED, "the model declined"),
-        (S.CANCELLED, None),
-        (S.NEEDS_APPROVAL, None),
-        (S.WAITING, None),
-        (S.QUEUED, None),
-    ],
+    "new_status", [S.SUCCEEDED, S.CANCELLED, S.NEEDS_APPROVAL, S.WAITING, S.QUEUED]
 )
-def test_the_holder_moves_its_job_out_of_running(
-    database_url: str, new_status: JobStatus, error: str | None
-) -> None:
+def test_the_holder_moves_its_job_out_of_running(database_url: str, new_status: JobStatus) -> None:
     async def body(engine: AsyncEngine) -> tuple[Job, Job]:
         job = await held_job(engine)
         returned = await held.leave_running(
-            engine, job_id=job.id, lease_epoch=1, new_status=new_status, error=error
+            engine, job_id=job.id, lease_epoch=1, new_status=new_status
         )
         return returned, (await stored(engine, job.id))[0]
 
     returned, job = with_engine(database_url, body)
     assert returned == job
-    assert (job.status, job.error) == (new_status, error)
+    assert (job.status, job.error) == (new_status, None)
     # The lease is given up, and the move is neither a claim nor a takeover.
     assert (job.lease_owner, job.lease_expires_at) == (None, None)
     assert (job.lease_epoch, job.takeovers) == (1, 0)
@@ -187,6 +190,45 @@ def test_a_released_job_is_claimed_again_without_counting_a_takeover(database_ur
     assert job is not None
     assert (job.status, job.lease_owner) == (S.RUNNING, "w2")
     assert (job.lease_epoch, job.takeovers) == (2, 0)
+
+
+def test_the_holder_fails_its_job_and_writes_the_error_step_together(database_url: str) -> None:
+    async def body(engine: AsyncEngine) -> tuple[Step, Job, list[Step]]:
+        job = await held_job(engine)
+        await write_step(engine, job.id, 1)
+        step = await fail(engine, job.id, 1)
+        return step, *await stored(engine, job.id)
+
+    step, job, steps = with_engine(database_url, body)
+    # The step takes the next seq by itself, after the one that was there.
+    assert [found.seq for found in steps] == [1, 2]
+    assert steps[1] == step
+    assert (step.kind, step.payload, step.lease_epoch) == (StepKind.ERROR, {"message": FAILURE}, 1)
+    assert (job.status, job.error) == (S.FAILED, FAILURE)
+    assert (job.lease_owner, job.lease_expires_at) == (None, None)
+    assert (job.lease_epoch, job.takeovers, job.tokens_used) == (1, 0, 7)
+
+
+def test_a_failure_that_cannot_be_stored_is_refused_before_it_is_sent(database_url: str) -> None:
+    async def body(engine: AsyncEngine) -> tuple[Job, list[Step]]:
+        job = await held_job(engine)
+        with pytest.raises(InvalidPayload):
+            await held.fail(engine, job_id=job.id, lease_epoch=1, error="bad byte \x00")
+        return await stored(engine, job.id)
+
+    job, steps = with_engine(database_url, body)
+    assert (job.status, job.error, steps) == (S.RUNNING, None, [])
+
+
+def test_leave_running_does_not_fail_a_job(database_url: str) -> None:
+    """`failed` goes through `fail`, so that no job is failed without its `error` step."""
+
+    async def body(engine: AsyncEngine) -> None:
+        job = await held_job(engine)
+        await held.leave_running(engine, job_id=job.id, lease_epoch=1, new_status=S.FAILED)
+
+    with pytest.raises(ValueError, match=r"held\.fail"):
+        with_engine(database_url, body)
 
 
 @pytest.mark.parametrize("new_status", [S.RUNNING, "paused"])
@@ -229,16 +271,19 @@ def test_a_write_to_a_job_that_is_no_longer_running_is_refused(
 ) -> None:
     """The epoch still matches: the job left `running` without being claimed again."""
 
-    async def body(engine: AsyncEngine) -> tuple[Job, Job, list[Step]]:
+    async def body(
+        engine: AsyncEngine,
+    ) -> tuple[tuple[Job, list[Step]], tuple[Job, list[Step]]]:
         job = await held_job(engine)
-        left = await leave(status)(engine, job.id, 1)
+        await leave(status)(engine, job.id, 1)
+        left = await stored(engine, job.id)
         with pytest.raises(LeaseLost):
             await write(engine, job.id, 1)
-        return left, *await stored(engine, job.id)
+        return left, await stored(engine, job.id)
 
-    left, job, steps = with_engine(database_url, body)
-    assert job == left
-    assert steps == []
+    left, found = with_engine(database_url, body)
+    assert found == left
+    assert left[0].status is status
 
 
 @each_write

@@ -10,7 +10,7 @@ from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Row, and_, select
+from sqlalchemy import Row, ScalarSelect, and_, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncConnection
 
@@ -52,6 +52,20 @@ def step_from_row(row: Row[Any]) -> Step:
     fields = dict(row._mapping)
     fields["kind"] = StepKind(fields["kind"])
     return Step(**fields)
+
+
+def next_seq(job_id: UUID) -> ScalarSelect[int]:
+    """A subquery for the job's next free `seq`: its last one plus one, or 1.
+
+    Only for a statement that holds the job row's lock, or runs in a
+    transaction that does. Without the lock two writers can pick the same
+    `seq`, and the second is refused by the unique constraint.
+    """
+    return (
+        select(func.coalesce(func.max(steps.c.seq), 0) + 1)
+        .where(steps.c.job_id == job_id)
+        .scalar_subquery()
+    )
 
 
 async def append_step(
