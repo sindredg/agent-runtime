@@ -453,9 +453,17 @@ async def _loop(
 
         if state.stop_reason in _FINISHED:
             return JobStatus.SUCCEEDED
-        raise _JobFailed(
-            _FAILURES.get(state.stop_reason or "", f"unexpected stop_reason: {state.stop_reason}")
+        failure = _FAILURES.get(
+            state.stop_reason or "", f"unexpected stop_reason: {state.stop_reason}"
         )
+        lowered = state.requested_max_tokens
+        if (
+            state.stop_reason == "max_tokens"
+            and lowered is not None
+            and lowered < settings.max_tokens
+        ):
+            failure += f", which the token budget had lowered to {lowered}"
+        raise _JobFailed(failure)
 
 
 async def _run(

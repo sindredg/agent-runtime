@@ -350,3 +350,9 @@ def test_the_last_response_carries_its_token_count_and_where_the_conversation_st
     # input 1 and output 1, from response(); the prompt and the answer.
     assert (state.counted, state.counted_messages) == (2, 2)
     assert len(state.messages) == 3
+
+
+def test_the_last_request_carries_its_max_tokens() -> None:
+    lowered = (StepKind.MODEL_REQUEST, {"model": "m", "max_tokens": 37, "messages": 1})
+
+    assert replay("go", log(lowered)).requested_max_tokens == 37

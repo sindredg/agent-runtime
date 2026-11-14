@@ -36,6 +36,8 @@ class Replay:
     # the next call starts from them (`runtime.worker.budget`).
     counted: int | None = None
     counted_messages: int = 0
+    # `max_tokens` of the last request, which the budget may have lowered.
+    requested_max_tokens: int | None = None
     # `seq` of the last step folded in, 0 before the first.
     last_seq: int = 0
     # The id of every tool call the model has made in this job. A call's
@@ -58,12 +60,15 @@ class Replay:
 
         Only `model_response` and `tool_result` steps shape the conversation.
         The results of one assistant message go into one user message, as
-        the API requires. A `model_request` and an `error` change nothing: a
-        request without a response is simply sent again.
+        the API requires. A `model_request` only records its `max_tokens`,
+        and an `error` changes nothing: a request without a response is
+        simply sent again.
         """
         self.last_seq = step.seq
         payload = step.payload
-        if step.kind is StepKind.MODEL_RESPONSE:
+        if step.kind is StepKind.MODEL_REQUEST:
+            self.requested_max_tokens = payload.get("max_tokens")
+        elif step.kind is StepKind.MODEL_RESPONSE:
             content = payload["content"]
             self.messages.append({"role": "assistant", "content": content})
             usage = payload.get("usage") or {}
