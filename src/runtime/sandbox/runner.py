@@ -129,13 +129,14 @@ def ends_within(settings: SandboxSettings) -> float:
 LONGEST_BOUND = 2 * MAX_SECONDS + REQUEST_TIMEOUT + KILL_MARGIN
 
 
-# What a guard runs: set the rules, say so, wait. On TERM it prints the count
-# of dropped packets and ends. Fixed text: the scope reaches it only as the
-# rules in RULES, built from addresses and ports.
+# What a guard runs: set the rules, say so with the call's own token, wait.
+# On TERM it prints the count of dropped packets and ends. Fixed text: the
+# scope reaches it only as the rules in RULES, built from addresses and ports.
+# The token is random per call, so no output of nft can pass for it.
 GUARD_PROGRAM = """set -eu
 printf '%s' "$RULES" | nft -f -
 trap 'nft list counter inet guard dropped; exit 0' TERM
-echo ready
+echo "ready $READY"
 sleep "$LIFETIME" &
 wait $!
 """
@@ -146,7 +147,7 @@ def _labels(job_id: UUID, lease_epoch: int) -> dict[str, str]:
 
 
 def guard_config(
-    settings: SandboxSettings, job_id: UUID, lease_epoch: int, scope: Resolved
+    settings: SandboxSettings, job_id: UUID, lease_epoch: int, scope: Resolved, ready: str
 ) -> dict[str, Any]:
     """The body of `POST /containers/create` for a scoped call's guard.
 
@@ -161,6 +162,7 @@ def guard_config(
         "Cmd": ["/bin/sh", "-c", GUARD_PROGRAM],
         "Env": [
             f"RULES={ruleset(scope, settings.deny)}",
+            f"READY={ready}",
             # It goes away by itself, at the latest when the command must have.
             f"LIFETIME={math.ceil(ends_within(settings))}",
         ],
@@ -346,13 +348,16 @@ class Sandbox:
         self.docker = docker
         self.settings = settings
         # Removals that go on after the call that started them was cancelled.
-        self._removals: set[asyncio.Task[None]] = set()
+        self._removals: set[asyncio.Task[bool]] = set()
 
-    async def _remove(self, name: str) -> None:
+    async def _remove(self, name: str) -> bool:
+        """Remove a container. False, and logged, when that failed."""
         try:
             await self.docker.remove(name)
         except SandboxError:
             log.exception("tool container not removed", extra={"container": name})
+            return False
+        return True
 
     async def remove_older(self, job_id: UUID, lease_epoch: int) -> int:
         """Remove the job's containers that a worker with an earlier lease epoch started.
@@ -388,15 +393,18 @@ class Sandbox:
                 f"Docker did not answer the start in {REQUEST_TIMEOUT:g} s"
             ) from error
 
-    async def _guard_ready(self, name: str, stream: AsyncIterator[bytes], start_by: float) -> None:
+    async def _guard_ready(
+        self, name: str, stream: AsyncIterator[bytes], start_by: float, token: str
+    ) -> None:
         """Start the guard and wait until its rules are in place, at the latest by `start_by`."""
-        said = Output(4096)
+        said = Output(64 * 1024)
+        marker = f"ready {token}\n".encode()
         try:
             async with asyncio.timeout_at(start_by):
                 await self._start(name)
                 async for chunk in stream:
                     said.feed(chunk)
-                    if b"ready\n" in said.kept:
+                    if marker in said.kept:
                         return
         except TimeoutError as error:
             raise SandboxError("the guard was not ready in time") from error
@@ -416,7 +424,7 @@ class Sandbox:
             return None
         return parse_dropped(bytes(said.kept).decode("utf-8", "replace"))
 
-    def _remove_later(self, name: str) -> asyncio.Future[None]:
+    def _remove_later(self, name: str) -> asyncio.Future[bool]:
         removal = asyncio.ensure_future(self._remove(name))
         self._removals.add(removal)
         removal.add_done_callback(self._removals.discard)
@@ -447,6 +455,7 @@ class Sandbox:
         # before Docker's answer arrived can still be removed by its name.
         name = f"agent-runtime-sandbox-{uuid4().hex}"
         guard = f"agent-runtime-guard-{uuid4().hex}" if scope is not None else None
+        token = uuid4().hex
         output = Output(settings.output_limit)
         deadline = asyncio.timeout(settings.timeout)
         exit_code: int | None = None
@@ -457,10 +466,10 @@ class Sandbox:
                 guard_stream = None
                 if guard is not None and scope is not None:
                     await self.docker.create(
-                        guard, guard_config(settings, job_id, lease_epoch, scope)
+                        guard, guard_config(settings, job_id, lease_epoch, scope, token)
                     )
                     guard_stream = await guarded.enter_async_context(self.docker.attach(guard))
-                    await self._guard_ready(guard, guard_stream, start_by)
+                    await self._guard_ready(guard, guard_stream, start_by, token)
                 await self.docker.create(
                     name, container_config(settings, job_id, lease_epoch, argv, guard=guard)
                 )
@@ -481,10 +490,14 @@ class Sandbox:
                     except TimeoutError:
                         if not deadline.expired():
                             raise
-                if guard is not None and guard_stream is not None:
-                    # The command has ended: its container is stopped first,
-                    # so nothing is sent after the count is read.
-                    await self._remove_later(name)
+                # The command's container goes first, so nothing is sent after
+                # the count is read. If it could not be removed, the count
+                # would not be the whole story, so there is none.
+                if (
+                    guard is not None
+                    and guard_stream is not None
+                    and await self._remove_later(name)
+                ):
                     dropped = await self._dropped(guard, guard_stream)
         except SandboxError as error:
             if not started:

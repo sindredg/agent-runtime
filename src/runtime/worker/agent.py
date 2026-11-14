@@ -340,6 +340,8 @@ async def _next_tool_call(
             # Names are resolved once, here, and the call gets these
             # addresses and no others (ADR 0009). They are in the log.
             try:
+                if tool.sandbox.settings.guard_image is None:
+                    raise ScopeRefused("this worker has no guard image, so it cannot enforce one")
                 resolved = await resolve(scope, tool.sandbox.settings.deny)
             except ScopeRefused as refused:
                 # Before the intent: the call does not start.

@@ -97,6 +97,17 @@ class SandboxConfig:
     # it starts (ADR 0009).
     deny_networks: tuple[str, ...] = ()
 
+    @property
+    def denied_networks(self) -> tuple[str, ...]:
+        """The networks whose subnets go into the deny list: the guards' own first.
+
+        The guards' network is in it so that one job's command cannot reach
+        another job's guard or command.
+        """
+        if self.settings.network is None:
+            return ()
+        return (self.settings.network, *self.deny_networks)
+
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> SandboxConfig | None:
         env = os.environ if env is None else env

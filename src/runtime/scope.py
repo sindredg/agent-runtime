@@ -34,6 +34,9 @@ FIXED_DENY: tuple[Network, ...] = (
     # Link-local, with the cloud metadata address 169.254.169.254.
     ipaddress.ip_network("169.254.0.0/16"),
     ipaddress.ip_network("fe80::/10"),
+    # The IPv6 metadata address of one cloud. Scopes are IPv4 for now; this
+    # holds if the guards' network ever gets IPv6.
+    ipaddress.ip_network("fd00:ec2::254/128"),
 )
 
 
@@ -54,10 +57,19 @@ def _network(host: str) -> Network | None:
     try:
         return ipaddress.ip_network(host, strict=True)
     except ValueError as error:
-        if "/" in host:
-            # A range with host bits set, or a malformed one: not a name either.
+        if "/" in host or "%" in host:
+            # A range with host bits set, a zone, or a malformed range: not a name either.
             raise ValueError(f"{host!r} is not an address range: {error}") from error
         return None
+
+
+def _numeric(name: str) -> bool:
+    """True when the system would read `name` as an IPv4 address (`2852039166`, `0x7f.1`)."""
+    try:
+        socket.inet_aton(name)
+    except OSError:
+        return False
+    return True
 
 
 class Target(BaseModel):
@@ -78,7 +90,13 @@ class Target(BaseModel):
             name = host.lower()
             if not _NAME.fullmatch(name):
                 raise ValueError(f"{host!r} is not an address, a range or a host name")
+            if _numeric(name):
+                raise ValueError(f"{host!r} spells an IPv4 address; write it in dotted form")
             return name
+        if network.version != 4:
+            # The guards' network has no IPv6, and IPv6 has spellings of IPv4
+            # addresses (mapped, NAT64, 6to4) that would bypass the checks.
+            raise ValueError(f"{host!r} is IPv6; scopes hold IPv4 targets only for now")
         if network.is_loopback or network.is_unspecified:
             raise ValueError(f"{host!r} is a loopback or unspecified address")
         entry = denied(network, FIXED_DENY)
@@ -155,7 +173,11 @@ async def resolve(targets: Sequence[Target], deny: Sequence[Network]) -> Resolve
         if network is not None:
             networks: tuple[Network, ...] = (network,)
         else:
-            addresses = await _addresses(target.host)
+            found = await _addresses(target.host)
+            # IPv4 only, like a scope's addresses: the guards' network has no IPv6.
+            addresses = tuple(a for a in found if ipaddress.ip_address(a).version == 4)
+            if not addresses:
+                raise ScopeRefused(f"{target.host!r} has no IPv4 address")
             networks = tuple(ipaddress.ip_network(address) for address in addresses)
             hosts.append((target.host, addresses))
         for candidate in networks:
@@ -187,7 +209,13 @@ def ruleset(scope: Resolved, deny: Sequence[Network]) -> str:
     loopback and replies.
     """
     output = [f"{match} counter name dropped drop" for match in _addresses_rule(deny)]
-    output += ['oifname "lo" accept', "ct state established,related accept"]
+    # Loopback by address as well as by interface: a socket bound to lo
+    # cannot send an outside address that way.
+    output += [
+        'oifname "lo" ip daddr 127.0.0.0/8 accept',
+        'oifname "lo" ip6 daddr ::1 accept',
+        "ct state established,related accept",
+    ]
     for allowed in scope.allowed:
         for match in _addresses_rule(allowed.networks):
             if allowed.ports is None:
@@ -209,6 +237,9 @@ def ruleset(scope: Resolved, deny: Sequence[Network]) -> str:
         "    type filter hook input priority 0; policy drop;",
         '    iifname "lo" accept',
         "    ct state established,related accept",
+        "  }",
+        "  chain forward {",
+        "    type filter hook forward priority 0; policy drop;",
         "  }",
         "}",
     ]

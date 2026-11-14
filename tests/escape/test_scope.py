@@ -78,18 +78,23 @@ def only(
 
 
 def connect(host: str, port: int = PORT) -> str:
-    """Prints the target's greeting, or `blocked`, or `refused` when the port is closed."""
+    """Prints `connected`, `refused` (reached, port closed) or `blocked` (no answer)."""
     return (
-        f"timeout {CONNECT} bash -c 'exec 3<>/dev/tcp/{host}/{port} && head -1 <&3';"
-        " case $? in 0) ;; 124) echo blocked ;; *) echo refused ;; esac"
+        f"timeout {CONNECT} bash -c 'exec 3<>/dev/tcp/{host}/{port}' 2>/dev/null;"
+        " case $? in 0) echo connected ;; 124) echo blocked ;; *) echo refused ;; esac"
     )
+
+
+def greet(host: str) -> str:
+    """Prints the target's greeting, or nothing."""
+    return f"timeout {CONNECT} bash -c 'exec 3<>/dev/tcp/{host}/{PORT} && head -1 <&3'"
 
 
 def test_the_target_in_scope_is_reached_and_the_one_outside_is_dropped(
     host: Host, targets: Targets
 ) -> None:
     result = host.shell(
-        f"{connect(targets.inside)}; {connect(targets.outside)}", only(targets.inside)
+        f"{greet(targets.inside)}; {connect(targets.outside)}", only(targets.inside)
     )
     print(f"\n{result.content!r} dropped={result.dropped_packets}")
 
@@ -102,7 +107,7 @@ def test_the_target_in_scope_is_reached_and_the_one_outside_is_dropped(
 def test_only_the_scopes_ports_of_a_target_are_open(host: Host, targets: Targets) -> None:
     # Nothing listens on 9090: allowed, the target would refuse at once.
     result = host.shell(
-        f"{connect(targets.inside)}; {connect(targets.inside, 9090)}",
+        f"{greet(targets.inside)}; {connect(targets.inside, 9090)}",
         only(targets.inside, ports=(PORT,)),
     )
     print(f"\n{result.content!r}")
@@ -115,26 +120,31 @@ def test_a_name_in_the_scope_resolves_as_pinned_and_no_other_name_resolves(
 ) -> None:
     scope = only(targets.inside, pinned=(("lab.test", (targets.inside,)),))
 
-    result = host.shell(f"{connect('lab.test')}; getent hosts example.com || echo no-lookup", scope)
+    result = host.shell(f"{greet('lab.test')}; getent hosts example.com || echo no-lookup", scope)
     print(f"\n{result.content!r} dropped={result.dropped_packets}")
 
     assert result.content.splitlines()[:2] == ["hello from inside", "no-lookup"]
 
 
-def test_the_deny_list_holds_even_when_a_scope_allows_it(host: Host, targets: Targets) -> None:
-    """Built by hand past the check at resolution: the rules still drop it."""
-    metadata = "169.254.169.254"
-    scope = Resolved(
-        (
-            Allowed(metadata, (ipaddress.ip_network(metadata),), None),
-            Allowed("dns", (ipaddress.ip_network("127.0.0.11"),), None),
-        ),
-        (),
-    )
-    result = host.shell(f"{connect(metadata, 80)}; {connect('127.0.0.11', 53)}", scope)
+@pytest.mark.parametrize(
+    ("allowed", "script"),
+    [
+        ("169.254.169.254", connect("169.254.169.254", 80)),
+        # Docker forwards TCP 53 here to its resolver: allowed, it connects.
+        ("127.0.0.11", connect("127.0.0.11", 53)),
+        ("127.0.0.11", "getent hosts example.com > /dev/null && echo connected || echo blocked"),
+    ],
+)
+def test_the_deny_list_holds_even_when_a_scope_allows_it(
+    host: Host, allowed: str, script: str
+) -> None:
+    """Built by hand past the check at resolution: the rules still drop it, one address per call."""
+    scope = Resolved((Allowed(allowed, (ipaddress.ip_network(allowed),), None),), ())
+
+    result = host.shell(script, scope)
     print(f"\n{result.content!r} dropped={result.dropped_packets}")
 
-    assert result.content.splitlines()[:2] == ["blocked", "blocked"]
+    assert result.content.splitlines()[0] == "blocked"
     assert result.dropped_packets is not None and result.dropped_packets > 0
 
 

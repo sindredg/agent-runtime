@@ -323,8 +323,8 @@ def test_bad_output_becomes_tool_results_and_the_job_goes_on(
 class NeverRemoves(Sandbox):
     """The sandbox of a worker that is gone: nothing removes its container."""
 
-    async def _remove(self, name: str) -> None:
-        return None
+    async def _remove(self, name: str) -> bool:
+        return True
 
 
 class DyingWorkersSandbox(OwnClientSandbox):

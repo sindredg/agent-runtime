@@ -55,10 +55,8 @@ async def run(config: WorkerConfig) -> None:
         docker = Docker(config.sandbox.docker_socket)
         sandbox_settings = config.sandbox.settings
         if sandbox_settings.network is not None:
-            # The guard network's own subnet too: tools of other jobs are on it.
-            names = (sandbox_settings.network, *config.sandbox.deny_networks)
             sandbox_settings = dataclasses.replace(
-                sandbox_settings, deny=await deny_list(docker, names)
+                sandbox_settings, deny=await deny_list(docker, config.sandbox.denied_networks)
             )
             log.info(
                 "scoped calls enabled",
