@@ -45,6 +45,7 @@ class Lease:
         # this deadline is never later than the real one.
         self._deadline = claimed_at + length.total_seconds()
         self._lost = False
+        self._lost_signal = asyncio.Event()
 
     @property
     def lost(self) -> bool:
@@ -53,6 +54,15 @@ class Lease:
 
     def mark_lost(self) -> None:
         self._lost = True
+        self._lost_signal.set()
+
+    async def wait_lost(self) -> None:
+        """Return once the database has refused a write under this lease.
+
+        Not when the deadline passes: the job may still be the worker's own
+        then, and what it has in flight can still be stored.
+        """
+        await self._lost_signal.wait()
 
     def renewed(self, sent_at: float) -> None:
         """A renewal that was sent at `sent_at` succeeded."""
