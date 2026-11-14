@@ -9,7 +9,9 @@ from runtime.store.payload import check_json
 from runtime.tools.base import CheckOutcome, Tool, ToolCall, ToolResult, operation_id
 from runtime.worker.recovery import Ask, Recovered, Rerun, decide
 
-CALL = ToolCall(workspace=Path("unused"), input={"title": "x"}, operation_id="job:toolu_1")
+CALL = ToolCall(
+    workspace=Path("unused"), input={"title": "x"}, operation_id="job:toolu_1", lease_epoch=1
+)
 
 
 def never_run(call: ToolCall) -> ToolResult:

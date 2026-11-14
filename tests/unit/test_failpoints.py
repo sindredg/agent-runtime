@@ -142,6 +142,6 @@ def test_the_crash_tool_logs_its_run_then_takes_the_worker_down(tmp_path: Path) 
     assert tool.idempotent is True
     for _ in range(2):
         with pytest.raises(Crashed):
-            tool.run(ToolCall(tmp_path, {}, "job-1:toolu_1"))
+            tool.run(ToolCall(tmp_path, {}, "job-1:toolu_1", 1))
     lines = (tmp_path / "crash_worker.log").read_text().splitlines()
     assert [json.loads(line)["operation_id"] for line in lines] == ["job-1:toolu_1"] * 2

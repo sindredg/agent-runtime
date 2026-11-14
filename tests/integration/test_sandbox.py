@@ -13,16 +13,23 @@ import subprocess
 import time
 import uuid
 from collections.abc import Iterator, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncEngine
 
+from runtime.provider.base import ModelRequest, ModelResponse
+from runtime.provider.messages import AnthropicProvider
 from runtime.sandbox.docker import Docker
-from runtime.sandbox.runner import LABEL, Run, Sandbox, SandboxSettings
-from runtime.store.steps import StepKind
+from runtime.sandbox.runner import LABEL, Run, Sandbox, SandboxSettings, ends_within
+from runtime.store.jobs import claim_job
+from runtime.store.status import JobStatus
+from runtime.store.steps import Step, StepKind, read_steps
 from runtime.tools import default_tools
+from runtime.worker.agent import run_job
 
-from .conftest import Ran, Stack
+from .conftest import Ran, Stack, expire_lease
 
 SOCKET = os.environ.get("DOCKER_SOCKET", "/var/run/docker.sock")
 IMAGE = os.environ.get("SANDBOX_IMAGE", "agent-runtime-sandbox:dev")
@@ -67,6 +74,9 @@ def workspace_volume(tmp_path: Path) -> Iterator[tuple[Path, str]]:
     try:
         yield root, name
     finally:
+        # A test that failed can leave a container that holds the volume.
+        for container in our_containers(name):
+            docker_cli("rm", "--force", container)
         docker_cli("volume", "rm", "--force", name)
 
 
@@ -100,19 +110,29 @@ class OwnClientSandbox:
     belongs to the loop it was used in.
     """
 
+    # What the sandbox is: a real one, or one of a worker that dies.
+    kind: type[Sandbox] = Sandbox
+
     def __init__(self, settings: SandboxSettings) -> None:
         self.settings = settings
 
-    async def run(self, job_id: uuid.UUID, argv: Sequence[str]) -> Run:
+    async def run(self, job_id: uuid.UUID, lease_epoch: int, argv: Sequence[str]) -> Run:
         docker = Docker(SOCKET)
         try:
-            return await Sandbox(docker, self.settings).run(job_id, argv)
+            return await self.kind(docker, self.settings).run(job_id, lease_epoch, argv)
+        finally:
+            await docker.aclose()
+
+    async def remove_older(self, job_id: uuid.UUID, lease_epoch: int) -> int:
+        docker = Docker(SOCKET)
+        try:
+            return await self.kind(docker, self.settings).remove_older(job_id, lease_epoch)
         finally:
             await docker.aclose()
 
 
 def run(settings: SandboxSettings, job_id: uuid.UUID, argv: Sequence[str]) -> Run:
-    return asyncio.run(OwnClientSandbox(settings).run(job_id, argv))
+    return asyncio.run(OwnClientSandbox(settings).run(job_id, 1, argv))
 
 
 def shell(settings: SandboxSettings, job_id: uuid.UUID, script: str) -> Run:
@@ -200,7 +220,7 @@ def test_a_cancelled_call_still_removes_its_container(
 
     async def go() -> None:
         docker = Docker(SOCKET)
-        call = asyncio.ensure_future(Sandbox(docker, settings).run(job_id, ["sleep", "30"]))
+        call = asyncio.ensure_future(Sandbox(docker, settings).run(job_id, 1, ["sleep", "30"]))
         await asyncio.sleep(1.0)
         for _ in range(cancels):
             call.cancel()
@@ -284,3 +304,218 @@ def test_bad_output_becomes_tool_results_and_the_job_goes_on(
     sent = sent_results(ran)
     assert [block["is_error"] for block in sent] == [True, False, False]
     assert [block["content"] for block in sent] == [result["content"] for result in results]
+
+
+# A worker that stops during a sandboxed call (ADR 0008): its container goes
+# on. The worker that takes the job over removes it, and decides nothing
+# about the call before the call's bound has passed.
+
+
+class NeverRemoves(Sandbox):
+    """The sandbox of a worker that is gone: nothing removes its container."""
+
+    async def _remove(self, name: str) -> None:
+        return None
+
+
+class DyingWorkersSandbox(OwnClientSandbox):
+    kind = NeverRemoves
+
+
+class OneLongCommand:
+    """A provider that asks for one command, then ends the turn."""
+
+    def __init__(self, command: str) -> None:
+        self.command = command
+
+    async def complete(self, request: ModelRequest) -> ModelResponse:
+        turn = sum(1 for message in request.messages if message["role"] == "assistant")
+        if turn == 0:
+            content = [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_long",
+                    "name": "run_shell",
+                    "input": {"command": self.command},
+                }
+            ]
+            return ModelResponse("msg_0", "m", content, "tool_use", 10, 5)
+        return ModelResponse("msg_1", "m", [{"type": "text", "text": "done"}], "end_turn", 10, 5)
+
+    async def aclose(self) -> None:
+        return None
+
+
+def running(container: str) -> bool:
+    return docker_cli("inspect", "--format", "{{.State.Running}}", container).strip() == "true"
+
+
+@dataclass
+class TakenOver:
+    status: JobStatus | None
+    steps: list[Step]
+    # Seconds after the second worker started until the first worker's
+    # container was gone, or None if it was still there when the worker ended.
+    removed_after: float | None
+    # Seconds the second worker took.
+    took: float
+
+
+def kill_during_a_call_then_take_over(
+    stack: Stack, workspace_volume: tuple[Path, str], settings: SandboxSettings
+) -> TakenOver:
+    provider = OneLongCommand("echo started; sleep 300")
+    volume = workspace_volume[1]
+
+    async def body(engine: AsyncEngine, _: AnthropicProvider) -> TakenOver:
+        async with engine.begin() as conn:
+            await stack.create(conn, {"prompt": "run it"})
+            first_claim = await claim_job(conn, worker_id="w1")
+        assert first_claim is not None
+        first = asyncio.create_task(
+            run_job(
+                engine,
+                provider,
+                default_tools(sandbox=DyingWorkersSandbox(settings)),
+                first_claim,
+                stack.settings(),
+            )
+        )
+        async with asyncio.timeout(30):
+            while not (found := await asyncio.to_thread(our_containers, volume)):  # noqa: ASYNC110 - Docker has no event to wait on
+                await asyncio.sleep(0.1)
+            while not await asyncio.to_thread(running, found[0]):  # noqa: ASYNC110 - Docker has no event to wait on
+                await asyncio.sleep(0.1)
+        # The worker is gone. Its container is not.
+        first.cancel()
+        await asyncio.gather(first, return_exceptions=True)
+        assert await asyncio.to_thread(running, found[0])
+
+        async with engine.begin() as conn:
+            await expire_lease(conn, first_claim.id)
+            second_claim = await claim_job(conn, worker_id="w2")
+        assert second_claim is not None
+        assert second_claim.lease_epoch == first_claim.lease_epoch + 1
+        started = time.monotonic()
+        second = asyncio.create_task(
+            run_job(
+                engine,
+                provider,
+                default_tools(sandbox=OwnClientSandbox(settings)),
+                second_claim,
+                stack.settings(),
+            )
+        )
+        removed_after = None
+        while not second.done():
+            if removed_after is None and not await asyncio.to_thread(our_containers, volume):
+                removed_after = time.monotonic() - started
+            await asyncio.sleep(0.2)
+        status = await second
+        took = time.monotonic() - started
+        if removed_after is None and not our_containers(volume):
+            removed_after = took
+        async with engine.connect() as conn:
+            steps = await read_steps(conn, first_claim.id)
+        return TakenOver(status, steps, removed_after, took)
+
+    return stack.run(body)
+
+
+def test_the_next_worker_removes_a_dead_workers_container_and_waits_out_the_call(
+    stack: Stack, workspace_volume: tuple[Path, str], settings: SandboxSettings
+) -> None:
+    assert stack.workspace_root == workspace_volume[0]
+    # A short bound, so the test waits seconds and not a minute. The command's
+    # own timeout (10 s plus the margin) ends it far later than the removal.
+    short = dataclasses.replace(settings, timeout=10.0, start_within=2.0)
+    bound = ends_within(short)
+
+    taken = kill_during_a_call_then_take_over(stack, workspace_volume, short)
+
+    # Removed at the takeover, long before the command's own timeout ends it.
+    assert taken.removed_after is not None
+    assert taken.removed_after < 5.0
+    assert our_containers(workspace_volume[1]) == []
+
+    kinds = [(step.kind, step.lease_epoch) for step in taken.steps]
+    assert kinds == [
+        (StepKind.MODEL_REQUEST, 1),
+        (StepKind.MODEL_RESPONSE, 1),
+        (StepKind.TOOL_INTENT, 1),
+        (StepKind.APPROVAL_REQUESTED, 2),
+    ]
+    intent, question = taken.steps[2], taken.steps[3]
+    assert intent.payload["ends_within"] == bound
+    # run_shell is not idempotent: after the wait, a person decides.
+    assert taken.status is JobStatus.NEEDS_APPROVAL
+    # Not before the bound had passed since the intent, by the database clock.
+    assert (question.created_at - intent.created_at).total_seconds() >= bound
+
+
+@pytest.mark.parametrize(
+    "script",
+    [
+        "sleep 300 & sleep 300",
+        # The command tries to stop or kill the timeout that bounds it.
+        "kill -STOP $PPID; kill -STOP 1; kill -KILL 1; sleep 300",
+    ],
+)
+def test_a_container_left_by_a_dead_worker_ends_at_its_own_timeout(
+    settings: SandboxSettings, workspace_volume: tuple[Path, str], script: str
+) -> None:
+    """Nobody removes it, and it still does not run on: the timeout is inside the container."""
+    job_id = new_workspace(workspace_volume[0])
+    short = dataclasses.replace(settings, timeout=2.0)
+
+    async def abandon() -> str:
+        call = asyncio.ensure_future(
+            DyingWorkersSandbox(short).run(job_id, 1, ["/bin/sh", "-c", script])
+        )
+        async with asyncio.timeout(30):
+            while not (found := await asyncio.to_thread(our_containers, workspace_volume[1])):  # noqa: ASYNC110 - Docker has no event to wait on
+                await asyncio.sleep(0.1)
+        call.cancel()
+        await asyncio.gather(call, return_exceptions=True)
+        return found[0]
+
+    container = asyncio.run(abandon())
+    try:
+        started = time.monotonic()
+        while running(container) and time.monotonic() - started < 30:
+            time.sleep(0.2)
+
+        assert not running(container)
+        # The worker's timeout plus the margin, counted from the start.
+        assert time.monotonic() - started < short.timeout + 5
+    finally:
+        docker_cli("rm", "--force", container)
+
+
+# PTRACE_ATTACH (16) through perl's syscall(), which needs the number of
+# ptrace on this machine's architecture. Perl tries PID 1, then a child it
+# forked itself: Yama at 1 lets a process trace only its own descendants.
+PTRACE = {"x86_64": 101, "aarch64": 117}
+ATTACH = (
+    "perl -e 'sub attach {{ my $r = syscall({nr}, 16, $_[0] + 0, 0, 0);"
+    ' print $r == 0 ? "attached\\n" : "refused: $!\\n" }}'
+    " attach(1); my $child = fork(); if ($child == 0) {{ sleep 30; exit 0 }}"
+    " attach($child); kill 9, $child'"
+)
+
+
+def test_the_command_cannot_trace_its_timeout_but_can_trace_its_own_child(
+    settings: SandboxSettings, workspace_volume: tuple[Path, str]
+) -> None:
+    """An attach stops the traced process, so a traced PID 1 would never end the call.
+
+    The worker refuses a host whose ptrace_scope allows it (`check_host`). The
+    control: tracing a child of the command works, so a refusal is not just
+    a sandbox without ptrace.
+    """
+    job_id = new_workspace(workspace_volume[0])
+    script = ATTACH.format(nr=PTRACE[os.uname().machine])
+
+    done = shell(settings, job_id, script)
+
+    assert done.output.decode().splitlines() == ["refused: Operation not permitted", "attached"]
