@@ -70,9 +70,11 @@ LINES = [
 ]
 
 
-def sse(steps: list[dict[str, Any]], end: str | None) -> httpx2.Response:
+def sse(steps: list[dict[str, Any]], end: str | None, status: str | None = None) -> httpx2.Response:
     text = "".join(f"id: {s['seq']}\nevent: step\ndata: {json.dumps(s)}\n\n" for s in steps)
     text += ": keep-alive\n\n"
+    if status is not None:
+        text += f"event: status\ndata: {json.dumps({'status': status})}\n\n"
     if end is not None:
         text += f"event: end\ndata: {json.dumps({'status': end})}\n\n"
     return httpx2.Response(200, headers={"content-type": "text/event-stream"}, text=text)
@@ -88,6 +90,8 @@ class StubApi:
         self.submit_response = httpx2.Response(201, json=job())
         self.drop_after: int | None = None
         self.approve_response = httpx2.Response(200, json=job("queued"))
+        # A `status` event the stream carries after the steps, if any.
+        self.status: str | None = None
 
     def __call__(self, request: httpx2.Request) -> httpx2.Response:
         self.requests.append(request)
@@ -107,7 +111,8 @@ class StubApi:
             after = int(request.url.params.get("after", "0"))
             remaining = [s for s in STEPS if s["seq"] > after]
             # `drop_after` cuts each answer short, like a connection that breaks.
-            return sse(remaining[: self.drop_after], self.end if self.drop_after is None else None)
+            end = self.end if self.drop_after is None else None
+            return sse(remaining[: self.drop_after], end, self.status)
         return httpx2.Response(404, json={"detail": "job not found"})
 
 
@@ -276,6 +281,34 @@ def test_logs_follow_prints_the_stream_and_the_outcome() -> None:
     assert out.splitlines() == [*LINES, "succeeded  tokens_used=19"]
 
 
+@pytest.mark.parametrize("command", ["submit", "logs"])
+def test_following_a_job_that_stops_for_approval_says_how_to_approve_and_exits_with_3(
+    job_file: Path, command: str
+) -> None:
+    """The stream of such a job stays open. The command must not wait on it for ever."""
+    api = StubApi(final=job("needs_approval", tokens_used=19), end=None)
+    api.status = "needs_approval"
+    target = str(job_file) if command == "submit" else JOB_ID
+    code, out, err = run(command, target, "--follow", api=api)
+    assert (code, err) == (3, "")
+    assert out.splitlines()[-(len(LINES) + 3) :] == [
+        *LINES,
+        "needs_approval  tokens_used=19",
+        "The job waits for approval: a tool call was interrupted and may or may not have run.",
+        f"To run the call again: runtime approve {JOB_ID}",
+    ]
+    # One look at the stream was enough.
+    assert len([r for r in api.requests if r.url.path.endswith("/events")]) == 1
+
+
+def test_a_status_event_for_a_job_that_goes_on_is_passed_over() -> None:
+    api = StubApi()
+    api.status = "running"
+    code, out, _ = run("logs", JOB_ID, "--follow", api=api)
+    assert code == 0
+    assert out.splitlines() == [*LINES, "succeeded  tokens_used=19"]
+
+
 def test_a_stream_that_keeps_ending_without_its_end_event_exits_with_2() -> None:
     api = StubApi(end=None)
     code, out, err = run("logs", JOB_ID, "--follow", api=api)
@@ -376,6 +409,8 @@ def test_a_step_with_unicode_line_separators_is_one_event() -> None:
         'event: step\ndata: {"seq": 1}\n\n',
         "event: end\ndata: {}\n\n",
         'event: end\ndata: ["succeeded"]\n\n',
+        "event: status\ndata: not json\n\n",
+        'event: status\ndata: ["needs_approval"]\n\n',
     ],
 )
 def test_a_stream_with_unexpected_data_exits_with_2_without_a_traceback(events: str) -> None:
