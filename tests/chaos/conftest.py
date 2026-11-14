@@ -15,7 +15,7 @@ import platform
 import re
 import subprocess
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -257,8 +257,30 @@ def commit() -> str:
     return f"{head}{' (uncommitted changes)' if dirty else ''}"
 
 
+# The results of the test that is running. They are written when it is over.
+_pending: list[dict[str, Any]] = []
+# How the body of a test ended, kept on the test for the fixture below.
+_PASSED = pytest.StashKey[bool]()
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[None]) -> Any:
+    report = yield
+    if report.when == "call":
+        item.stash[_PASSED] = report.passed
+    return report
+
+
 def record(name: str, result: dict[str, Any]) -> None:
-    """Keep a result with what is needed to judge and repeat it."""
+    """Keep a result with what is needed to judge and repeat it.
+
+    It is written to the results file when the test is over, with how the
+    test ended in `verdict`: `passed`, `failed`, or `void` when the clock
+    was set. A result may not use that field, or `void`, for its own data.
+    """
+    for taken in ("verdict", "void"):
+        if taken in result:
+            raise ValueError(f"a result may not have a field called {taken!r}")
     entry = {
         "test": name,
         "commit": commit(),
@@ -269,14 +291,24 @@ def record(name: str, result: dict[str, Any]) -> None:
         "where": "GitHub Actions" if os.environ.get("GITHUB_ACTIONS") else "local Docker Compose",
         **result,
     }
+    _pending.append(entry)
+
+
+def _write_results(verdict: str, void: str | None = None) -> None:
+    """Append the finished test's results to the results file, each with its verdict."""
     CHAOS_DIR.mkdir(exist_ok=True)
     with (CHAOS_DIR / "results.jsonl").open("a", encoding="utf-8") as file:
-        file.write(json.dumps(entry) + "\n")
-    print(f"\nRESULT {json.dumps(entry)}")
+        for entry in _pending:
+            entry["verdict"] = verdict
+            if void is not None:
+                entry["void"] = void
+            file.write(json.dumps(entry) + "\n")
+            print(f"\nRESULT {json.dumps(entry)}")
+    _pending.clear()
 
 
 @pytest.fixture(autouse=True)
-def steady_clock() -> Iterator[None]:
+def steady_clock(request: pytest.FixtureRequest) -> Iterator[None]:
     """Void a run during which the machine's clock was set.
 
     A lease ends by the database's wall clock. If that clock is set forward
@@ -285,21 +317,64 @@ def steady_clock() -> Iterator[None]:
     the design, not what these tests are about, and a run it happens in
     proves nothing either way. The wall clock is compared with the monotonic
     clock, which is never set.
+
+    The test's results are written here, after that check, so that a line in
+    the results file never reads like a pass when the run was void or failed.
     """
+    _pending.clear()
     wall, monotonic = time.time(), time.monotonic()
     yield
     step = (time.time() - wall) - (time.monotonic() - monotonic)
     if abs(step) > CLOCK_STEP_LIMIT:
+        moved = f"the wall clock moved {step:+.1f} s against the monotonic clock"
+        _write_results("void", void=moved)
         pytest.fail(
-            f"void run: the wall clock moved {step:+.1f} s against the monotonic clock"
-            " during this test. Leases run on the wall clock, so the result does not count."
+            f"void run: {moved} during this test."
+            " Leases run on the wall clock, so the result does not count."
         )
+    _write_results("passed" if request.node.stash.get(_PASSED, False) else "failed")
+
+
+def host_can_write(directory: Path) -> bool:
+    """True if the tests can write to `directory`, or can still create it."""
+    return not directory.exists() or os.access(directory, os.W_OK)
+
+
+def worker_can_write(container: str, run: Callable[..., str] = docker) -> bool:
+    """True if the worker in `container` can write to the crash tool's log directory."""
+    test = 'test -w "$CHAOS_LOG_DIR" && echo writable'
+    return run("docker", "exec", container, "sh", "-c", test, check=False).strip() == "writable"
+
+
+def stop_unless(writable: bool) -> None:
+    """End the test session with what to do about a `.chaos` that cannot be written to.
+
+    The crash tool logs each run there before it ends its worker, and the
+    tests keep the workers' logs there. It is a bind mount of `.chaos` on
+    the host. Docker creates that directory as root when it is missing at
+    the start of the stack, and then neither the workers nor the tests can
+    write to it. The crash tool would fail and its worker would live, and
+    the crash loop test would fail for a reason it does not name.
+    """
+    if writable:
+        return
+    pytest.exit(
+        "The workers or the tests cannot write to .chaos, the directory the crash tool"
+        " logs to. Docker creates it as root when it is missing at the start of the"
+        " stack. Run `make chaos`, which creates it first, or make it writable by hand"
+        " (`sudo chmod 777 .chaos`) and run the tests again.",
+        returncode=1,
+    )
 
 
 @pytest.fixture(scope="session")
 def chaos() -> Iterator[Chaos]:
     stack = Chaos()
+    # Before the workers are brought up: that step saves their logs to .chaos.
+    stop_unless(host_can_write(CHAOS_DIR))
     stack.workers_up()
+    running = [container for container, state in stack.workers().items() if state == "running"]
+    stop_unless(worker_can_write(running[0]))
     try:
         yield stack
     finally:

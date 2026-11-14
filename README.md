@@ -69,8 +69,9 @@ make clean
 
 `runtime approve` is for a job in `needs_approval`: a worker went away during
 a tool call and nobody can tell whether the call happened. Approving runs the
-call again, so look at the system the tool changes first. `make clean` stops
-the stack and deletes its database.
+call again, so look at the system the tool changes first. A command that
+follows such a job prints how to approve it and exits with status 3. `make
+clean` stops the stack and deletes its database.
 
 ## Job files
 

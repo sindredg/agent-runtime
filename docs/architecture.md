@@ -62,7 +62,7 @@ sequenceDiagram
             W->>D: step tool_result (fenced)
         end
     end
-    W->>D: leave running: succeeded or failed (fenced)
+    W->>D: leave running, or fail with the error step (fenced)
     A-->>C: one event per step, then end
 ```
 
@@ -155,12 +155,13 @@ move inside its `UPDATE`. Nothing calls it yet: it is there for cancel.
 | Claim | One `UPDATE` in `store/jobs.py`. Its subquery picks the oldest job that is `queued`, or `running` with `lease_expires_at` before the database clock, with `FOR NO KEY UPDATE SKIP LOCKED`. It sets `lease_owner`, sets `lease_expires_at` from the database clock, and increments `lease_epoch`. Taking a `running` job also increments `takeovers`. |
 | Takeover limit | A takeover of a job whose `takeovers` is already 5 is not made. The same statement marks the job `failed`, and the claim appends an `error` step in the same transaction. The worker loop that made the claim removes the job's workspace. Claims after a release or an approval are not counted and not limited ([ADR 0006](adr/0006-count-takeovers-apart-from-claims.md)). |
 | Lease and heartbeat | A lease lasts `LEASE_SECONDS`. While a job runs, a task renews it every `HEARTBEAT_SECONDS` (`worker/lease.py`). The worker also keeps its own deadline on its monotonic clock: the time it sent the claim or the last successful renewal, plus the lease length. It checks that deadline before it touches the workspace, before each `model_request` and `tool_intent` step, and again immediately before each model call, tool run and tool check. |
-| Fencing | Every write of a worker to its job is one statement in `store/held.py` that updates the job row and only matches while the job is `running` under the worker's `lease_epoch`: a step with its token count, a renewal, and the move out of `running`. The update locks the row, so a write and a claim of one job cannot overlap. The statements are sent in autocommit, outside a transaction block. A write that changes no row raises `LeaseLost` ([ADR 0004](adr/0004-fence-writes-with-the-lease-epoch-and-a-row-lock.md)). |
+| Fencing | Every write of a worker to its job is one statement in `store/held.py` that updates the job row and only matches while the job is `running` under the worker's `lease_epoch`: a step with its token count, a renewal, the move out of `running`, and a failure. The update locks the row, so a write and a claim of one job cannot overlap. The statements are sent in autocommit, outside a transaction block. A write that changes no row raises `LeaseLost` ([ADR 0004](adr/0004-fence-writes-with-the-lease-epoch-and-a-row-lock.md)). |
+| Failure | A worker fails its job with one fenced statement: the move to `failed` and the `error` step, which takes the next `seq` by itself. A worker that stops while it fails a job leaves both or neither. A job with an `error` step is therefore never `running`, and no worker takes it over. |
 | Dropping a job | On `LeaseLost`, or when the database cannot be reached, the worker drops the job: it writes nothing more, starts no tool and no model call, and leaves the status and the workspace alone. A model call in flight is cancelled as soon as a heartbeat is refused: its answer would be refused too, so the worker does not wait for it. What the provider did up to the cancel may still be billed. A call is not cancelled for the worker's own deadline alone: its answer is still stored if nobody took the job. The job stays as it is until its lease runs out and another worker takes it over. |
 | Duplicate steps | A second step with the same (`job_id`, `seq`) is refused. In a fenced write the refusal undoes the token count with it. |
 | Resume | See [What happens when a worker goes away](#what-happens-when-a-worker-goes-away). |
 | Graceful stop | On SIGTERM the worker claims nothing more. At the next step boundary it releases the job: `running` to `queued`, fenced, so the next claim is not a takeover. A model call in flight is cancelled at once. A running tool is waited for and its result stored. The compose stack gives the worker 30 seconds before Docker kills it. |
-| Tool calls | A response is checked before any of its tools run: every tool call needs an id, a name and an object input, and ids must differ. The calls of one response run one after another. A failed call is an error result for the model, and the job goes on. |
+| Tool calls | A response is checked before any of its tools run: every tool call needs an id, a name and an object input, ids must differ, and no id may repeat one from an earlier response of the job. A response that fails the check fails the job. The calls of one response run one after another. A failed call is an error result for the model, and the job goes on. |
 | Provider errors | A failed model call fails the job with an `error` step. There is no retry. |
 | Limits | `token_budget` and `deadline` are stored and not enforced. `tokens_used` is counted from the usage of each response that was received in full. A call that fails or is abandoned part way is not counted. |
 | Workspace | `WORKSPACE_ROOT/<job id>`. Files from the spec are written if they are missing and left alone if they are there, so a job that is taken over keeps what its tools wrote. In the stack every worker mounts the same volume. Only the worker that made a job final removes its workspace. `read_file` refuses absolute paths, `..`, and symlinks that lead out, checked after symlinks are followed. |
@@ -195,6 +196,12 @@ is asked again.
 | `create_issue` | No | Asks the tracker for an issue with the operation id. Found: done. A clear answer with none: not done. Anything else: unknown. |
 | `crash_worker` | Yes, on purpose | |
 
+`create_issue` uses the same lookup when its own request gets no answer: a
+timeout or a broken connection. Found: the result says the issue was created.
+Not found, or no clear answer: the result is an error that says the issue may
+exist. The model is then not told that a call failed which went through. The
+tool can take two request timeouts this way, 20 seconds.
+
 ### Failure tests
 
 These exist for the tests in `tests/chaos` and do nothing unless switched on.
@@ -214,7 +221,7 @@ These exist for the tests in `tests/chaos` and do nothing unless switched on.
 | `POST /jobs` | 201 and the job. Body: `prompt`, optional `system`, `model`, `files`, `token_budget`, `timeout_seconds`. Unknown fields are refused with 422. |
 | `GET /jobs/{id}` | The job. 404 if there is none. |
 | `GET /jobs/{id}/steps?after=&limit=` | Steps with `seq` above `after`, in order, at most 1000. |
-| `GET /jobs/{id}/events` | Server-sent events: one `step` event per step with `id` set to its `seq`, then one `end` event with the final status. `Last-Event-ID` or `?after=` continues a broken stream. |
+| `GET /jobs/{id}/events` | Server-sent events: one `step` event per step with `id` set to its `seq`, then one `end` event with the final status. A job that stops in `needs_approval` gets one `status` event that says so, and the stream stays open. `Last-Event-ID` or `?after=` continues a broken stream. |
 | `POST /jobs/{id}/approve` | The job, now `queued`, after an `approval_given` step was appended in the same transaction. 409 unless the job is `needs_approval`. Of several approvals sent at once, one succeeds. |
 | `GET /healthz` | 200 while the process serves. It does not check Postgres. |
 
@@ -256,7 +263,7 @@ stack by accident. See `.env.example`.
 |---|---|---|
 | `tests/unit` | nothing | Status transitions, replay, the decision about an interrupted call, the lease deadline with a fake clock, failpoints, scenario parsing, the fake provider and the fake tracker in process, the provider client's failure handling, the tools, the CLI against a stubbed API. |
 | `tests/integration` | `make up` | Migrations. The store on real Postgres: claims, takeovers, the limit, fenced writes with two connections. The worker against the fake provider: heartbeat, lost lease, resume at each interruption point, each row of the decision table, approval, graceful stop, each failpoint. The API over HTTP. Two jobs end to end through the stack. |
-| `tests/chaos` | `make chaos` | Workers that are killed at random times, end themselves at failpoints, are paused past their lease, crash on every run, and get SIGTERM. See the [results](../README.md#results). |
+| `tests/chaos` | `make chaos` | Workers that are killed at random times, end themselves at failpoints, are paused past their lease, crash on every run, and get SIGTERM. Each test writes its result to `.chaos/results.jsonl` when it is over, with a `verdict`: `passed`, `failed`, or `void` when the machine's clock was set during the run. See the [results](../README.md#results). |
 | `tests/contract` | `make up`, a Claude API key | The fake provider against the Claude API. Run by hand. It has not been run yet, so the fake's match with the real API is not tested. |
 
 The integration and chaos suites never mock Postgres. A test that checks what
@@ -296,20 +303,14 @@ Not built or not closed:
   worker, and the job is taken over when its lease runs out.
 - A worker told to stop while it writes a `tool_intent` step still runs that
   tool, because the intent is already in the log.
-- A job's failure is two writes: the `error` step, then the status. A worker
-  that stops between them leaves a job that the next worker runs on, with an
-  `error` step in the middle of its log.
 - The operation id protects a call that the runtime runs again. It does not
   protect against the model: a model that is told a call failed and asks for
-  it again makes a new call with a new id. A model that reuses a call id in a
-  later turn gets the same operation id for a different call.
+  it again makes a new call with a new id.
 - A workspace can be left behind: when the write that makes a job final
   reaches the database but its answer does not reach the worker, and when two
   workers use different workspace roots.
 - `not_before` and `cancel_requested` are columns that nothing reads or sets
   yet.
-- `runtime submit --follow` and `runtime logs --follow` wait for a final
-  status. They keep waiting while a job is in `needs_approval`.
 - All workers have to see the same workspace directory. The stack does that
   with one volume on one host.
 - The whole conversation is sent with every model call. A job that outgrows
