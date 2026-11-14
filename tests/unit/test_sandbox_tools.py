@@ -20,6 +20,7 @@ from runtime.tools.sandboxed import SandboxTool, describe
 
 LIMIT = 64 * 1024
 JOB = uuid.UUID("01a1d655-88bd-7468-afc4-5ca3a1947906")
+EPOCH = 3
 
 
 DONE = Run(b"done\n", 5, 0)
@@ -31,18 +32,21 @@ class FakeSandbox:
     def __init__(self, answer: Run | Exception = DONE) -> None:
         self.settings = SandboxSettings(image="sandbox:test", volume="workspaces", timeout=30)
         self.answer = answer
-        self.calls: list[tuple[uuid.UUID, list[str]]] = []
+        self.calls: list[tuple[uuid.UUID, int, list[str]]] = []
 
-    async def run(self, job_id: uuid.UUID, argv: Sequence[str]) -> Run:
-        self.calls.append((job_id, list(argv)))
+    async def run(self, job_id: uuid.UUID, lease_epoch: int, argv: Sequence[str]) -> Run:
+        self.calls.append((job_id, lease_epoch, list(argv)))
         if isinstance(self.answer, Exception):
             raise self.answer
         return self.answer
 
+    async def remove_older(self, job_id: uuid.UUID, lease_epoch: int) -> int:
+        raise AssertionError("a tool call never removes containers")
+
 
 def call(tool: SandboxTool, tool_input: dict[str, Any]) -> ToolResult:
     workspace = Path("/workspaces") / str(JOB)
-    return asyncio.run(tool.run(ToolCall(workspace, tool_input, f"{JOB}:toolu_1")))
+    return asyncio.run(tool.run(ToolCall(workspace, tool_input, f"{JOB}:toolu_1", EPOCH)))
 
 
 # The command built from the input
@@ -52,7 +56,7 @@ def test_run_shell_runs_the_command_with_sh_in_the_jobs_workspace() -> None:
     sandbox = FakeSandbox()
     result = call(run_shell_tool(sandbox), {"command": "ls | wc -l"})
 
-    assert sandbox.calls == [(JOB, ["/bin/sh", "-c", "ls | wc -l"])]
+    assert sandbox.calls == [(JOB, EPOCH, ["/bin/sh", "-c", "ls | wc -l"])]
     assert result == ToolResult("done\n[exit status 0]")
 
 
@@ -85,7 +89,7 @@ def test_list_dir_lists_one_path_of_the_workspace(
     sandbox = FakeSandbox()
     call(list_dir_tool(sandbox), tool_input)
 
-    assert sandbox.calls == [(JOB, argv)]
+    assert sandbox.calls == [(JOB, EPOCH, argv)]
 
 
 @pytest.mark.parametrize("path", ["/etc", "../other-job", "a/../../b", "", 7, "a\x00"])

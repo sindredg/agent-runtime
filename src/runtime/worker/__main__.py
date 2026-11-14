@@ -10,7 +10,7 @@ from runtime.failpoints import Failpoints
 from runtime.logs import configure_logging
 from runtime.provider.messages import AnthropicProvider
 from runtime.sandbox.docker import Docker
-from runtime.sandbox.runner import Sandbox
+from runtime.sandbox.runner import Sandbox, check_host
 from runtime.store.engine import create_engine
 from runtime.tools import default_tools
 from runtime.worker.agent import AgentSettings
@@ -32,6 +32,10 @@ async def run(config: WorkerConfig) -> None:
         "worker started",
         extra={"worker_id": config.worker_id, "default_model": config.provider.model},
     )
+    if config.sandbox is not None:
+        # Before anything starts: on a host where a command could stop its
+        # own timeout, the worker does not run at all.
+        check_host()
     engine = create_engine(config.database_url)
     provider = AnthropicProvider(api_key=config.provider.api_key, base_url=config.provider.base_url)
     settings = AgentSettings(

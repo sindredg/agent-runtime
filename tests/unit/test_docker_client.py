@@ -112,3 +112,29 @@ def test_attach_refused_is_a_docker_error() -> None:
 
     with pytest.raises(DockerError, match="409: container is stopped"):
         with_docker(handler, body)
+
+
+def test_containers_lists_every_container_with_the_labels() -> None:
+    seen: list[httpx2.Request] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        seen.append(request)
+        return httpx2.Response(200, json=[{"Id": "abc", "Labels": {"a": "1"}}])
+
+    found = with_docker(handler, lambda docker: docker.containers({"a": "1", "b": "two"}))
+
+    assert found == [{"Id": "abc", "Labels": {"a": "1"}}]
+    assert seen[0].method == "GET"
+    assert seen[0].url.path == "/v1.45/containers/json"
+    # Stopped ones too: a container that ended is still to be removed.
+    assert seen[0].url.params["all"] == "1"
+    assert json.loads(seen[0].url.params["filters"]) == {"label": ["a=1", "b=two"]}
+
+
+@pytest.mark.parametrize("body", [{"Id": "abc"}, [{"Labels": {}}], [{"Id": 5}], ["abc"]])
+def test_a_list_of_containers_of_another_shape_is_a_sandbox_error(body: object) -> None:
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=body)
+
+    with pytest.raises(SandboxError, match="list of containers"):
+        with_docker(handler, lambda docker: docker.containers({"a": "1"}))

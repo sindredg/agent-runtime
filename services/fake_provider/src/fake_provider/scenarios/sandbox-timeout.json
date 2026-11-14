@@ -1,0 +1,7 @@
+{
+  "description": "One sandboxed command that runs past its timeout. Then the turn ends.",
+  "turns": [
+    {"content": [{"type": "tool_use", "name": "run_shell", "input": {"command": "echo started; sleep 30"}}]},
+    {"content": [{"type": "text", "text": "The command came back. The job is done."}]}
+  ]
+}

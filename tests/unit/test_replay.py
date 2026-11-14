@@ -1,5 +1,6 @@
 """Replay turns a step log into the conversation and the next thing to do."""
 
+import dataclasses
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -237,6 +238,17 @@ def test_an_intent_without_a_result_is_reported_as_interrupted() -> None:
     assert state.approval is None
     assert state.pending == [call("t1")]
     assert not state.needs_model_call
+
+
+def test_the_interrupted_call_carries_the_time_of_its_last_intent() -> None:
+    """A takeover counts the wait for the call's container from it (ADR 0008)."""
+    steps = log(request(), response(call("t1")), intent("t1"), intent("t1"))
+    first, second = datetime(2026, 1, 1, 12, tzinfo=UTC), datetime(2026, 1, 1, 13, tzinfo=UTC)
+    steps[2] = dataclasses.replace(steps[2], created_at=first)
+    steps[3] = dataclasses.replace(steps[3], created_at=second)
+
+    assert replay("go", steps).interrupted_at == second
+    assert replay("go", [*steps, *log(result("t1"))]).interrupted_at is None
 
 
 def test_a_result_closes_the_intent() -> None:
