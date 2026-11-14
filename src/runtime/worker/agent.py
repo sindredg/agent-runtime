@@ -237,8 +237,11 @@ async def _next_tool_call(
     return True
 
 
-def _response_problem(response: ModelResponse) -> str | None:
-    """What is wrong with a response's shape, or None. Checked before any tool runs."""
+def _response_problem(response: ModelResponse, used_ids: set[str]) -> str | None:
+    """What is wrong with a response's shape, or None. Checked before any tool runs.
+
+    `used_ids` are the ids of the tool calls of earlier responses in the job.
+    """
     if not response.stop_reason:
         return "it has no stop_reason"
     content: Any = response.content
@@ -256,6 +259,11 @@ def _response_problem(response: ModelResponse) -> str | None:
         ids.append(tool_use_id)
     if len(set(ids)) != len(ids):
         return "two tool_use blocks have the same id"
+    # A call's operation id is the job's id and the call's id. A second call
+    # under the same id would be taken for the first one when a tool's
+    # check looks it up.
+    if not used_ids.isdisjoint(ids):
+        return "a tool_use block has the id of an earlier call"
     return None
 
 
@@ -359,7 +367,7 @@ async def _loop(
                     "output_tokens": response.output_tokens,
                 },
             }
-            problem = _response_problem(response)
+            problem = _response_problem(response, state.used_ids)
             try:
                 check_json(payload)
             except InvalidPayload as error:
