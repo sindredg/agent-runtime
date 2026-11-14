@@ -62,7 +62,7 @@ sequenceDiagram
             W->>D: step tool_result (fenced)
         end
     end
-    W->>D: leave running: succeeded or failed (fenced)
+    W->>D: leave running, or fail with the error step (fenced)
     A-->>C: one event per step, then end
 ```
 
@@ -155,7 +155,8 @@ move inside its `UPDATE`. Nothing calls it yet: it is there for cancel.
 | Claim | One `UPDATE` in `store/jobs.py`. Its subquery picks the oldest job that is `queued`, or `running` with `lease_expires_at` before the database clock, with `FOR NO KEY UPDATE SKIP LOCKED`. It sets `lease_owner`, sets `lease_expires_at` from the database clock, and increments `lease_epoch`. Taking a `running` job also increments `takeovers`. |
 | Takeover limit | A takeover of a job whose `takeovers` is already 5 is not made. The same statement marks the job `failed`, and the claim appends an `error` step in the same transaction. The worker loop that made the claim removes the job's workspace. Claims after a release or an approval are not counted and not limited ([ADR 0006](adr/0006-count-takeovers-apart-from-claims.md)). |
 | Lease and heartbeat | A lease lasts `LEASE_SECONDS`. While a job runs, a task renews it every `HEARTBEAT_SECONDS` (`worker/lease.py`). The worker also keeps its own deadline on its monotonic clock: the time it sent the claim or the last successful renewal, plus the lease length. It checks that deadline before it touches the workspace, before each `model_request` and `tool_intent` step, and again immediately before each model call, tool run and tool check. |
-| Fencing | Every write of a worker to its job is one statement in `store/held.py` that updates the job row and only matches while the job is `running` under the worker's `lease_epoch`: a step with its token count, a renewal, and the move out of `running`. The update locks the row, so a write and a claim of one job cannot overlap. The statements are sent in autocommit, outside a transaction block. A write that changes no row raises `LeaseLost` ([ADR 0004](adr/0004-fence-writes-with-the-lease-epoch-and-a-row-lock.md)). |
+| Fencing | Every write of a worker to its job is one statement in `store/held.py` that updates the job row and only matches while the job is `running` under the worker's `lease_epoch`: a step with its token count, a renewal, the move out of `running`, and a failure. The update locks the row, so a write and a claim of one job cannot overlap. The statements are sent in autocommit, outside a transaction block. A write that changes no row raises `LeaseLost` ([ADR 0004](adr/0004-fence-writes-with-the-lease-epoch-and-a-row-lock.md)). |
+| Failure | A worker fails its job with one fenced statement: the move to `failed` and the `error` step, which takes the next `seq` by itself. A worker that stops while it fails a job leaves both or neither. A job with an `error` step is therefore never `running`, and no worker takes it over. |
 | Dropping a job | On `LeaseLost`, or when the database cannot be reached, the worker drops the job: it writes nothing more, starts no tool and no model call, and leaves the status and the workspace alone. The job stays as it is until its lease runs out and another worker takes it over. |
 | Duplicate steps | A second step with the same (`job_id`, `seq`) is refused. In a fenced write the refusal undoes the token count with it. |
 | Resume | See [What happens when a worker goes away](#what-happens-when-a-worker-goes-away). |
@@ -296,9 +297,6 @@ Not built or not closed:
   worker, and the job is taken over when its lease runs out.
 - A worker told to stop while it writes a `tool_intent` step still runs that
   tool, because the intent is already in the log.
-- A job's failure is two writes: the `error` step, then the status. A worker
-  that stops between them leaves a job that the next worker runs on, with an
-  `error` step in the middle of its log.
 - The operation id protects a call that the runtime runs again. It does not
   protect against the model: a model that is told a call failed and asks for
   it again makes a new call with a new id.

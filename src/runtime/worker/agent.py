@@ -452,17 +452,18 @@ async def _run(
             check_json(failure)
         except InvalidPayload:
             failure = "the job failed with an error that cannot be stored as text"
-        # Read the log again first: if the failure was a step that did
-        # not go in, the writer's idea of the next seq may be wrong.
-        steps = await _stored(_read_log(engine, job.id))
-        writer.last_seq = steps[-1].seq if steps else 0
-        writer.state = None
-        await writer.append(StepKind.ERROR, {"message": failure})
-    await _stored(
-        held.leave_running(
-            engine, job_id=job.id, lease_epoch=lease.epoch, new_status=status, error=failure
+        # One statement for the `error` step and the status: a worker that
+        # stops here leaves the job failed, or not failed at all. The step
+        # takes the next free seq by itself, also when the failure was a
+        # step that did not go in at the seq the writer expected.
+        step = await _stored(
+            held.fail(engine, job_id=job.id, lease_epoch=lease.epoch, error=failure)
         )
-    )
+        log.info("step", extra={"job_id": job.id, "seq": step.seq, "kind": step.kind.value})
+    else:
+        await _stored(
+            held.leave_running(engine, job_id=job.id, lease_epoch=lease.epoch, new_status=status)
+        )
     log.info(
         "job finished" if status in FINAL_STATUSES else "job handed back",
         extra={"job_id": job.id, "status": status.value, "error": failure},
