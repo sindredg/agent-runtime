@@ -510,6 +510,44 @@ async def parked_for_approval(api: Api) -> Job:
     )
 
 
+def test_event_stream_says_that_a_job_waits_for_approval_and_goes_on_when_it_is_given(
+    database_url: str,
+) -> None:
+    """A job in `needs_approval` is not over, so the stream has no `end` to send.
+
+    Without a word from the stream, a client that follows the job waits
+    and cannot tell why.
+    """
+
+    async def body(api: Api) -> list[tuple[int | None, str, Any]]:
+        job = await parked_for_approval(api)
+        events = []
+        async for event in api.follow(job.id):
+            events.append(event)
+            if event[1] == "status":
+                # Long enough for the stream to say it again, if it were to.
+                await asyncio.sleep(0.2)
+                assert (await api.client.post(f"/jobs/{job.id}/approve")).status_code == 200
+                async with api.engine.begin() as conn:
+                    claimed = await claim_job(conn, worker_id="w2")
+                assert claimed is not None
+                await api.finish(claimed)
+        return events
+
+    events = api_test(database_url, body)
+    assert [(event_id, name) for event_id, name, _ in events] == [
+        (1, "step"),
+        (2, "step"),
+        # Said once, after the steps that led to it, and the stream stays open.
+        (None, "status"),
+        (3, "step"),
+        (None, "end"),
+    ]
+    assert events[2][2] == {"status": "needs_approval"}
+    assert events[3][2]["kind"] == "approval_given"
+    assert events[4][2] == {"status": "succeeded"}
+
+
 def test_approve_queues_the_job_and_records_the_approval_as_a_step(database_url: str) -> None:
     async def body(api: Api) -> tuple[Job, httpx2.Response, Job | None, list[Any]]:
         job = await parked_for_approval(api)

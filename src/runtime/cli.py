@@ -4,7 +4,8 @@ It talks to the API over HTTP. The API's address comes from --api-url or
 RUNTIME_API_URL and defaults to http://127.0.0.1:8000.
 
 Exit status: 0 on success, 1 when a followed job did not succeed, 2 when
-the command could not be carried out.
+the command could not be carried out, 3 when a followed job stopped to wait
+for approval.
 """
 
 import argparse
@@ -28,6 +29,8 @@ FOLLOW_ATTEMPTS = 5
 FOLLOW_RETRY_DELAY = 1.0
 # Longest piece of a step shown on its line.
 PREVIEW = 100
+# Exit status when a followed job stopped to wait for approval.
+EXIT_NEEDS_APPROVAL = 3
 
 
 class CommandError(Exception):
@@ -54,7 +57,9 @@ def build_parser() -> argparse.ArgumentParser:
     submit = commands.add_parser("submit", help="submit a job from a JSON file")
     submit.add_argument("file", type=Path, help="JSON file with the job, see examples/")
     submit.add_argument(
-        "--follow", action="store_true", help="print the steps as they happen and wait for the end"
+        "--follow",
+        action="store_true",
+        help="print the steps as they happen, until the job ends or needs approval",
     )
 
     status = commands.add_parser("status", help="show a job's status")
@@ -64,7 +69,9 @@ def build_parser() -> argparse.ArgumentParser:
     logs = commands.add_parser("logs", help="print a job's steps")
     logs.add_argument("job_id", type=_job_id)
     logs.add_argument(
-        "--follow", action="store_true", help="keep printing new steps until the job ends"
+        "--follow",
+        action="store_true",
+        help="keep printing new steps until the job ends or needs approval",
     )
 
     approve = commands.add_parser(
@@ -176,7 +183,10 @@ def _lines(response: httpx2.Response) -> Iterator[str]:
 
 
 def _follow(client: httpx2.Client, job_id: str, out: TextIO) -> str:
-    """Print steps from the event stream as they arrive. Returns the final status.
+    """Print steps from the event stream as they arrive. Returns the status it stopped at.
+
+    That is the job's final status, or `needs_approval`: such a job goes on
+    only when a person approves it, so following it would wait without end.
 
     A stream that breaks is opened again after the last step that was
     printed. It is given up after FOLLOW_ATTEMPTS tries in a row that
@@ -210,6 +220,8 @@ def _follow(client: httpx2.Client, job_id: str, out: TextIO) -> str:
                         elif event == "end":
                             status: str = json.loads(data)["status"]
                             return status
+                        elif event == "status" and json.loads(data)["status"] == "needs_approval":
+                            return "needs_approval"
                         event, data = "", ""
             problem = "the event stream ended before the job did"
         except httpx2.TransportError as error:
@@ -235,12 +247,19 @@ def _submit(client: httpx2.Client, args: argparse.Namespace, out: TextIO) -> int
 
 
 def _finish(status: str, client: httpx2.Client, job_id: str, out: TextIO) -> int:
-    """Print the final status line and turn the status into an exit code."""
+    """Print the line for the status the job stopped at and turn it into an exit code."""
     job = _job(client, job_id)
     line = f"{status}  tokens_used={job['tokens_used']}"
     if job["error"]:
         line += f"  error={_preview(job['error'])}"
     print(line, file=out)
+    if status == "needs_approval":
+        print(
+            "The job waits for approval: a tool call was interrupted and may or may not have run.",
+            file=out,
+        )
+        print(f"To run the call again: runtime approve {_one_line(job_id)}", file=out)
+        return EXIT_NEEDS_APPROVAL
     return 0 if status == "succeeded" else 1
 
 

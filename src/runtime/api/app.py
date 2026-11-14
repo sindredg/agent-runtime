@@ -22,7 +22,7 @@ from runtime.config import ApiConfig
 from runtime.store.engine import create_engine
 from runtime.store.jobs import InvalidTransition, approve_job, create_job, get_job
 from runtime.store.payload import InvalidPayload
-from runtime.store.status import FINAL_STATUSES
+from runtime.store.status import FINAL_STATUSES, JobStatus
 from runtime.store.steps import read_progress
 
 # Most steps one request or one poll of the event stream reads.
@@ -166,6 +166,11 @@ def create_app(
         Each step's event id is its `seq`. A client that lost the connection
         continues with `Last-Event-ID` or `?after=`. The stream ends when the
         job has a final status and every step was sent.
+
+        A job that stops in `needs_approval` is not over. The stream sends
+        one `status` event that says so and stays open: the job goes on when
+        a person approves it. Without the event a client would wait and
+        could not tell why.
         """
         start = last_event_id if last_event_id is not None else after
         async with engine().connect() as conn:
@@ -175,6 +180,8 @@ def create_app(
         async def events() -> AsyncIterator[bytes]:
             last = start
             quiet_since = time.monotonic()
+            # True while the client has been told that the job waits for approval.
+            told_waiting = False
             while not await request.is_disconnected():
                 async with engine().connect() as conn:
                     progress = await read_progress(conn, job_id, after_seq=last, limit=page_size)
@@ -194,6 +201,11 @@ def create_app(
                 if status in FINAL_STATUSES:
                     yield _event("end", json.dumps({"status": status.value}))
                     return
+                # Said once each time the job stops there, after its steps.
+                waiting = status is JobStatus.NEEDS_APPROVAL
+                if waiting and not told_waiting:
+                    yield _event("status", json.dumps({"status": status.value}))
+                told_waiting = waiting
                 if steps:
                     quiet_since = time.monotonic()
                 elif time.monotonic() - quiet_since >= keep_alive:

@@ -221,7 +221,7 @@ These exist for the tests in `tests/chaos` and do nothing unless switched on.
 | `POST /jobs` | 201 and the job. Body: `prompt`, optional `system`, `model`, `files`, `token_budget`, `timeout_seconds`. Unknown fields are refused with 422. |
 | `GET /jobs/{id}` | The job. 404 if there is none. |
 | `GET /jobs/{id}/steps?after=&limit=` | Steps with `seq` above `after`, in order, at most 1000. |
-| `GET /jobs/{id}/events` | Server-sent events: one `step` event per step with `id` set to its `seq`, then one `end` event with the final status. `Last-Event-ID` or `?after=` continues a broken stream. |
+| `GET /jobs/{id}/events` | Server-sent events: one `step` event per step with `id` set to its `seq`, then one `end` event with the final status. A job that stops in `needs_approval` gets one `status` event that says so, and the stream stays open. `Last-Event-ID` or `?after=` continues a broken stream. |
 | `POST /jobs/{id}/approve` | The job, now `queued`, after an `approval_given` step was appended in the same transaction. 409 unless the job is `needs_approval`. Of several approvals sent at once, one succeeds. |
 | `GET /healthz` | 200 while the process serves. It does not check Postgres. |
 
@@ -314,8 +314,6 @@ Not built or not closed:
   workers use different workspace roots.
 - `not_before` and `cancel_requested` are columns that nothing reads or sets
   yet.
-- `runtime submit --follow` and `runtime logs --follow` wait for a final
-  status. They keep waiting while a job is in `needs_approval`.
 - All workers have to see the same workspace directory. The stack does that
   with one volume on one host.
 - The whole conversation is sent with every model call. A job that outgrows
