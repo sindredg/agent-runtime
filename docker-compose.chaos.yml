@@ -21,6 +21,9 @@ services:
       # tool failpoints are limited to. Empty: no failpoint.
       FAILPOINT: ${FAILPOINT:-}
       FAILPOINT_TOOL: ${FAILPOINT_TOOL:-}
+      # A short sandbox timeout, so that a takeover during a sandboxed call
+      # waits seconds, not a minute, before it decides about the call.
+      SANDBOX_TIMEOUT_SECONDS: ${CHAOS_SANDBOX_TIMEOUT_SECONDS:-5}
       # Offers the crash_worker tool, which logs each run to CHAOS_LOG_DIR.
       CHAOS_TOOLS: "1"
       CHAOS_LOG_DIR: /chaos

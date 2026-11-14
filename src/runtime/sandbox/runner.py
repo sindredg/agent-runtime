@@ -5,6 +5,11 @@ only part that comes from the model: never the image, a mount, a user or a
 flag. The container gets no network, a read-only root, no capabilities, a
 user that is not root, limits on CPU, memory and processes, and one writable
 mount: the job's own directory of the workspace volume.
+
+A container can outlive the worker that started it. It ends by itself: the
+command runs under `timeout` inside the container, so it is killed even when
+no worker is left to do it. Each container carries its job id and lease
+epoch, so that the worker that takes the job over can remove it.
 """
 
 import asyncio
@@ -16,7 +21,7 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID, uuid4
 
-from runtime.sandbox.docker import Docker, SandboxError
+from runtime.sandbox.docker import REQUEST_TIMEOUT, Docker, SandboxError
 from runtime.sandbox.output import Output
 
 log = logging.getLogger("runtime.sandbox")
@@ -25,6 +30,16 @@ log = logging.getLogger("runtime.sandbox")
 WORKDIR = "/workspace"
 # Marks every container the sandbox starts.
 LABEL = "agent-runtime.sandbox"
+# The job the container runs a call of, and the lease epoch of the worker
+# that started it.
+JOB_LABEL = "agent-runtime.job"
+EPOCH_LABEL = "agent-runtime.lease-epoch"
+# GNU coreutils in the sandbox image. It kills the command at its timeout
+# also when the worker that started it is gone.
+TIMEOUT_PROGRAM = "/usr/bin/timeout"
+# Seconds the timeout inside the container waits beyond the worker's own, so
+# that a worker that is still there stops the command first and reports it.
+KILL_MARGIN = 2.0
 MIB = 1024 * 1024
 _USER = re.compile(r"([0-9]+):([0-9]+)")
 
@@ -40,6 +55,10 @@ class SandboxSettings:
     user: str = "10001:10001"
     # Seconds the command may run. Then the container is killed.
     timeout: float = 30.0
+    # Seconds from the start of a call after which Docker is no longer asked
+    # to start the command. Bounds when a container of a stopped worker can
+    # still begin to run (see `ends_within`).
+    start_within: float = 15.0
     # Bytes of output the result keeps. The rest is counted and dropped.
     output_limit: int = 64 * 1024
     cpus: float = 1.0
@@ -57,8 +76,10 @@ class SandboxSettings:
         if match is None or int(match[1]) == 0 or int(match[2]) == 0:
             raise ValueError(f"user must be uid:gid, both numbers above 0, got {self.user!r}")
         # `not value > 0` also refuses NaN.
-        if not self.timeout > 0 or math.isinf(self.timeout):
-            raise ValueError(f"timeout must be a positive number, got {self.timeout!r}")
+        for name in ("timeout", "start_within"):
+            value = getattr(self, name)
+            if not value > 0 or math.isinf(value):
+                raise ValueError(f"{name} must be a positive number, got {value!r}")
         # Docker reads a CPU limit of 0 as no limit, and refuses less than 0.01.
         if not 0.01 <= self.cpus < math.inf:
             raise ValueError(f"cpus must be at least 0.01, got {self.cpus!r}")
@@ -73,16 +94,35 @@ class SandboxSettings:
                 raise ValueError(f"{name} must be at least 1, got {getattr(self, name)!r}")
 
 
+def ends_within(settings: SandboxSettings) -> float:
+    """Seconds after a call began by which its container has ended, whatever the worker did.
+
+    The worker does not ask Docker to start the command after `start_within`,
+    and that request ends within its own timeout. From the start the command
+    has the timeout inside the container. Not covered: a worker that is
+    paused between the start of the call and the start request, and a
+    daemon that acts on a request after the worker gave up on it.
+    """
+    return settings.start_within + REQUEST_TIMEOUT + settings.timeout + KILL_MARGIN
+
+
 def container_config(
-    settings: SandboxSettings, job_id: UUID, argv: Sequence[str]
+    settings: SandboxSettings, job_id: UUID, lease_epoch: int, argv: Sequence[str]
 ) -> dict[str, Any]:
     """The body of `POST /containers/create` for one call. Only `argv` comes from the model."""
     return {
         "Image": settings.image,
-        "Cmd": list(argv),
+        # `--` ends timeout's options, so the command cannot add any.
+        "Cmd": [
+            TIMEOUT_PROGRAM,
+            "--signal=KILL",
+            "--",
+            f"{settings.timeout + KILL_MARGIN:g}",
+            *argv,
+        ],
         "User": settings.user,
         "WorkingDir": WORKDIR,
-        "Labels": {LABEL: "1"},
+        "Labels": {LABEL: "1", JOB_LABEL: str(job_id), EPOCH_LABEL: str(lease_epoch)},
         "NetworkDisabled": True,
         "AttachStdin": False,
         "AttachStdout": True,
@@ -144,6 +184,15 @@ class NotStarted(SandboxError):
     """The sandbox failed before it asked Docker to start the command."""
 
 
+def _epoch(container: dict[str, Any]) -> int | None:
+    labels = container.get("Labels")
+    value = labels.get(EPOCH_LABEL) if isinstance(labels, dict) else None
+    try:
+        return int(value) if isinstance(value, str) else None
+    except ValueError:
+        return None
+
+
 class Sandbox:
     """Runs commands for tool calls. One per worker; it shares the worker's Docker client."""
 
@@ -159,13 +208,32 @@ class Sandbox:
         except SandboxError:
             log.exception("tool container not removed", extra={"container": name})
 
-    async def run(self, job_id: UUID, argv: Sequence[str]) -> Run:
+    async def remove_older(self, job_id: UUID, lease_epoch: int) -> int:
+        """Remove the job's containers that a worker with an earlier lease epoch started.
+
+        Running ones are killed. Returns how many were removed. A container
+        whose epoch cannot be read is removed too: it is not this worker's.
+        Raises SandboxError.
+        """
+        found = await self.docker.containers({JOB_LABEL: str(job_id)})
+        removed = 0
+        for container in found:
+            epoch = _epoch(container)
+            if epoch is not None and epoch >= lease_epoch:
+                continue
+            await self.docker.remove(str(container["Id"]))
+            removed += 1
+        return removed
+
+    async def run(self, job_id: UUID, lease_epoch: int, argv: Sequence[str]) -> Run:
         """Run `argv` in a new container with the job's workspace. Raises SandboxError.
 
         The container is removed afterwards, also when the call fails or is
-        cancelled. A command still running at the timeout is killed.
+        cancelled. A command still running at the timeout is killed. Docker
+        is not asked to start it once `start_within` has passed.
         """
         settings = self.settings
+        start_by = asyncio.get_running_loop().time() + settings.start_within
         # Chosen here, not by Docker: a container whose create was cut off
         # before Docker's answer arrived can still be removed by its name.
         name = f"agent-runtime-sandbox-{uuid4().hex}"
@@ -174,8 +242,12 @@ class Sandbox:
         exit_code: int | None = None
         started = False
         try:
-            await self.docker.create(name, container_config(settings, job_id, argv))
+            await self.docker.create(name, container_config(settings, job_id, lease_epoch, argv))
             async with self.docker.attach(name) as stream:
+                if asyncio.get_running_loop().time() > start_by:
+                    raise SandboxError(
+                        f"Docker took more than {settings.start_within:g} s to set up the container"
+                    )
                 try:
                     async with deadline:
                         # From here on the command may run, whatever Docker answers.

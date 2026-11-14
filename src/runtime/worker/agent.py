@@ -15,10 +15,11 @@ Not built yet: budget and deadline are not enforced.
 
 import asyncio
 import logging
+import math
 import time
 from collections.abc import Awaitable
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -28,8 +29,11 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from runtime.failpoints import Failpoints
 from runtime.provider.base import ModelRequest, ModelResponse, Provider, ProviderError
+from runtime.sandbox.docker import SandboxError
+from runtime.sandbox.runner import ends_within
 from runtime.spec import JobSpec
 from runtime.store import held
+from runtime.store.clock import seconds_until
 from runtime.store.held import LeaseLost
 from runtime.store.jobs import Job
 from runtime.store.payload import InvalidPayload, check_json
@@ -89,7 +93,7 @@ class _StepWriter:
     """Appends steps for one job with rising `seq`. Every step is one fenced statement."""
 
     def __init__(self, engine: AsyncEngine, lease: Lease, last_seq: int) -> None:
-        self._engine = engine
+        self.engine = engine
         self._lease = lease
         self.last_seq = last_seq
         # Set once the conversation is known. Each step written is folded
@@ -102,7 +106,7 @@ class _StepWriter:
         # cannot disagree.
         step = await _stored(
             held.append_step(
-                self._engine,
+                self.engine,
                 job_id=self._lease.job_id,
                 lease_epoch=self._lease.epoch,
                 seq=seq,
@@ -154,6 +158,84 @@ async def _run_tool(tool: AnyTool | None, name: str, call: ToolCall) -> ToolResu
     return _usable(result)
 
 
+async def _wait_unless_stopped(seconds: float, stop: asyncio.Event, lease: Lease) -> bool:
+    """Wait `seconds`. False if `stop` was set first. Raises LeaseLost when the lease goes."""
+    slept = asyncio.ensure_future(asyncio.sleep(seconds))
+    stopped = asyncio.ensure_future(stop.wait())
+    lost = asyncio.ensure_future(lease.wait_lost())
+    try:
+        await asyncio.wait({slept, stopped, lost}, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for waiter in (slept, stopped, lost):
+            waiter.cancel()
+        await asyncio.gather(slept, stopped, lost, return_exceptions=True)
+    if lease.lost:
+        raise LeaseLost(lease.job_id, lease.epoch)
+    return not stop.is_set()
+
+
+def _bound(tool: AnyTool | None, intent: dict[str, Any]) -> float | None:
+    """Seconds after its intent by which an interrupted call's container has ended.
+
+    None when the call ran no container. The intent's own number is used,
+    so a worker with other settings waits as long as the one that started
+    the call.
+    """
+    recorded = intent.get("ends_within")
+    if (
+        isinstance(recorded, int | float)
+        and not isinstance(recorded, bool)
+        and math.isfinite(recorded)
+        and recorded >= 0
+    ):
+        return float(recorded)
+    if isinstance(tool, SandboxTool):
+        return ends_within(tool.sandbox.settings)
+    return None
+
+
+async def _outlast_container(
+    writer: _StepWriter,
+    tool: AnyTool | None,
+    job: Job,
+    lease: Lease,
+    intent: dict[str, Any],
+    written: datetime | None,
+    stop: asyncio.Event,
+) -> bool:
+    """Make sure the interrupted call's container has ended. False if `stop` came first.
+
+    The container may still run: the worker that started it stopped, the
+    container did not (ADR 0008). Containers of earlier lease epochs on this
+    host are removed. One on another host, or one whose start request was
+    still on its way, cannot be, so the worker also waits until the call's
+    bound has passed since its intent, by the database clock.
+    """
+    bound = _bound(tool, intent)
+    if bound is None or written is None:
+        return True
+    lease.check()
+    if isinstance(tool, SandboxTool):
+        try:
+            removed = await tool.sandbox.remove_older(job.id, lease.epoch)
+        except SandboxError:
+            # The wait below still covers the container.
+            log.exception("containers of an earlier lease not removed", extra={"job_id": job.id})
+        else:
+            log.info(
+                "containers of an earlier lease removed",
+                extra={"job_id": job.id, "removed": removed},
+            )
+    left = await _stored(seconds_until(writer.engine, written + timedelta(seconds=bound)))
+    if left <= 0:
+        return True
+    log.info(
+        "waiting for an interrupted call's container to end",
+        extra={"job_id": job.id, "seconds": round(left, 1)},
+    )
+    return await _wait_unless_stopped(left, stop, lease)
+
+
 async def _next_tool_call(
     writer: _StepWriter,
     tools: ToolRegistry,
@@ -175,11 +257,19 @@ async def _next_tool_call(
     tool_use_id, name = block["id"], block["name"]
     tool = tools.get(name)
     call = ToolCall(
-        workspace=workspace, input=block["input"], operation_id=operation_id(job.id, tool_use_id)
+        workspace=workspace,
+        input=block["input"],
+        operation_id=operation_id(job.id, tool_use_id),
+        lease_epoch=lease.epoch,
     )
 
     interrupted = state.interrupted
     if interrupted is not None and interrupted.get("tool_use_id") == tool_use_id:
+        # Nothing is decided while the interrupted call may still be running.
+        if not await _outlast_container(
+            writer, tool, job, lease, interrupted, state.interrupted_at, stop
+        ):
+            return True
         lease.check()
         decision = await asyncio.to_thread(decide, tool, call, approved=state.approval == "given")
         log.info(
@@ -228,10 +318,12 @@ async def _next_tool_call(
     # written the worker is committed to the run, also if it is told to
     # stop while writing it: the tool runs and its result is stored.
     lease.check()
-    await writer.append(
-        StepKind.TOOL_INTENT,
-        {"tool_use_id": tool_use_id, "name": name, "input": block["input"]},
-    )
+    intent: dict[str, Any] = {"tool_use_id": tool_use_id, "name": name, "input": block["input"]}
+    if isinstance(tool, SandboxTool):
+        # A worker that takes the job over waits this long after the intent
+        # before it decides about the call.
+        intent["ends_within"] = ends_within(tool.sandbox.settings)
+    await writer.append(StepKind.TOOL_INTENT, intent)
     failpoints.hit("after_tool_intent", takeovers=job.takeovers, tool=name)
     # And immediately before the run, in case the write was slow.
     lease.check()

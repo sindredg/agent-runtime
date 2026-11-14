@@ -25,7 +25,7 @@ def workspace(tmp_path: Path) -> Path:
 
 
 def read(workspace: Path, path: object) -> ToolResult:
-    return READ_FILE.run(ToolCall(workspace, {"path": path}, "job:toolu_1"))
+    return READ_FILE.run(ToolCall(workspace, {"path": path}, "job:toolu_1", 1))
 
 
 def test_reads_a_file_in_the_workspace(workspace: Path) -> None:
@@ -115,7 +115,7 @@ def test_a_missing_file_or_a_directory_is_an_error_result(workspace: Path, path:
 def test_input_without_a_string_path_is_an_error_result(
     workspace: Path, tool_input: dict[str, object]
 ) -> None:
-    assert READ_FILE.run(ToolCall(workspace, dict(tool_input), "job:toolu_1")).is_error
+    assert READ_FILE.run(ToolCall(workspace, dict(tool_input), "job:toolu_1", 1)).is_error
 
 
 def test_size_limit(workspace: Path) -> None:

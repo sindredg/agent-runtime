@@ -7,14 +7,26 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from runtime.sandbox.runner import SandboxSettings, container_config
+from runtime.sandbox.docker import REQUEST_TIMEOUT
+from runtime.sandbox.runner import (
+    EPOCH_LABEL,
+    JOB_LABEL,
+    LABEL,
+    SandboxSettings,
+    container_config,
+    ends_within,
+)
 
 SETTINGS = SandboxSettings(image="sandbox:test", volume="workspaces")
 JOB = uuid.UUID("01a1d655-88bd-7468-afc4-5ca3a1947906")
+EPOCH = 7
+# What runs before the command: the timeout inside the container, at the
+# worker's timeout plus a margin.
+PREFIX = ["/usr/bin/timeout", "--signal=KILL", "--", "32"]
 
 
 def test_the_container_is_locked_down() -> None:
-    config = container_config(SETTINGS, JOB, ["ls"])
+    config = container_config(SETTINGS, JOB, EPOCH, ["ls"])
     host = config["HostConfig"]
 
     assert config["Image"] == "sandbox:test"
@@ -41,7 +53,7 @@ def test_the_container_is_locked_down() -> None:
 
 
 def test_the_one_mount_is_the_jobs_own_directory_of_the_volume() -> None:
-    config = container_config(SETTINGS, JOB, ["ls"])
+    config = container_config(SETTINGS, JOB, EPOCH, ["ls"])
 
     assert config["HostConfig"]["Mounts"] == [
         {
@@ -55,6 +67,32 @@ def test_the_one_mount_is_the_jobs_own_directory_of_the_volume() -> None:
     assert config["WorkingDir"] == "/workspace"
 
 
+def test_the_container_names_its_job_and_lease_epoch() -> None:
+    config = container_config(SETTINGS, JOB, EPOCH, ["ls"])
+
+    assert config["Labels"] == {LABEL: "1", JOB_LABEL: str(JOB), EPOCH_LABEL: "7"}
+
+
+def test_the_command_runs_under_a_timeout_inside_the_container() -> None:
+    """So that it ends when the worker that started it is gone."""
+    short = SandboxSettings(image="sandbox:test", volume="workspaces", timeout=2.5)
+
+    config = container_config(short, JOB, EPOCH, ["-x", "y"])
+
+    # `--` before the duration: a command that starts with a dash is still the command.
+    assert config["Cmd"] == ["/usr/bin/timeout", "--signal=KILL", "--", "4.5", "-x", "y"]
+
+
+def test_a_container_ends_within_the_start_bound_plus_its_timeout() -> None:
+    settings = SandboxSettings(
+        image="sandbox:test", volume="workspaces", timeout=30, start_within=15
+    )
+
+    # Start no later than 15 s, the start request takes up to its own
+    # timeout, then the command's timeout inside the container.
+    assert ends_within(settings) == 15 + REQUEST_TIMEOUT + 30 + 2
+
+
 def without_command(config: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in config.items() if key != "Cmd"}
 
@@ -64,11 +102,11 @@ def without_command(config: dict[str, Any]) -> dict[str, Any]:
     second=st.lists(st.text(), min_size=1, max_size=5),
 )
 def test_the_command_reaches_only_the_command(first: list[str], second: list[str]) -> None:
-    one = container_config(SETTINGS, JOB, first)
-    two = container_config(SETTINGS, JOB, second)
+    one = container_config(SETTINGS, JOB, EPOCH, first)
+    two = container_config(SETTINGS, JOB, EPOCH, second)
 
-    assert one["Cmd"] == first
-    assert two["Cmd"] == second
+    assert one["Cmd"] == PREFIX + first
+    assert two["Cmd"] == PREFIX + second
     assert without_command(one) == without_command(two)
 
 
@@ -86,6 +124,9 @@ def test_a_user_that_is_root_or_not_numeric_is_refused(user: str) -> None:
         {"timeout": 0},
         {"timeout": float("nan")},
         {"timeout": float("inf")},
+        {"start_within": 0},
+        {"start_within": float("nan")},
+        {"start_within": float("inf")},
         {"output_limit": 0},
         {"cpus": 0},
         {"cpus": 0.001},

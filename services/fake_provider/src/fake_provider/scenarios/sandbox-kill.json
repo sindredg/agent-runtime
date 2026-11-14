@@ -1,0 +1,7 @@
+{
+  "description": "One sandboxed command that runs for a few seconds, so that its worker can be killed during it. Then the turn ends.",
+  "turns": [
+    {"content": [{"type": "tool_use", "name": "run_shell", "input": {"command": "echo started; sleep 4; echo finished"}}]},
+    {"content": [{"type": "text", "text": "The command came back. The job is done."}]}
+  ]
+}

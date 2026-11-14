@@ -26,9 +26,8 @@ Not built: retry on provider errors and rate limits, token budgets, deadlines,
 and cancel. The full list is in
 [Known limits](docs/architecture.md#known-limits).
 
-Decided and not built: removal of the tool containers a stopped worker leaves
-behind, a target scope that the tools cannot leave, a way to halt a job, and
-approval before a risky tool call. See ADR 0007 to 0011 under
+Decided and not built: a target scope that the tools cannot leave, a way to
+halt a job, and approval before a risky tool call. See ADR 0007 to 0011 under
 [Design](#design).
 
 Locally the model provider is a fake that answers from scenario files, so
@@ -202,8 +201,7 @@ What these results do not show:
   Not built.
 - [ADR 0008](docs/adr/0008-run-each-tool-call-in-its-own-container.md): run
   each tool call in its own container, started by the worker. Built for
-  `run_shell` and `list_dir`, except the handling of containers that a
-  stopped worker leaves behind.
+  `run_shell` and `list_dir`.
 - [ADR 0009](docs/adr/0009-enforce-the-target-scope-in-the-network-namespace.md):
   enforce a job's target scope in the network namespace of its tools. Not
   built.
@@ -225,7 +223,7 @@ uv installs the pinned Python and tools into `.venv`.
 | `make clean` | Stop the services, delete the database volume |
 | `make test` | Unit tests |
 | `make integration` | Integration tests. Needs the stack from `make up`. |
-| `make chaos` | Chaos tests. Starts the stack with three workers and a 2 second lease, then kills, pauses and crashes workers. `CHAOS_RUNS` sets the number of runs with a random kill time (default 20), `CHAOS_SEED` the times. Run `make up` afterwards to get the normal stack back. |
+| `make chaos` | Chaos tests. Starts the stack with three workers, a 2 second lease and a 5 second sandbox timeout, then kills, pauses and crashes workers. `CHAOS_RUNS` sets the number of runs with a random kill time (default 20), `CHAOS_SEED` the times. Run `make up` afterwards to get the normal stack back. |
 
 The stack publishes four ports, all on `127.0.0.1` only: the API on 8000,
 Postgres on 5432, the fake provider on 8001 and the fake tracker on 8002.

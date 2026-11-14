@@ -6,6 +6,7 @@ log once, then folds in each step it writes itself.
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from runtime.store.steps import Step, StepKind
@@ -25,6 +26,8 @@ class Replay:
     # The payload of a `tool_intent` step that no `tool_result` has followed.
     # A worker that finds one here did not write it: the call was interrupted.
     interrupted: dict[str, Any] | None = None
+    # When that `tool_intent` step was written, by the database clock.
+    interrupted_at: datetime | None = None
     # What was done about that interrupted call: None, "requested" (a person
     # was asked) or "given" (a person approved running it again).
     approval: str | None = None
@@ -71,11 +74,12 @@ class Replay:
             )
             self.used_ids.update(block["id"] for block in self.pending)
             self.stop_reason = payload["stop_reason"]
-            self.interrupted, self.approval = None, None
+            self.interrupted, self.interrupted_at, self.approval = None, None, None
         elif step.kind is StepKind.TOOL_INTENT:
             # Every run of a tool has its own intent. A new one starts with
             # no approval, also when it reruns an approved call.
             self.interrupted, self.approval = payload, None
+            self.interrupted_at = step.created_at
         elif step.kind is StepKind.TOOL_RESULT:
             tool_use_id = payload["tool_use_id"]
             if self.messages[-1]["role"] != "user" or len(self.messages) == 1:
@@ -89,7 +93,7 @@ class Replay:
                 }
             )
             self.pending = [block for block in self.pending if block["id"] != tool_use_id]
-            self.interrupted, self.approval = None, None
+            self.interrupted, self.interrupted_at, self.approval = None, None, None
         elif step.kind is StepKind.APPROVAL_REQUESTED:
             self.approval = "requested"
         elif step.kind is StepKind.APPROVAL_GIVEN:
