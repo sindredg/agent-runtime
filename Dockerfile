@@ -20,7 +20,7 @@ COPY services/fake_provider/pyproject.toml services/fake_provider/
 COPY services/fake_tracker/pyproject.toml services/fake_tracker/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --all-packages --no-install-workspace
-COPY README.md ./
+COPY README.md LICENSE ./
 COPY src/ src/
 COPY services/ services/
 # --no-editable installs the packages into .venv, so the final image needs
