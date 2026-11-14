@@ -10,7 +10,8 @@ its lease gone, or cannot reach the database, drops the job: it writes
 nothing more and leaves the status and the workspace to whoever holds the
 job next.
 
-Not built yet: budget and deadline are not enforced.
+The token budget is kept with an upper bound of each call's input
+(`runtime.worker.budget`). Not built yet: the deadline is not enforced.
 """
 
 import asyncio
@@ -37,6 +38,7 @@ from runtime.store.status import FINAL_STATUSES, JobStatus
 from runtime.store.steps import Step, StepKind, read_steps
 from runtime.tools.base import AnyTool, ToolCall, ToolRegistry, ToolResult, operation_id
 from runtime.tools.sandboxed import SandboxTool
+from runtime.worker.budget import input_bound, max_tokens_within
 from runtime.worker.lease import Lease, keep_renewing
 from runtime.worker.recovery import Ask, Recovered, decide
 from runtime.worker.replay import Replay, replay
@@ -92,6 +94,8 @@ class _StepWriter:
         self._engine = engine
         self._lease = lease
         self.last_seq = last_seq
+        # Tokens this worker added to the job's count.
+        self.tokens_added = 0
         # Set once the conversation is known. Each step written is folded
         # into it, so the log is replayed once and not after every step.
         self.state: Replay | None = None
@@ -112,6 +116,7 @@ class _StepWriter:
             )
         )
         self.last_seq = seq
+        self.tokens_added += tokens
         if self.state is not None:
             self.state.apply(step)
         log.info("step", extra={"job_id": self._lease.job_id, "seq": seq, "kind": kind.value})
@@ -355,12 +360,28 @@ async def _loop(
             return JobStatus.QUEUED
 
         if state.needs_model_call:
+            definitions = tools.definitions()
+            used = job.tokens_used + writer.tokens_added
+            bound = input_bound(
+                system=spec.system,
+                tools=definitions,
+                messages=state.messages,
+                counted=state.counted,
+                counted_messages=state.counted_messages,
+            )
+            max_tokens = max_tokens_within(job.token_budget, used, bound, settings.max_tokens)
+            if max_tokens is None:
+                # Before the request step: a call that is not made leaves none.
+                raise _JobFailed(
+                    f"the token budget does not cover the next model call: {used} of"
+                    f" {job.token_budget} tokens used, and its input can take up to {bound}"
+                )
             request = ModelRequest(
                 model=model,
-                max_tokens=settings.max_tokens,
+                max_tokens=max_tokens,
                 messages=state.messages,
                 system=spec.system,
-                tools=tools.definitions(),
+                tools=definitions,
                 user_id=str(job.id),
                 mid_stream=(
                     (lambda: failpoints.hit("mid_stream", takeovers=job.takeovers))
@@ -371,7 +392,15 @@ async def _loop(
             lease.check()
             await writer.append(
                 StepKind.MODEL_REQUEST,
-                {"model": model, "max_tokens": request.max_tokens, "messages": len(state.messages)},
+                {
+                    "model": model,
+                    "max_tokens": request.max_tokens,
+                    "messages": len(state.messages),
+                    # The upper bound of the input and the count before the
+                    # call, so the log shows the budget was kept.
+                    "input_bound": bound,
+                    "tokens_used": used,
+                },
             )
             failpoints.hit("after_model_request", takeovers=job.takeovers)
             # Immediately before the call: a worker that was paused past its
@@ -424,9 +453,17 @@ async def _loop(
 
         if state.stop_reason in _FINISHED:
             return JobStatus.SUCCEEDED
-        raise _JobFailed(
-            _FAILURES.get(state.stop_reason or "", f"unexpected stop_reason: {state.stop_reason}")
+        failure = _FAILURES.get(
+            state.stop_reason or "", f"unexpected stop_reason: {state.stop_reason}"
         )
+        lowered = state.requested_max_tokens
+        if (
+            state.stop_reason == "max_tokens"
+            and lowered is not None
+            and lowered < settings.max_tokens
+        ):
+            failure += f", which the token budget had lowered to {lowered}"
+        raise _JobFailed(failure)
 
 
 async def _run(

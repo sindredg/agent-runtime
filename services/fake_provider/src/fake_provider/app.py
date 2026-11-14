@@ -104,7 +104,12 @@ def create_app(scenarios: dict[str, Scenario] | None = None) -> FastAPI:
             )
         prompt = {key: body.get(key) for key in ("system", "tools", "messages")}
         message = build_message(
-            name, scenario, turn, model=name, input_tokens=estimate_tokens(prompt)
+            name,
+            scenario,
+            turn,
+            model=name,
+            input_tokens=estimate_tokens(prompt),
+            max_tokens=body["max_tokens"],
         )
         return name, turn, message, scenario.turns[turn].delay_seconds
 
@@ -136,7 +141,15 @@ def create_app(scenarios: dict[str, Scenario] | None = None) -> FastAPI:
         except RequestError as refused:
             entry.update(status=refused.status, error=refused.message)
             return error(refused.status, refused.kind, refused.message, request_id)
-        entry.update(status=200, scenario=name, turn=turn, response_id=message["id"])
+        # What the answer counts, so a test can add up a job's tokens from
+        # the provider's side.
+        entry.update(
+            status=200,
+            scenario=name,
+            turn=turn,
+            response_id=message["id"],
+            usage={key: message["usage"][key] for key in ("input_tokens", "output_tokens")},
+        )
 
         if not body.get("stream"):
             await asyncio.sleep(delay)

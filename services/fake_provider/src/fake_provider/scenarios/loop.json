@@ -1,0 +1,463 @@
+{
+  "description": "A job that loops: thirty rounds of reading the same file, each adding its text to the conversation. For the token budget.",
+  "turns": [
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Round 0: I read the notes again."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Round 1: I read the notes again."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Round 2: I read the notes again."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Round 3: I read the notes again."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Round 4: I read the notes again."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Round 5: I read the notes again."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Round 6: I read the notes again."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Round 7: I read the notes again."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Round 8: I read the notes again."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Round 9: I read the notes again."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Round 10: I read the notes again."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Round 11: I read the notes again."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Round 12: I read the notes again."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Round 13: I read the notes again."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Round 14: I read the notes again."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Round 15: I read the notes again."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Round 16: I read the notes again."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Round 17: I read the notes again."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Round 18: I read the notes again."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Round 19: I read the notes again."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Round 20: I read the notes again."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Round 21: I read the notes again."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Round 22: I read the notes again."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Round 23: I read the notes again."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Round 24: I read the notes again."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Round 25: I read the notes again."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Round 26: I read the notes again."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Round 27: I read the notes again."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Round 28: I read the notes again."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Round 29: I read the notes again."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Thirty rounds. The job is done."
+        }
+      ]
+    }
+  ]
+}

@@ -32,7 +32,7 @@ flowchart LR
 | `worker` | `src/runtime/worker/` | Claims one job at a time, runs the agent loop, renews its lease while it does. Any worker can continue any job. |
 | `postgres` | `migrations/`, `src/runtime/store/` | Jobs and the step log. Also the queue ([ADR 0002](adr/0002-postgres-as-the-job-queue.md)). |
 | `migrate` | `migrations/` | Runs `alembic upgrade head` and exits. `api` and `worker` start after it succeeds. |
-| `fake-provider` | `services/fake_provider/` | Answers `POST /v1/messages` from scenario files and keeps a log of the requests in memory, the newest 10,000 ([ADR 0003](adr/0003-official-sdk-and-a-wire-compatible-fake.md)). A scenario turn can ask for a delay. |
+| `fake-provider` | `services/fake_provider/` | Answers `POST /v1/messages` from scenario files and keeps a log of the requests in memory, the newest 10,000 ([ADR 0003](adr/0003-official-sdk-and-a-wire-compatible-fake.md)). A scenario turn can ask for a delay. It counts input tokens as a quarter of the request's JSON, never answers with more output tokens than `max_tokens` (a longer turn is cut, with stop reason `max_tokens`), and logs the usage of each answer. |
 | `fake-tracker` | `services/fake_tracker/` | A stand-in for an issue tracker. Stores the issues it is sent with their operation ids, in memory, up to 100,000, and never merges two. |
 | Provider client | `src/runtime/provider/` | The worker's one way to call a model: the official SDK behind a `Provider` interface. |
 | Tools | `src/runtime/tools/` | `list_dir` and `run_shell` run in a container per call. `read_file`, `create_issue`, and `crash_worker` for failure tests run inside the worker process. |
@@ -123,7 +123,7 @@ that are `queued`, `waiting` or `running`.
 
 | Step kind | Payload | Written |
 |---|---|---|
-| `model_request` | `model`, `max_tokens`, `messages` (a count) | Before each model call |
+| `model_request` | `model`, `max_tokens`, `messages` (a count), `input_bound`, `tokens_used` (before the call) | Before each model call |
 | `model_response` | `id`, `content`, `stop_reason`, `usage`. `problem` if the response cannot be used. If the content cannot be stored, it is replaced by an empty list and `content_dropped` is set. | After each model call, in one statement with the `tokens_used` update |
 | `tool_intent` | `tool_use_id`, `name`, `input` | Before every run of a tool. A call that is run again gets a new one. |
 | `tool_result` | `tool_use_id`, `content`, `is_error`. `recovered` when the result came from the tool's check and the tool did not run again. `truncated` when the output was cut to fit 64 KiB. | After a tool ran, or could not run |
@@ -168,7 +168,7 @@ move inside its `UPDATE`. Nothing calls it yet: it is there for cancel.
 | Sandbox | Each `run_shell` or `list_dir` call is one container (`sandbox/runner.py`), created from fixed settings: the model's input becomes only the command's arguments. No network, a read-only root with an in-memory `/tmp` of 16 MiB, all capabilities dropped, `no-new-privileges`, uid 10001, 1 CPU, 256 MiB of memory and no swap, 64 processes, no log driver. The one mount is the job's directory of the workspace volume, by `volume-subpath`, at `/workspace`. The worker names the container itself, reads stdout and stderr from the attach stream as one stream, and keeps the first 64 KiB. The timeout counts from the start to the exit status; when it passes, the container is killed. It is removed by name after every call, also when the call was cancelled, in a task that a second cancel does not stop. The result is the output, then the exit status or the timeout, and a note if the output was cut. Invalid UTF-8 and NUL bytes become U+FFFD, and the whole text is at most 64 KiB. A non-zero exit, a timeout, or a Docker failure is an error result, and the job goes on. A Docker failure before the start says the command did not run; after it, that it may have run. |
 | Tool calls | A response is checked before any of its tools run: every tool call needs an id, a name and an object input, ids must differ, and no id may repeat one from an earlier response of the job. A response that fails the check fails the job. The calls of one response run one after another. A failed call is an error result for the model, and the job goes on. |
 | Provider errors | A failed model call fails the job with an `error` step. There is no retry. |
-| Limits | `token_budget` and `deadline` are stored and not enforced. `tokens_used` is counted from the usage of each response that was received in full. A call that fails or is abandoned part way is not counted. |
+| Limits | Before each model call the worker bounds the call's input (`worker/budget.py`, [ADR 0010](adr/0010-one-halt-path-and-a-budget-bound.md)): the input and output tokens of the previous response, plus the bytes of the messages added since, plus 1024 for what the provider adds around messages and tool definitions; for the first call, the bytes of the whole request plus 1024. If `tokens_used` plus the bound plus one output token does not fit `token_budget`, the job fails without the call. Otherwise `max_tokens` is cut to what is left. `tokens_used` is counted from the usage of each response that was received in full. A call that fails or is abandoned part way is not counted. `deadline` is stored and not enforced. |
 | Workspace | `WORKSPACE_ROOT/<job id>`. Made once, by the first claim: the files from the spec are written into `.<job id>.new` and the directory is renamed into place, so it appears whole or not at all. A later claim finds it and leaves it exactly as the tools left it, also when a command removed, replaced or locked a file of the spec. In the stack every worker mounts the same volume. Only the worker that made a job final removes its workspace, after giving the owner back access to any directory a command locked. `read_file` refuses absolute paths, `..`, and symlinks that lead out, checked after symlinks are followed. |
 | Event stream | The API polls for steps with a higher `seq`. Status and steps are read in one statement, so when the status is final every step has been seen. |
 
@@ -274,7 +274,7 @@ stack by accident. See `.env.example`.
 | Suite | Needs | Covers |
 |---|---|---|
 | `tests/unit` | nothing | Status transitions, replay, the decision about an interrupted call, the lease deadline with a fake clock, failpoints, scenario parsing, the fake provider and the fake tracker in process, the provider client's failure handling, the tools, the container settings, the output cut and the result text, the Docker client against a mock transport, the CLI against a stubbed API. |
-| `tests/integration` | `make up` | Migrations. The store on real Postgres: claims, takeovers, the limit, fenced writes with two connections. The worker against the fake provider: heartbeat, lost lease, resume at each interruption point, each row of the decision table, approval, graceful stop, each failpoint. The API over HTTP. The sandbox against the Docker daemon: output and exit status, the container's settings, the timeout, the cut, and a job whose commands misbehave in four ways. Three jobs end to end through the stack. |
+| `tests/integration` | `make up` | Migrations. The store on real Postgres: claims, takeovers, the limit, fenced writes with two connections. The worker against the fake provider: heartbeat, lost lease, resume at each interruption point, each row of the decision table, approval, graceful stop, each failpoint. The API over HTTP. The sandbox against the Docker daemon: output and exit status, the container's settings, the timeout, the cut, and a job whose commands misbehave in four ways. A job that loops until its token budget stops it. Three jobs end to end through the stack. |
 | `tests/chaos` | `make chaos` | Workers that are killed at random times, end themselves at failpoints, are paused past their lease, crash on every run, and get SIGTERM. Each test writes its result to `.chaos/results.jsonl` when it is over, with a `verdict`: `passed`, `failed`, or `void` when the machine's clock was set during the run. See the [results](../README.md#results). |
 | `tests/contract` | `make up`, a Claude API key | The fake provider against the Claude API: the same tool call exchange through the runtime's client, the raw JSON of both responses, and the refusal of an unknown model. Everything the fake returns has to be in what the API returns. The fake returns less: the API's `tool_use` block has a `caller` field, for example. Run by hand; see the [README](../README.md#development) for the last run. |
 
@@ -287,6 +287,15 @@ tool's log file, or a worker's container log.
 
 Accepted, with the reason in the decision records:
 
+- The token budget's bound counts tool results by their bytes, a token for
+  each. A job with large tool results stops well before its budget is spent:
+  a job that read a 2 KB file thirty times stopped after 13,636 of 20,000
+  tokens by the provider's count. The bound also assumes a token is never
+  shorter than one byte, which the contract test checks against the API.
+- The bound counts the tool definitions only through the previous response.
+  A worker with more tools than the one before it, after a takeover, relies
+  on the 1024 allowance to cover the difference. Tokens a provider reports
+  under other names, such as prompt cache reads, are not counted.
 - Fencing protects the database, not the outside world. A worker that passes
   its lease check and is then paused for longer than its lease starts that one
   tool or model call when it wakes. Its result is refused, but the tool ran.

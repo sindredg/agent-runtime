@@ -342,3 +342,17 @@ def test_a_later_response_without_a_problem_clears_it() -> None:
     kind, payload = response(text("hm"))
     state = replay("go", log(request(), (kind, {**payload, "problem": "x"}), response(text("ok"))))
     assert state.problem is None
+
+
+def test_the_last_response_carries_its_token_count_and_where_the_conversation_stood() -> None:
+    state = replay("go", log(request(), response(call("t1")), intent("t1"), result("t1")))
+
+    # input 1 and output 1, from response(); the prompt and the answer.
+    assert (state.counted, state.counted_messages) == (2, 2)
+    assert len(state.messages) == 3
+
+
+def test_the_last_request_carries_its_max_tokens() -> None:
+    lowered = (StepKind.MODEL_REQUEST, {"model": "m", "max_tokens": 37, "messages": 1})
+
+    assert replay("go", log(lowered)).requested_max_tokens == 37
