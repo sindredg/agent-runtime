@@ -1,8 +1,7 @@
 """The store against a real Postgres: jobs, claiming, steps, status."""
 
 import asyncio
-from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -13,13 +12,12 @@ from hypothesis import strategies as st
 from sqlalchemy import event, text
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
-from runtime.store.engine import sqlalchemy_url
 from runtime.store.jobs import (
+    TAKEOVER_LIMIT,
     InvalidTransition,
     Job,
-    add_tokens_used,
     claim_job,
     claim_statement,
     create_job,
@@ -28,54 +26,11 @@ from runtime.store.jobs import (
 )
 from runtime.store.payload import InvalidPayload, check_json
 from runtime.store.status import TRANSITIONS, JobStatus
-from runtime.store.steps import StepConflict, StepKind, append_step, read_progress, read_steps
+from runtime.store.steps import StepConflict, StepKind, read_progress, read_steps
+
+from .conftest import DEADLINE, add_step, expire_lease, in_transaction, new_job, with_engine
 
 S = JobStatus
-DEADLINE = datetime.now(UTC) + timedelta(hours=1)
-
-
-def with_engine[T](
-    database_url: str, body: Callable[[AsyncEngine], Awaitable[T]], *, connections: int = 5
-) -> T:
-    """Run `body` with an engine that allows `connections` at once, then dispose it."""
-
-    async def run() -> T:
-        engine = create_async_engine(
-            sqlalchemy_url(database_url), pool_size=connections, max_overflow=0
-        )
-        try:
-            return await body(engine)
-        finally:
-            await engine.dispose()
-
-    return asyncio.run(run())
-
-
-def in_transaction[T](database_url: str, body: Callable[[AsyncConnection], Awaitable[T]]) -> T:
-    """Run `body` in one transaction and commit it."""
-
-    async def run(engine: AsyncEngine) -> T:
-        async with engine.begin() as conn:
-            return await body(conn)
-
-    return with_engine(database_url, run)
-
-
-async def new_job(conn: AsyncConnection) -> Job:
-    return await create_job(conn, spec={"task": "hello"}, token_budget=1000, deadline=DEADLINE)
-
-
-async def add_step(
-    conn: AsyncConnection, job_id: UUID, seq: int, payload: dict[str, Any] | None = None
-) -> None:
-    await append_step(
-        conn,
-        job_id=job_id,
-        seq=seq,
-        kind=StepKind.MODEL_REQUEST,
-        payload=payload or {},
-        lease_epoch=1,
-    )
 
 
 # Jobs
@@ -157,7 +112,9 @@ def test_jobs_are_claimed_oldest_first_and_once(database_url: str) -> None:
     assert claimed == [*created, None]
 
 
-def test_only_queued_jobs_are_claimed(database_url: str) -> None:
+def test_jobs_that_are_not_queued_and_hold_no_expired_lease_are_not_claimed(
+    database_url: str,
+) -> None:
     async def body(conn: AsyncConnection) -> Job | None:
         for status in JobStatus:
             if status is not S.QUEUED:
@@ -283,13 +240,19 @@ def test_claim_statement_uses_the_claim_index(database_url: str) -> None:
     """The planner can serve the statement claim_job sends from the partial index.
 
     The statement is prepared and planned without its parameter values
-    (force_generic_plan), the hardest case: the index only matches if 'queued'
-    is a constant in the SQL. Sequential scans are switched off because the
-    planner prefers them on a table this small.
+    (force_generic_plan), the hardest case: the index only matches if the
+    statuses are constants in the SQL. Sequential scans are switched off
+    because the planner prefers them on a table this small.
     """
     statement = claim_statement("w1", timedelta(seconds=30)).compile(
         dialect=postgresql.asyncpg.dialect(),  # type: ignore[no-untyped-call]
         compile_kwargs={"render_postcompile": True},
+    )
+    # One value per $n placeholder, in order, written as SQL literals.
+    values = [statement.params[name] for name in statement.positiontup or ()]
+    arguments = ", ".join(
+        "NULL" if value is None else "'" + str(getattr(value, "value", value)) + "'"
+        for value in values
     )
 
     async def body() -> str:
@@ -302,7 +265,7 @@ def test_claim_statement_uses_the_claim_index(database_url: str) -> None:
                 " SET plan_cache_mode = force_generic_plan;"
                 f" PREPARE claim AS {statement}"
             )
-            plan = await conn.fetch("EXPLAIN EXECUTE claim('running', 'w1', '30 seconds', 1, 1)")
+            plan = await conn.fetch(f"EXPLAIN EXECUTE claim({arguments})")
         finally:
             await conn.close()
         return "\n".join(row[0] for row in plan)
@@ -310,6 +273,241 @@ def test_claim_statement_uses_the_claim_index(database_url: str) -> None:
     plan = asyncio.run(body())
     assert "Index Scan using jobs_claim_order" in plan
     assert "LockRows" in plan
+    # The lease check is part of the scan, so the statement asks for both kinds.
+    assert "lease_expires_at < clock_timestamp()" in plan
+
+
+# Takeover
+
+
+def test_a_running_job_with_a_live_lease_is_not_claimed(database_url: str) -> None:
+    async def body(conn: AsyncConnection) -> tuple[Job | None, Job | None]:
+        await new_job(conn)
+        first = await claim_job(conn, worker_id="w1", lease=timedelta(seconds=30))
+        return first, await claim_job(conn, worker_id="w2")
+
+    first, second = in_transaction(database_url, body)
+    assert first is not None
+    assert first.takeovers == 0
+    assert second is None
+
+
+def test_a_running_job_with_an_expired_lease_is_taken_over(database_url: str) -> None:
+    async def body(conn: AsyncConnection) -> tuple[Job | None, Job | None, datetime]:
+        await new_job(conn)
+        first = await claim_job(conn, worker_id="w1")
+        assert first is not None
+        await expire_lease(conn, first.id)
+        before = (await conn.execute(text("SELECT clock_timestamp()"))).scalar_one()
+        return first, await claim_job(conn, worker_id="w2", lease=timedelta(seconds=30)), before
+
+    first, second, before = in_transaction(database_url, body)
+    assert first is not None
+    assert second is not None
+    assert second.id == first.id
+    assert second.status is S.RUNNING
+    assert second.lease_owner == "w2"
+    assert (second.lease_epoch, second.takeovers) == (2, 1)
+    assert second.lease_expires_at is not None
+    assert second.lease_expires_at >= before + timedelta(seconds=30)
+
+
+def test_an_expired_lease_is_claimed_in_its_turn_by_age(database_url: str) -> None:
+    """A takeover is not put behind newer queued jobs: the order is by creation time."""
+
+    async def body(engine: AsyncEngine) -> tuple[UUID, UUID, list[UUID]]:
+        async with engine.begin() as conn:
+            old = (await new_job(conn)).id
+            assert await claim_job(conn, worker_id="w1") is not None
+            await expire_lease(conn, old)
+        async with engine.begin() as conn:
+            new = (await new_job(conn)).id
+        claimed = []
+        for _ in range(2):
+            async with engine.begin() as conn:
+                job = await claim_job(conn, worker_id="w2")
+                assert job is not None
+                claimed.append(job.id)
+        return old, new, claimed
+
+    old, new, claimed = with_engine(database_url, body)
+    assert claimed == [old, new]
+
+
+def test_20_concurrent_claimers_on_10_expired_jobs_claim_each_job_once(database_url: str) -> None:
+    jobs_count, claimers = 10, 20
+
+    async def body(engine: AsyncEngine) -> tuple[set[UUID], list[Job | None]]:
+        async with engine.begin() as conn:
+            created = {(await new_job(conn)).id for _ in range(jobs_count)}
+            # All ten are claimed before any lease expires. A claim made after
+            # an expiry would take that job over instead of a new one.
+            for _ in range(jobs_count):
+                assert await claim_job(conn, worker_id="gone") is not None
+            for job_id in created:
+                await expire_lease(conn, job_id)
+
+        ready = asyncio.Barrier(claimers)
+
+        async def claimer(n: int) -> Job | None:
+            async with engine.connect() as conn, conn.begin():
+                await conn.execute(text("SELECT 1"))
+                await ready.wait()
+                job = await claim_job(conn, worker_id=f"w{n}")
+                # Hold the row lock, so the other claims run while it is held.
+                await asyncio.sleep(0.2)
+                return job
+
+        async with asyncio.timeout(30):
+            results = await asyncio.gather(*(claimer(n) for n in range(claimers)))
+        return created, list(results)
+
+    created, results = with_engine(database_url, body, connections=claimers)
+    claimed = [job for job in results if job is not None]
+    assert len(claimed) == jobs_count
+    assert {job.id for job in claimed} == created
+    assert len({job.lease_owner for job in claimed}) == jobs_count
+    assert all((job.lease_epoch, job.takeovers) == (2, 1) for job in claimed)
+
+    async def stored(conn: AsyncConnection) -> list[tuple[str, int, int]]:
+        rows = await conn.execute(text("SELECT status, lease_epoch, takeovers FROM jobs"))
+        return [(row.status, row.lease_epoch, row.takeovers) for row in rows]
+
+    assert in_transaction(database_url, stored) == [("running", 2, 1)] * jobs_count
+
+
+def test_a_claim_after_a_status_change_is_not_a_takeover(database_url: str) -> None:
+    """Only a claim of a `running` job counts. A job that went back to `queued` does not."""
+
+    async def body(conn: AsyncConnection) -> Job | None:
+        await new_job(conn)
+        first = await claim_job(conn, worker_id="w1")
+        assert first is not None
+        await conn.execute(
+            text(
+                "UPDATE jobs SET status = 'queued', lease_owner = NULL, lease_expires_at = NULL"
+                " WHERE id = :id"
+            ),
+            {"id": first.id},
+        )
+        return await claim_job(conn, worker_id="w2")
+
+    second = in_transaction(database_url, body)
+    assert second is not None
+    assert (second.lease_epoch, second.takeovers) == (2, 0)
+
+
+async def take_over_until_refused(engine: AsyncEngine) -> tuple[UUID, list[int], Job | None]:
+    """Claim one job, then let its lease expire and claim again until the claim finds nothing.
+
+    Returns the job id, the takeover count after each claim that handed it
+    out, and what the last claim returned.
+    """
+    async with engine.begin() as conn:
+        job_id = (await new_job(conn)).id
+        await add_step(conn, job_id, 1)
+    counts: list[int] = []
+    while True:
+        async with engine.begin() as conn:
+            job = await claim_job(conn, worker_id=f"w{len(counts)}")
+            if job is None or len(counts) > TAKEOVER_LIMIT + 3:
+                return job_id, counts, job
+            counts.append(job.takeovers)
+            await expire_lease(conn, job.id)
+
+
+def test_the_sixth_takeover_fails_the_job_with_an_error_step(database_url: str) -> None:
+    async def body(engine: AsyncEngine) -> tuple[list[int], Job | None, Job | None, list[Any]]:
+        job_id, counts, last = await take_over_until_refused(engine)
+        async with engine.begin() as conn:
+            return counts, last, await get_job(conn, job_id), await read_steps(conn, job_id)
+
+    counts, last, job, steps = with_engine(database_url, body)
+    # The first claim and five takeovers were handed out: six runs.
+    assert counts == [0, 1, 2, 3, 4, 5]
+    assert TAKEOVER_LIMIT == 5
+    assert last is None
+    assert job is not None
+    assert job.status is S.FAILED
+    assert job.takeovers == 5
+    assert job.lease_epoch == 6
+    assert job.lease_owner is None
+    assert job.lease_expires_at is None
+    assert job.error is not None
+    assert "taken over 5 times" in job.error
+    # The reason is in the log too, after the step that was already there.
+    assert [(step.seq, step.kind) for step in steps] == [
+        (1, StepKind.MODEL_REQUEST),
+        (2, StepKind.ERROR),
+    ]
+    assert steps[1].payload == {"message": job.error}
+    assert steps[1].lease_epoch == 6
+
+
+def test_a_claim_that_fails_a_job_at_the_limit_still_hands_out_the_next_job(
+    database_url: str,
+) -> None:
+    async def body(conn: AsyncConnection) -> tuple[Job, Job | None, Job | None]:
+        capped = await new_job(conn)
+        assert await claim_job(conn, worker_id="w1") is not None
+        await conn.execute(
+            text("UPDATE jobs SET takeovers = :limit WHERE id = :id"),
+            {"limit": TAKEOVER_LIMIT, "id": capped.id},
+        )
+        await expire_lease(conn, capped.id)
+        queued = await new_job(conn)
+        claimed = await claim_job(conn, worker_id="w2")
+        return queued, claimed, await get_job(conn, capped.id)
+
+    queued, claimed, capped = in_transaction(database_url, body)
+    assert claimed is not None
+    assert claimed.id == queued.id
+    assert capped is not None
+    assert capped.status is S.FAILED
+
+
+def test_a_claim_reports_the_jobs_it_failed_at_the_limit(database_url: str) -> None:
+    """The caller has to know: nobody else will ever clean up after such a job."""
+
+    async def body(conn: AsyncConnection) -> tuple[Job, list[Job], Job | None]:
+        capped = await new_job(conn)
+        assert await claim_job(conn, worker_id="w1") is not None
+        await conn.execute(
+            text("UPDATE jobs SET takeovers = :limit WHERE id = :id"),
+            {"limit": TAKEOVER_LIMIT, "id": capped.id},
+        )
+        await expire_lease(conn, capped.id)
+        failed: list[Job] = []
+        claimed = await claim_job(conn, worker_id="w2", failed=failed)
+        return capped, failed, claimed
+
+    capped, failed, claimed = in_transaction(database_url, body)
+    assert claimed is None
+    assert [(job.id, job.status) for job in failed] == [(capped.id, S.FAILED)]
+
+
+def test_a_failed_claim_of_a_capped_job_rolls_back_with_its_error_step(database_url: str) -> None:
+    """The status and the error step are one transaction: both happen or neither."""
+
+    async def body(engine: AsyncEngine) -> tuple[Job | None, list[Any]]:
+        async with engine.begin() as conn:
+            job = await new_job(conn)
+            assert await claim_job(conn, worker_id="w1") is not None
+            await conn.execute(
+                text("UPDATE jobs SET takeovers = :limit WHERE id = :id"),
+                {"limit": TAKEOVER_LIMIT, "id": job.id},
+            )
+            await expire_lease(conn, job.id)
+        async with engine.connect() as conn:
+            assert await claim_job(conn, worker_id="w2") is None
+            await conn.rollback()
+        async with engine.begin() as conn:
+            return await get_job(conn, job.id), await read_steps(conn, job.id)
+
+    job, steps = with_engine(database_url, body)
+    assert job is not None
+    assert job.status is S.RUNNING
+    assert steps == []
 
 
 # Steps
@@ -532,7 +730,8 @@ def test_update_status_follows_the_transition_table(
 
     moved, job = in_transaction(migrated_database_url, body)
     assert job is not None
-    assert moved == (new in TRANSITIONS[current])
+    # A running job belongs to its worker. Nothing moves it from here.
+    assert moved == (new in TRANSITIONS[current] and current is not S.RUNNING)
     assert job.status is (new if moved else current)
 
 
@@ -565,21 +764,6 @@ def test_a_concurrent_status_change_is_not_overwritten(migrated_database_url: st
     assert job.status is S.CANCELLED
 
 
-def test_leaving_running_clears_the_lease_and_keeps_the_epoch(database_url: str) -> None:
-    async def body(conn: AsyncConnection) -> Job:
-        await new_job(conn)
-        claimed = await claim_job(conn, worker_id="w1")
-        assert claimed is not None
-        return await update_status(conn, claimed.id, S.FAILED, error="tool crashed")
-
-    job = in_transaction(database_url, body)
-    assert job.status is S.FAILED
-    assert job.error == "tool crashed"
-    assert job.lease_owner is None
-    assert job.lease_expires_at is None
-    assert job.lease_epoch == 1
-
-
 def test_update_status_refuses_running(migrated_database_url: str) -> None:
     async def body(conn: AsyncConnection) -> None:
         job = await new_job(conn)
@@ -592,20 +776,6 @@ def test_update_status_refuses_running(migrated_database_url: str) -> None:
 def test_update_status_of_an_unknown_job_is_rejected(migrated_database_url: str) -> None:
     with pytest.raises(InvalidTransition):
         in_transaction(migrated_database_url, lambda c: update_status(c, uuid4(), S.CANCELLED))
-
-
-def test_add_tokens_used_adds_to_the_count(migrated_database_url: str) -> None:
-    async def body(conn: AsyncConnection) -> Job | None:
-        job = await new_job(conn)
-        await add_tokens_used(conn, job.id, 40)
-        await add_tokens_used(conn, job.id, 2)
-        with pytest.raises(ValueError, match="negative"):
-            await add_tokens_used(conn, job.id, -1)
-        return await get_job(conn, job.id)
-
-    job = in_transaction(migrated_database_url, body)
-    assert job is not None
-    assert job.tokens_used == 42
 
 
 def test_read_progress_returns_status_and_steps_from_one_statement(

@@ -7,19 +7,30 @@ so several calls can share one transaction:
         job = await claim_job(conn, worker_id="worker-1")
 """
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Row, Update, func, insert, literal, select, update
+from sqlalchemy import Row, Update, and_, case, func, insert, literal, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from runtime.store.payload import check_json
-from runtime.store.schema import jobs
+from runtime.store.schema import jobs, steps
 from runtime.store.status import JobStatus, sources_of
+from runtime.store.steps import StepKind
+
+log = logging.getLogger("runtime.store")
 
 DEFAULT_LEASE = timedelta(seconds=30)
+# How often a job may be taken over from a worker that went away. The
+# takeover after that fails the job instead. Only takeovers are counted and
+# limited: a claim after a release or an approval is neither.
+TAKEOVER_LIMIT = 5
+TAKEOVER_LIMIT_ERROR = (
+    f"the job was taken over {TAKEOVER_LIMIT} times after its worker stopped; it is not run again"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +45,8 @@ class Job:
     lease_owner: str | None
     lease_expires_at: datetime | None
     lease_epoch: int
+    # Claims that took the job from a worker whose lease had expired.
+    takeovers: int
     cancel_requested: bool
     error: str | None
     created_at: datetime
@@ -48,7 +61,7 @@ class InvalidTransition(Exception):
         self.new_status = new_status
 
 
-def _job(row: Row[Any]) -> Job:
+def job_from_row(row: Row[Any]) -> Job:
     fields = dict(row._mapping)
     fields["status"] = JobStatus(fields["status"])
     return Job(**fields)
@@ -64,23 +77,45 @@ async def create_job(
         .values(spec=spec, token_budget=token_budget, deadline=deadline)
         .returning(*jobs.c)
     )
-    return _job(result.one())
+    return job_from_row(result.one())
 
 
 async def get_job(conn: AsyncConnection, job_id: UUID) -> Job | None:
     result = await conn.execute(select(jobs).where(jobs.c.id == job_id))
     row = result.one_or_none()
-    return None if row is None else _job(row)
+    return None if row is None else job_from_row(row)
+
+
+def _literal(value: object) -> Any:
+    """A constant written into the SQL instead of sent as a parameter.
+
+    The planner can only match the partial claim index when it sees the
+    status as a constant.
+    """
+    return literal(value, literal_execute=True)
 
 
 def claim_statement(worker_id: str, lease: timedelta) -> Update:
-    """The one statement that is a claim. Separate so a test can inspect its plan."""
-    oldest_queued = (
+    """The one statement that is a claim. Separate so a test can inspect its plan.
+
+    It picks the oldest job that is `queued`, or `running` under a lease
+    that has expired. The second kind is a takeover. A takeover of a job
+    that has already been taken over TAKEOVER_LIMIT times is not made: the
+    same statement marks the job `failed`.
+    """
+    queued = _literal(JobStatus.QUEUED.value)
+    running = _literal(JobStatus.RUNNING.value)
+    oldest_claimable = (
         select(jobs.c.id)
-        # literal_execute writes 'queued' into the SQL instead of sending it
-        # as a parameter. The planner can only match the partial claim index
-        # when it sees the constant.
-        .where(jobs.c.status == literal(JobStatus.QUEUED.value, literal_execute=True))
+        .where(
+            or_(
+                jobs.c.status == queued,
+                # The database clock decides whether a lease is over. A
+                # `running` job without a lease does not match: NULL is not
+                # earlier than anything.
+                and_(jobs.c.status == running, jobs.c.lease_expires_at < func.clock_timestamp()),
+            )
+        )
         .order_by(jobs.c.created_at, jobs.c.id)
         .limit(1)
         # FOR NO KEY UPDATE locks the chosen row until commit. It is the lock
@@ -91,71 +126,156 @@ def claim_statement(worker_id: str, lease: timedelta) -> Update:
         .with_for_update(skip_locked=True, key_share=True)
         .scalar_subquery()
     )
+    # In SET, a column name is the value before the update.
+    takeover = jobs.c.status == running
+    at_limit = and_(takeover, jobs.c.takeovers >= TAKEOVER_LIMIT)
     return (
         update(jobs)
-        .where(jobs.c.id == oldest_queued)
+        .where(jobs.c.id == oldest_claimable)
         .values(
-            status=JobStatus.RUNNING,
-            lease_owner=worker_id,
+            status=case((at_limit, JobStatus.FAILED.value), else_=JobStatus.RUNNING.value),
+            lease_owner=case((at_limit, None), else_=worker_id),
             # The database clock, never the worker's. clock_timestamp() is the
             # time the statement runs; now() is the time the transaction
             # began, which would shorten the lease by whatever ran before.
-            lease_expires_at=func.clock_timestamp() + lease,
-            lease_epoch=jobs.c.lease_epoch + 1,
+            lease_expires_at=case((at_limit, None), else_=func.clock_timestamp() + lease),
+            # A claim that fails the job hands it to nobody, so it is not counted.
+            lease_epoch=jobs.c.lease_epoch + case((at_limit, 0), else_=1),
+            takeovers=jobs.c.takeovers + case((and_(takeover, ~at_limit), 1), else_=0),
+            error=case((at_limit, TAKEOVER_LIMIT_ERROR), else_=jobs.c.error),
         )
         .returning(*jobs.c)
     )
 
 
+async def _append_next_step(
+    conn: AsyncConnection, job: Job, kind: StepKind, payload: dict[str, Any]
+) -> None:
+    """Append a step at the job's next `seq`, for a caller that holds the job row's lock.
+
+    The claim and the approval both update the job row first, in the same
+    transaction. Until that transaction ends no worker can write a step for
+    the job, so the next `seq` cannot be taken in between.
+    """
+    next_seq = (
+        select(func.coalesce(func.max(steps.c.seq), 0) + 1)
+        .where(steps.c.job_id == job.id)
+        .scalar_subquery()
+    )
+    await conn.execute(
+        insert(steps).values(
+            job_id=job.id, seq=next_seq, kind=kind, payload=payload, lease_epoch=job.lease_epoch
+        )
+    )
+
+
+async def _record_takeover_limit(conn: AsyncConnection, job: Job) -> None:
+    """Append the `error` step for a job the claim just failed."""
+    await _append_next_step(conn, job, StepKind.ERROR, {"message": TAKEOVER_LIMIT_ERROR})
+    log.warning(
+        "job failed at the takeover limit",
+        extra={"job_id": job.id, "takeovers": job.takeovers},
+    )
+
+
 async def claim_job(
-    conn: AsyncConnection, *, worker_id: str, lease: timedelta = DEFAULT_LEASE
+    conn: AsyncConnection,
+    *,
+    worker_id: str,
+    lease: timedelta = DEFAULT_LEASE,
+    failed: list[Job] | None = None,
 ) -> Job | None:
-    """Claim the oldest queued job for `worker_id`, or return None if there is none.
+    """Claim the oldest claimable job for `worker_id`, or return None if there is none.
 
+    Claimable is a `queued` job, or a `running` job whose lease has expired.
     The claim moves the job to `running`, sets the lease, and increments
-    `lease_epoch`, all in one statement. The claim is final when the caller's
-    transaction commits.
+    `lease_epoch`, all in one statement. Taking a `running` job also
+    increments `takeovers`. The claim is final when the caller's transaction
+    commits.
 
-    Only `queued` jobs are claimed. Jobs that are backing off or whose lease
-    expired are not picked up yet.
+    A job that would be taken over for the time after TAKEOVER_LIMIT is
+    marked `failed` with an `error` step instead, in the caller's
+    transaction, and the next claimable job is looked for. Such jobs are
+    appended to `failed`, if given: no worker runs them again, so the caller
+    is the one to clean up after them once its transaction has committed.
+
+    Jobs that are backing off (`waiting`) are not picked up yet.
     """
     if lease <= timedelta(0):
         raise ValueError("lease must be positive")
-    result = await conn.execute(claim_statement(worker_id, lease))
-    row = result.one_or_none()
-    return None if row is None else _job(row)
-
-
-async def add_tokens_used(conn: AsyncConnection, job_id: UUID, tokens: int) -> None:
-    """Add to the job's token count. Call it in the transaction that records the usage."""
-    if tokens < 0:
-        raise ValueError("tokens must not be negative")
-    await conn.execute(
-        update(jobs).where(jobs.c.id == job_id).values(tokens_used=jobs.c.tokens_used + tokens)
-    )
+    while True:
+        result = await conn.execute(claim_statement(worker_id, lease))
+        row = result.one_or_none()
+        if row is None:
+            return None
+        job = job_from_row(row)
+        if job.status is JobStatus.RUNNING:
+            return job
+        await _record_takeover_limit(conn, job)
+        if failed is not None:
+            failed.append(job)
 
 
 async def update_status(
     conn: AsyncConnection, job_id: UUID, new_status: JobStatus, *, error: str | None = None
 ) -> Job:
-    """Move a job to `new_status` and return it. Clears the lease.
+    """Move a job that no worker holds to `new_status` and return it.
 
     `error` replaces the stored error; leaving it out clears it.
 
     The move is checked against the transition table inside the UPDATE
     itself, so a job whose status changed in the meantime is not overwritten.
-    Raises InvalidTransition when no row was updated. A job becomes `running`
-    only through `claim_job`.
+    Raises InvalidTransition when no row was updated.
+
+    A `running` job is never moved here. Only the worker that holds it moves
+    it, through `runtime.store.held.leave_running`, which checks the lease
+    epoch. A job becomes `running` only through `claim_job`.
     """
     if new_status is JobStatus.RUNNING:
         raise ValueError("a job becomes running through claim_job, not update_status")
+    sources = sources_of(new_status) - {JobStatus.RUNNING}
     result = await conn.execute(
         update(jobs)
-        .where(jobs.c.id == job_id, jobs.c.status.in_(sources_of(new_status)))
-        .values(status=new_status, error=error, lease_owner=None, lease_expires_at=None)
+        .where(jobs.c.id == job_id, jobs.c.status.in_(sources))
+        .values(status=new_status, error=error)
         .returning(*jobs.c)
     )
     row = result.one_or_none()
     if row is None:
         raise InvalidTransition(job_id, new_status)
-    return _job(row)
+    return job_from_row(row)
+
+
+async def approve_job(conn: AsyncConnection, job_id: UUID) -> Job:
+    """Approve the rerun a job is waiting for, and return the job.
+
+    The job moves from `needs_approval` to `queued` and gets an
+    `approval_given` step that names the call, taken from the job's last
+    `approval_requested` step. Both happen in the caller's transaction. The
+    worker that claims the job next runs the call again.
+
+    Raises InvalidTransition when the job does not exist or is not waiting
+    for an approval. Of two approvals sent at once, one waits for the other
+    and is then refused.
+    """
+    result = await conn.execute(
+        update(jobs)
+        .where(jobs.c.id == job_id, jobs.c.status == JobStatus.NEEDS_APPROVAL.value)
+        .values(status=JobStatus.QUEUED.value)
+        .returning(*jobs.c)
+    )
+    row = result.one_or_none()
+    if row is None:
+        raise InvalidTransition(job_id, JobStatus.QUEUED)
+    job = job_from_row(row)
+    asked = (
+        await conn.execute(
+            select(steps.c.payload)
+            .where(steps.c.job_id == job_id, steps.c.kind == StepKind.APPROVAL_REQUESTED.value)
+            .order_by(steps.c.seq.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none() or {}
+    named = {key: asked[key] for key in ("tool_use_id", "operation_id") if key in asked}
+    await _append_next_step(conn, job, StepKind.APPROVAL_GIVEN, named)
+    return job

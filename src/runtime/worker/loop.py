@@ -2,14 +2,16 @@
 
 import asyncio
 import logging
+import time
 from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from runtime.provider.base import Provider
-from runtime.store.jobs import claim_job
+from runtime.store.jobs import Job, claim_job
 from runtime.tools.base import ToolRegistry
 from runtime.worker.agent import AgentSettings, run_job
+from runtime.worker.workspace import remove_workspace
 
 log = logging.getLogger("runtime.worker")
 
@@ -46,25 +48,44 @@ async def work(
 ) -> None:
     """Claim and run jobs one at a time until `stop` is set.
 
-    `stop` is looked at between jobs. A job that is running is finished
-    first.
+    Once `stop` is set, no further job is claimed. The job in hand is
+    released at its next step boundary.
     """
     while not stop.is_set():
+        # Taken before the claim is sent: the worker's deadline for the
+        # lease counts from here, so it is never later than the database's.
+        claimed_at = time.monotonic()
+        failed: list[Job] = []
         try:
             async with engine.begin() as conn:
-                job = await claim_job(conn, worker_id=worker_id)
+                job = await claim_job(
+                    conn, worker_id=worker_id, lease=settings.lease, failed=failed
+                )
         except Exception:
             # The database may be restarting. Keep the worker up and try again.
             log.exception("claim failed")
             await _wait(stop, poll_interval)
             continue
+        # Jobs the claim failed at the takeover limit are final, and this
+        # worker made them so. Their workspaces go, like any finished job's.
+        # The claim is committed by now: a failure here must not cost the
+        # job that was claimed with them.
+        for ended in failed:
+            try:
+                await asyncio.to_thread(remove_workspace, settings.workspace_root, ended.id)
+            except Exception:
+                log.exception("workspace could not be removed", extra={"job_id": ended.id})
         if job is None:
             await _wait(stop, poll_interval)
             continue
-        log.info("job claimed", extra={"job_id": job.id, "lease_epoch": job.lease_epoch})
+        log.info(
+            "job claimed",
+            extra={"job_id": job.id, "lease_epoch": job.lease_epoch, "takeovers": job.takeovers},
+        )
         try:
-            await run_job(engine, provider, tools, job, settings)
+            await run_job(engine, provider, tools, job, settings, claimed_at=claimed_at, stop=stop)
         except Exception:
-            # run_job records a job's own failure. This is a failure to
-            # record it; the job stays `running`.
+            # run_job records a job's own failure and drops a job it can no
+            # longer write to. This is anything else; the job stays `running`
+            # until its lease runs out.
             log.exception("job could not be finished", extra={"job_id": job.id})

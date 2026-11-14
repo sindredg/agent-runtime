@@ -45,6 +45,7 @@ class JobView(BaseModel):
     lease_owner: str | None
     lease_expires_at: datetime | None
     lease_epoch: int
+    takeovers: int
     cancel_requested: bool
     error: str | None
     created_at: datetime

@@ -6,6 +6,7 @@ requires-python = "==3.15.*"
 members = [
     "agent-runtime",
     "fake-provider",
+    "fake-tracker",
 ]
 
 [[package]]
@@ -27,6 +28,7 @@ dependencies = [
 dev = [
     { name = "asyncpg-stubs" },
     { name = "fake-provider" },
+    { name = "fake-tracker" },
     { name = "hypothesis" },
     { name = "mypy" },
     { name = "pre-commit" },
@@ -51,6 +53,7 @@ requires-dist = [
 dev = [
     { name = "asyncpg-stubs", specifier = "==0.32.0" },
     { name = "fake-provider", editable = "services/fake_provider" },
+    { name = "fake-tracker", editable = "services/fake_tracker" },
     { name = "hypothesis", specifier = "==6.170.15" },
     { name = "mypy", specifier = "==2.4.1" },
     { name = "pre-commit", specifier = "==4.7.0" },
@@ -255,6 +258,23 @@ wheels = [
 name = "fake-provider"
 version = "0.0.0"
 source = { editable = "services/fake_provider" }
+dependencies = [
+    { name = "fastapi" },
+    { name = "pydantic" },
+    { name = "uvicorn" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastapi", specifier = "==0.162.6" },
+    { name = "pydantic", specifier = "==2.14.3" },
+    { name = "uvicorn", specifier = "==0.54.0" },
+]
+
+[[package]]
+name = "fake-tracker"
+version = "0.0.0"
+source = { editable = "services/fake_tracker" }
 dependencies = [
     { name = "fastapi" },
     { name = "pydantic" },

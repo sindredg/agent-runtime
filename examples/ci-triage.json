@@ -1,0 +1,7 @@
+{
+  "prompt": "The CI run failed. Read ci.log from the workspace and open an issue with the evidence.",
+  "model": "ci-triage",
+  "files": {
+    "ci.log": "collected 3 items\ntests/test_cart.py::test_add_item PASSED\ntests/test_cart.py::test_remove_item PASSED\nFAILED tests/test_checkout.py::test_checkout_total - AssertionError: assert 1999 == 2099\n1 failed, 2 passed in 0.41s\n"
+  }
+}

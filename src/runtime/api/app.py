@@ -1,4 +1,4 @@
-"""The API application: submit jobs, read them, follow their steps.
+"""The API application: submit jobs, read them, follow their steps, approve a rerun.
 
 There is no authentication. The service listens on localhost.
 """
@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from runtime.api.models import JobSubmission, JobView, StepList, StepView
 from runtime.config import ApiConfig
 from runtime.store.engine import create_engine
-from runtime.store.jobs import create_job, get_job
+from runtime.store.jobs import InvalidTransition, approve_job, create_job, get_job
 from runtime.store.payload import InvalidPayload
 from runtime.store.status import FINAL_STATUSES
 from runtime.store.steps import read_progress
@@ -116,6 +116,29 @@ def create_app(
             job = await get_job(conn, job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="job not found")
+        return JobView.model_validate(job)
+
+    @app.post("/jobs/{job_id}/approve")
+    async def approve(job_id: UUID) -> JobView:
+        """Approve the rerun of a tool call that was interrupted.
+
+        A job in `needs_approval` stopped because nobody could tell whether
+        the call already happened. Approving means: run it again, knowing it
+        may have run before. The job goes back to `queued`. Any other status
+        is refused with 409.
+        """
+        async with engine().begin() as conn:
+            try:
+                job = await approve_job(conn, job_id)
+            except InvalidTransition:
+                found = await get_job(conn, job_id)
+                if found is None:
+                    raise HTTPException(status_code=404, detail="job not found") from None
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"job is {found.status.value};"
+                    " only a job that needs approval can be approved",
+                ) from None
         return JobView.model_validate(job)
 
     @app.get("/jobs/{job_id}/steps")

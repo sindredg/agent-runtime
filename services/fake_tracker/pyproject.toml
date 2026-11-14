@@ -1,0 +1,15 @@
+[project]
+name = "fake-tracker"
+version = "0.0.0"
+description = "Stand-in for an issue tracker: the outside system a tool changes in tests."
+requires-python = "==3.15.*"
+dependencies = [
+    "fastapi==0.162.6",
+    # Request bodies are validated with it. FastAPI installs it anyway.
+    "pydantic==2.14.3",
+    "uvicorn==0.54.0",
+]
+
+[build-system]
+requires = ["uv_build==0.13.8"]
+build-backend = "uv_build"

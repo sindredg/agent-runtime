@@ -1,4 +1,4 @@
-"""The `runtime` command: submit a job, read its status, read its steps.
+"""The `runtime` command: submit a job, read its status and steps, approve a rerun.
 
 It talks to the API over HTTP. The API's address comes from --api-url or
 RUNTIME_API_URL and defaults to http://127.0.0.1:8000.
@@ -66,6 +66,17 @@ def build_parser() -> argparse.ArgumentParser:
     logs.add_argument(
         "--follow", action="store_true", help="keep printing new steps until the job ends"
     )
+
+    approve = commands.add_parser(
+        "approve",
+        help="let a job that needs approval run its interrupted tool call again",
+        description=(
+            "A job stops in needs_approval when a worker went away during a tool call and"
+            " nobody can tell whether the call happened. Approving runs the call again."
+            " Look at the system the tool changes first: the call may already have been made."
+        ),
+    )
+    approve.add_argument("job_id", type=_job_id)
     return parser
 
 
@@ -83,7 +94,7 @@ def _preview(text: str) -> str:
 
 def _detail(kind: str, payload: dict[str, Any]) -> str:
     if kind == "model_request":
-        return f"model={payload['model']} messages={payload['messages']}"
+        return f"model={_preview(str(payload['model']))} messages={payload['messages']}"
     if kind == "model_response":
         usage = payload["usage"]
         text = " ".join(b["text"] for b in payload["content"] if b.get("type") == "text")
@@ -92,12 +103,16 @@ def _detail(kind: str, payload: dict[str, Any]) -> str:
             f" tokens={usage['input_tokens']}+{usage['output_tokens']} {_preview(text)}"
         )
     if kind == "tool_intent":
-        return f"{payload['name']} {_preview(json.dumps(payload['input']))}"
+        return f"{_preview(str(payload['name']))} {_preview(json.dumps(payload['input']))}"
     if kind == "tool_result":
         flag = "error" if payload["is_error"] else "ok"
         return f"{flag} {_preview(payload['content'])}"
     if kind == "error":
         return _preview(payload["message"])
+    if kind == "approval_requested":
+        return _preview(f"{payload['name']} {payload['operation_id']}: {payload['reason']}")
+    if kind == "approval_given":
+        return _preview(payload["operation_id"])
     return _preview(json.dumps(payload))
 
 
@@ -250,6 +265,12 @@ def _logs(client: httpx2.Client, args: argparse.Namespace, out: TextIO) -> int:
     return 0
 
 
+def _approve(client: httpx2.Client, args: argparse.Namespace, out: TextIO) -> int:
+    job = _check(client.post(f"/jobs/{args.job_id}/approve")).json()
+    print(job["status"], file=out)
+    return 0
+
+
 def main(
     argv: Sequence[str] | None = None,
     *,
@@ -261,7 +282,8 @@ def main(
     out = sys.stdout if out is None else out
     err = sys.stderr if err is None else err
     args = build_parser().parse_args(argv)
-    handler = {"submit": _submit, "status": _status, "logs": _logs}[args.command]
+    handlers = {"submit": _submit, "status": _status, "logs": _logs, "approve": _approve}
+    handler = handlers[args.command]
     try:
         with httpx2.Client(base_url=args.api_url, timeout=30.0, transport=transport) as client:
             return handler(client, args, out)

@@ -1,0 +1,33 @@
+# Changes to the stack for the chaos tests. Used on top of docker-compose.yml:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.chaos.yml up --wait
+#
+# `make chaos` does that and runs the tests. Never use this file for
+# anything but failure tests: its workers end their own process on request.
+name: agent-runtime
+
+services:
+  worker:
+    # Three workers, so that a job always has another worker to go to.
+    deploy:
+      replicas: 3
+    environment:
+      # A short lease, so a takeover is seconds away and 200 runs take
+      # minutes. The tests that need the default lease set these.
+      LEASE_SECONDS: ${CHAOS_LEASE_SECONDS:-2}
+      HEARTBEAT_SECONDS: ${CHAOS_HEARTBEAT_SECONDS:-0.5}
+      POLL_INTERVAL_SECONDS: ${CHAOS_POLL_SECONDS:-0.2}
+      # The point at which a worker ends its own process, and the tool the
+      # tool failpoints are limited to. Empty: no failpoint.
+      FAILPOINT: ${FAILPOINT:-}
+      FAILPOINT_TOOL: ${FAILPOINT_TOOL:-}
+      # Offers the crash_worker tool, which logs each run to CHAOS_LOG_DIR.
+      CHAOS_TOOLS: "1"
+      CHAOS_LOG_DIR: /chaos
+    # A worker that ended its own process comes back, as it would under any
+    # supervisor. One that the tests killed or stopped is started by them.
+    restart: on-failure
+    volumes:
+      # On the host, so the tests read the tool's own log directly. The
+      # directory has to exist and be writable by the container's user.
+      - ./.chaos:/chaos

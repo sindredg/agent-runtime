@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from runtime.tools import default_tools
-from runtime.tools.base import ToolResult
+from runtime.tools.base import ToolCall, ToolResult
 from runtime.tools.paths import PathNotAllowed, check_relative, resolve_in_workspace
 from runtime.tools.read_file import MAX_BYTES, READ_FILE
 
@@ -25,7 +25,7 @@ def workspace(tmp_path: Path) -> Path:
 
 
 def read(workspace: Path, path: object) -> ToolResult:
-    return READ_FILE.run(workspace, {"path": path})
+    return READ_FILE.run(ToolCall(workspace, {"path": path}, "job:toolu_1"))
 
 
 def test_reads_a_file_in_the_workspace(workspace: Path) -> None:
@@ -115,7 +115,7 @@ def test_a_missing_file_or_a_directory_is_an_error_result(workspace: Path, path:
 def test_input_without_a_string_path_is_an_error_result(
     workspace: Path, tool_input: dict[str, object]
 ) -> None:
-    assert READ_FILE.run(workspace, tool_input).is_error
+    assert READ_FILE.run(ToolCall(workspace, dict(tool_input), "job:toolu_1")).is_error
 
 
 def test_size_limit(workspace: Path) -> None:
@@ -140,6 +140,11 @@ def test_check_relative_and_resolve_agree_on_plain_paths(workspace: Path) -> Non
     assert resolve_in_workspace(workspace, "sub/deep.txt") == (workspace / "sub/deep.txt").resolve()
     with pytest.raises(PathNotAllowed):
         check_relative("a/../b")
+
+
+def test_read_file_is_declared_idempotent() -> None:
+    """Reading twice changes nothing, so an interrupted read is run again unasked."""
+    assert READ_FILE.idempotent is True
 
 
 def test_default_tools_offer_read_file_with_a_schema() -> None:

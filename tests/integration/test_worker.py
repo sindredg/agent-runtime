@@ -5,116 +5,30 @@ worker sent. The step log is never checked against itself alone.
 """
 
 import asyncio
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any
 
-import httpx2
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from runtime.provider.base import ModelRequest, ModelResponse
 from runtime.provider.messages import AnthropicProvider
-from runtime.store.engine import create_engine
 from runtime.store.jobs import (
-    InvalidTransition,
     Job,
     claim_job,
     create_job,
     get_job,
-    update_status,
 )
 from runtime.store.status import JobStatus
 from runtime.store.steps import Step, StepKind, append_step, read_steps
 from runtime.tools import default_tools
-from runtime.tools.base import Tool, ToolRegistry, ToolResult
-from runtime.worker.agent import AgentSettings, run_job
+from runtime.tools.base import ToolCall, ToolRegistry, ToolResult
+from runtime.worker.agent import run_job
 from runtime.worker.loop import work
 
+from .conftest import FIXED, HELLO, Stack, stub_tool
+
 K = StepKind
-HELLO = {"prompt": "Read hello.txt and say what it holds.", "model": "hello"}
-
-
-def stub_tool(run: Callable[[Path, dict[str, Any]], ToolResult]) -> ToolRegistry:
-    """A registry whose `read_file` is the given function."""
-    schema = {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
-    return ToolRegistry([Tool("read_file", "Read a file.", schema, run)])
-
-
-FIXED = stub_tool(lambda workspace, tool_input: ToolResult(f"content of {tool_input['path']}"))
-
-
-@dataclass
-class Outcome:
-    job: Job
-    steps: list[Step]
-    # The fake provider's log of the requests that carried this job's id.
-    requests: list[dict[str, Any]]
-
-    @property
-    def kinds(self) -> list[StepKind]:
-        return [step.kind for step in self.steps]
-
-
-@dataclass
-class Stack:
-    database_url: str
-    fake_provider_url: str
-    workspace_root: Path
-
-    def settings(self, default_model: str = "hello") -> AgentSettings:
-        return AgentSettings(
-            default_model=default_model, max_tokens=1024, workspace_root=self.workspace_root
-        )
-
-    def run[T](self, body: Callable[[AsyncEngine, AnthropicProvider], Awaitable[T]]) -> T:
-        async def go() -> T:
-            engine = create_engine(self.database_url)
-            provider = AnthropicProvider(api_key="test", base_url=self.fake_provider_url)
-            try:
-                return await body(engine, provider)
-            finally:
-                await provider.aclose()
-                await engine.dispose()
-
-        return asyncio.run(go())
-
-    def requests_for(self, job: Job) -> list[dict[str, Any]]:
-        log: list[dict[str, Any]] = httpx2.get(
-            f"{self.fake_provider_url}/_fake/requests", params={"user_id": str(job.id)}, timeout=10
-        ).json()
-        return log
-
-    def run_one(
-        self, spec: dict[str, Any], tools: ToolRegistry = FIXED, default_model: str = "hello"
-    ) -> Outcome:
-        """Create one job, claim it, run it, and read back everything about it."""
-
-        async def body(engine: AsyncEngine, provider: AnthropicProvider) -> tuple[Job, list[Step]]:
-            async with engine.begin() as conn:
-                await create_job(
-                    conn,
-                    spec=spec,
-                    token_budget=100_000,
-                    deadline=datetime.now(UTC) + timedelta(hours=1),
-                )
-                claimed = await claim_job(conn, worker_id="test-worker")
-            assert claimed is not None
-            await run_job(engine, provider, tools, claimed, self.settings(default_model))
-            async with engine.begin() as conn:
-                job = await get_job(conn, claimed.id)
-                assert job is not None
-                return job, await read_steps(conn, job.id)
-
-        job, steps = self.run(body)
-        return Outcome(job, steps, self.requests_for(job))
-
-
-@pytest.fixture
-def stack(database_url: str, fake_provider_url: str, tmp_path: Path) -> Stack:
-    return Stack(database_url, fake_provider_url, tmp_path / "workspaces")
 
 
 def test_scripted_job_produces_the_expected_step_sequence(stack: Stack) -> None:
@@ -183,15 +97,15 @@ def test_the_configured_model_is_used_when_the_spec_names_none(stack: Stack) -> 
     assert {r["body"]["model"] for r in outcome.requests} == {"hello"}
 
 
-def boom(workspace: Path, tool_input: dict[str, Any]) -> ToolResult:
+def boom(call: ToolCall) -> ToolResult:
     raise RuntimeError("disk on fire")
 
 
-def exits(workspace: Path, tool_input: dict[str, Any]) -> ToolResult:
+def exits(call: ToolCall) -> ToolResult:
     raise SystemExit(3)
 
 
-def boom_with_nul(workspace: Path, tool_input: dict[str, Any]) -> ToolResult:
+def boom_with_nul(call: ToolCall) -> ToolResult:
     raise RuntimeError("bad byte \x00 in the message")
 
 
@@ -202,10 +116,10 @@ def boom_with_nul(workspace: Path, tool_input: dict[str, Any]) -> ToolResult:
         (stub_tool(boom), "the tool failed: disk on fire"),
         (stub_tool(exits), "the tool failed: 3"),
         (stub_tool(boom_with_nul), "the tool's output cannot be stored"),
-        (stub_tool(lambda w, i: None), "the tool returned no text result"),  # type: ignore[arg-type, return-value]
-        (stub_tool(lambda w, i: ToolResult(b"bytes")), "the tool returned no text result"),  # type: ignore[arg-type]
-        (stub_tool(lambda w, i: ToolResult("a\x00b")), "the tool's output cannot be stored"),
-        (stub_tool(lambda w, i: ToolResult("no such file", is_error=True)), "no such file"),
+        (stub_tool(lambda call: None), "the tool returned no text result"),  # type: ignore[arg-type, return-value]
+        (stub_tool(lambda call: ToolResult(b"bytes")), "the tool returned no text result"),  # type: ignore[arg-type]
+        (stub_tool(lambda call: ToolResult("a\x00b")), "the tool's output cannot be stored"),
+        (stub_tool(lambda call: ToolResult("no such file", is_error=True)), "no such file"),
     ],
     ids=[
         "unknown-tool",
@@ -294,7 +208,7 @@ def test_a_response_that_did_not_finish_fails_the_job_and_runs_no_tool(
     """The response holds a tool call, but its stop reason says it is not to be trusted."""
     ran: list[str] = []
 
-    def record(workspace: Path, tool_input: dict[str, Any]) -> ToolResult:
+    def record(call: ToolCall) -> ToolResult:
         ran.append("ran")
         return ToolResult("ok")
 
@@ -374,7 +288,7 @@ def test_a_malformed_response_fails_the_job_before_any_tool_runs(
     """The first tool call is fine. A later block is not, and that is found first."""
     ran: list[str] = []
 
-    def record(workspace: Path, tool_input: dict[str, Any]) -> ToolResult:
+    def record(call: ToolCall) -> ToolResult:
         ran.append("ran")
         return ToolResult("ok")
 
@@ -395,6 +309,9 @@ def test_a_response_that_cannot_be_stored_still_counts_its_tokens(stack: Stack, 
     provider = OneResponse(ModelResponse("msg_1", "m", content, "end_turn", 100, 200))
     job, steps = run_with(stack, provider, ToolRegistry())
     assert [step.kind for step in steps] == [K.MODEL_REQUEST, K.MODEL_RESPONSE, K.ERROR]
+    # The reason is stored with the step, so a worker that takes the job over
+    # at this point fails it too instead of reading an empty answer as success.
+    assert steps[1].payload.pop("problem").startswith("it cannot be stored")
     assert steps[1].payload == {
         "id": "msg_1",
         "content": [],
@@ -442,34 +359,12 @@ def test_a_step_conflict_fails_the_job_instead_of_leaving_it_running(stack: Stac
     assert job.status is JobStatus.FAILED
 
 
-class EndsTheJobItself:
-    """A provider that, during the call, moves the job to a final status behind the worker."""
-
-    def attach(self, engine: AsyncEngine, job: Job) -> None:
-        self.engine, self.job = engine, job
-
-    async def complete(self, request: ModelRequest) -> ModelResponse:
-        async with self.engine.begin() as conn:
-            await update_status(conn, self.job.id, JobStatus.CANCELLED)
-        return ModelResponse("msg_1", "m", [{"type": "text", "text": "hi"}], "end_turn", 1, 1)
-
-    async def aclose(self) -> None:
-        return None
-
-
-def test_the_workspace_is_removed_even_when_the_outcome_cannot_be_recorded(stack: Stack) -> None:
-    """The job is already final when the worker tries to mark it succeeded."""
-    with pytest.raises(InvalidTransition):
-        run_with(stack, EndsTheJobItself(), ToolRegistry(), files={"seed.txt": "x"})
-    assert list(stack.workspace_root.iterdir()) == []
-
-
 def test_spec_files_are_written_to_the_job_workspace_before_tools_run(stack: Stack) -> None:
     seen: list[str] = []
 
-    def read(workspace: Path, tool_input: dict[str, Any]) -> ToolResult:
-        seen.append((workspace / tool_input["path"]).read_text())
-        seen.append((workspace / "sub" / "b.txt").read_text())
+    def read(call: ToolCall) -> ToolResult:
+        seen.append((call.workspace / call.input["path"]).read_text())
+        seen.append((call.workspace / "sub" / "b.txt").read_text())
         return ToolResult("ok")
 
     outcome = stack.run_one(
@@ -484,8 +379,8 @@ def test_the_workspace_is_removed_when_the_job_is_final(stack: Stack, spec: dict
     """Succeeded or failed, a finished job leaves no directory behind."""
     existed: list[bool] = []
 
-    def look(workspace: Path, tool_input: dict[str, Any]) -> ToolResult:
-        existed.append((workspace / "seed.txt").is_file())
+    def look(call: ToolCall) -> ToolResult:
+        existed.append((call.workspace / "seed.txt").is_file())
         return ToolResult("ok")
 
     outcome = stack.run_one({**spec, "files": {"seed.txt": "x"}}, stub_tool(look))

@@ -93,7 +93,7 @@ def test_hello_job_runs_to_success(
         f"{fake_provider_url}/_fake/requests", params={"user_id": job_id}, timeout=10
     ).json()
     assert [(entry["status"], entry["turn"]) for entry in log] == [(200, 0), (200, 1)]
-    assert [tool["name"] for tool in log[0]["body"]["tools"]] == ["read_file"]
+    assert [tool["name"] for tool in log[0]["body"]["tools"]] == ["read_file", "create_issue"]
     sent_result = log[1]["body"]["messages"][2]["content"][0]
     assert sent_result["type"] == "tool_result"
     assert sent_result["content"] == file_text
@@ -105,3 +105,60 @@ def test_hello_job_runs_to_success(
     logs = runtime(api_url, "logs", job_id)
     assert logs.returncode == 0
     assert logs.stdout.splitlines() == step_lines
+
+
+CI_TRIAGE = REPO_ROOT / "examples" / "ci-triage.json"
+
+
+def test_ci_triage_job_creates_exactly_one_issue(
+    api_url: str, fake_provider_url: str, fake_tracker_url: str, stack_database_url: str
+) -> None:
+    """The workload with a visible side effect: one job, one issue in the tracker.
+
+    The tracker's own list is the evidence, not the step log: it holds what
+    was really created outside the runtime.
+    """
+    submitted = runtime(api_url, "submit", str(CI_TRIAGE), "--follow")
+    assert submitted.returncode == 0, submitted.stderr
+    job_id, *step_lines, outcome = submitted.stdout.splitlines()
+    assert outcome.startswith("succeeded")
+    assert [line.split()[1] for line in step_lines] == [
+        "model_request",
+        "model_response",
+        "tool_intent",
+        "tool_result",
+        "model_request",
+        "model_response",
+        "tool_intent",
+        "tool_result",
+        "model_request",
+        "model_response",
+    ]
+
+    # The tracker: exactly one issue carries an operation id of this job.
+    issues = httpx2.get(f"{fake_tracker_url}/issues", timeout=10).json()
+    ours = [issue for issue in issues if issue["operation_id"].startswith(f"{job_id}:")]
+    assert len(ours) == 1
+    issue = ours[0]
+    assert issue["title"] == "CI failed: test_checkout_total"
+    assert "assert 1999 == 2099" in issue["body"]
+
+    # The operation id is the job id and the model's id for the call, and the
+    # step log names the same call and the same issue number.
+    job, steps = database_rows(stack_database_url, job_id)
+    assert job["status"] == "succeeded"
+    intent, result = json.loads(steps[6]["payload"]), json.loads(steps[7]["payload"])
+    assert intent["name"] == "create_issue"
+    assert issue["operation_id"] == f"{job_id}:{intent['tool_use_id']}"
+    assert result == {
+        "tool_use_id": intent["tool_use_id"],
+        "content": f"created issue {issue['id']}: CI failed: test_checkout_total",
+        "is_error": False,
+    }
+
+    # The provider was told the issue number in the third request.
+    log = httpx2.get(
+        f"{fake_provider_url}/_fake/requests", params={"user_id": job_id}, timeout=10
+    ).json()
+    assert [(entry["status"], entry["turn"]) for entry in log] == [(200, 0), (200, 1), (200, 2)]
+    assert f"created issue {issue['id']}" in json.dumps(log[2]["body"]["messages"])

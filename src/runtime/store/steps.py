@@ -48,7 +48,7 @@ class StepConflict(Exception):
         self.seq = seq
 
 
-def _step(row: Row[Any]) -> Step:
+def step_from_row(row: Row[Any]) -> Step:
     fields = dict(row._mapping)
     fields["kind"] = StepKind(fields["kind"])
     return Step(**fields)
@@ -85,7 +85,7 @@ async def append_step(
     row = result.one_or_none()
     if row is None:
         raise StepConflict(job_id, seq)
-    return _step(row)
+    return step_from_row(row)
 
 
 async def read_steps(conn: AsyncConnection, job_id: UUID, *, after_seq: int = 0) -> list[Step]:
@@ -93,7 +93,7 @@ async def read_steps(conn: AsyncConnection, job_id: UUID, *, after_seq: int = 0)
     result = await conn.execute(
         select(steps).where(steps.c.job_id == job_id, steps.c.seq > after_seq).order_by(steps.c.seq)
     )
-    return [_step(row) for row in result]
+    return [step_from_row(row) for row in result]
 
 
 async def read_progress(

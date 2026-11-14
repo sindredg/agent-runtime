@@ -1,5 +1,6 @@
 """What the runtime needs from a model provider, independent of any SDK."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -16,6 +17,9 @@ class ModelRequest:
     # Sent as `metadata.user_id`. The runtime puts the job id here, so the
     # provider's own records can be matched to a job.
     user_id: str | None = None
+    # Not sent. Called once when the first content of the answer has arrived
+    # and the answer is not complete yet. Chaos tests stop the worker here.
+    mid_stream: Callable[[], None] | None = None
 
 
 @dataclass(frozen=True, slots=True)

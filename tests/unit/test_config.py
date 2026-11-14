@@ -52,6 +52,9 @@ def test_worker_defaults() -> None:
     assert config.workspace_root == Path("/tmp/workspaces")  # noqa: S108
     assert config.poll_interval == 1.0
     assert config.alive_file == Path("/tmp/worker.alive")  # noqa: S108
+    assert config.lease_seconds == 30.0
+    assert config.heartbeat_seconds == 10.0
+    assert config.tracker_url is None
 
 
 def test_worker_settings_are_read() -> None:
@@ -62,12 +65,18 @@ def test_worker_settings_are_read() -> None:
             "WORKSPACE_ROOT": "/data/ws",
             "POLL_INTERVAL_SECONDS": "0.25",
             "WORKER_ALIVE_FILE": "/run/alive",
+            "LEASE_SECONDS": "2.5",
+            "HEARTBEAT_SECONDS": "0.5",
+            "TRACKER_URL": "http://fake-tracker:8000/",
         }
     )
     assert config.worker_id == "w7"
     assert config.workspace_root == Path("/data/ws")
     assert config.poll_interval == 0.25
     assert config.alive_file == Path("/run/alive")
+    assert config.lease_seconds == 2.5
+    assert config.heartbeat_seconds == 0.5
+    assert config.tracker_url == "http://fake-tracker:8000"
 
 
 def test_worker_needs_a_database_url() -> None:
@@ -79,6 +88,38 @@ def test_worker_needs_a_database_url() -> None:
 def test_poll_interval_must_be_a_positive_number(value: str) -> None:
     with pytest.raises(ConfigError, match="POLL_INTERVAL_SECONDS"):
         WorkerConfig.from_env({**WORKER_ENV, "POLL_INTERVAL_SECONDS": value})
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "long", "nan", "inf"])
+def test_lease_seconds_must_be_a_positive_number(value: str) -> None:
+    with pytest.raises(ConfigError, match="LEASE_SECONDS"):
+        WorkerConfig.from_env({**WORKER_ENV, "LEASE_SECONDS": value})
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "often", "nan", "inf"])
+def test_heartbeat_seconds_must_be_a_positive_number(value: str) -> None:
+    with pytest.raises(ConfigError, match="HEARTBEAT_SECONDS"):
+        WorkerConfig.from_env({**WORKER_ENV, "HEARTBEAT_SECONDS": value})
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        # The default heartbeat of 10 s does not fit a 5 s lease.
+        {"LEASE_SECONDS": "5"},
+        {"LEASE_SECONDS": "5", "HEARTBEAT_SECONDS": "5"},
+        {"HEARTBEAT_SECONDS": "31"},
+    ],
+)
+def test_the_heartbeat_must_be_shorter_than_the_lease(env: dict[str, str]) -> None:
+    with pytest.raises(ConfigError, match="shorter than LEASE_SECONDS"):
+        WorkerConfig.from_env({**WORKER_ENV, **env})
+
+
+@pytest.mark.parametrize("value", ["fake-tracker:8000", "ftp://tracker", "file:///etc/passwd"])
+def test_the_tracker_url_must_be_http_or_https(value: str) -> None:
+    with pytest.raises(ConfigError, match="TRACKER_URL"):
+        WorkerConfig.from_env({**WORKER_ENV, "TRACKER_URL": value})
 
 
 def test_api_defaults_listen_on_localhost() -> None:

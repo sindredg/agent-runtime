@@ -343,3 +343,46 @@ def test_request_log_filters_by_user_id_and_can_be_cleared() -> None:
     assert api.get("/_fake/requests", params={"user_id": "job-3"}).json() == []
     assert api.delete("/_fake/requests").status_code == 204
     assert api.get("/_fake/requests").json() == []
+
+
+# Delay
+
+
+def delayed(seconds: float) -> Scenario:
+    return parse_scenario(
+        json.dumps(
+            {"turns": [{"delay_seconds": seconds, "content": [{"type": "text", "text": "late"}]}]}
+        )
+    )
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_a_turn_with_a_delay_answers_that_much_later(stream: bool) -> None:
+    import time
+
+    api = client({"slow": delayed(0.3), "two": TWO_TURNS})
+    started = time.monotonic()
+    fast = api.post("/v1/messages", json=request(stream=stream), headers=HEADERS)
+    fast_took = time.monotonic() - started
+    started = time.monotonic()
+    slow = api.post("/v1/messages", json=request(model="slow", stream=stream), headers=HEADERS)
+    slow_took = time.monotonic() - started
+    assert (fast.status_code, slow.status_code) == (200, 200)
+    assert slow_took >= 0.3
+    assert fast_took < 0.3
+
+
+def test_a_delayed_stream_starts_at_once_and_pauses_before_its_content() -> None:
+    """The wait falls inside the stream, so a client that is stopped during it is mid-stream."""
+    from fake_provider.app import stream_parts
+
+    message = build_message("slow", delayed(0.3), 0, model="slow", input_tokens=1)
+    parts = list(stream_parts(message, delay=0.3))
+    waits = [index for index, part in enumerate(parts) if part == 0.3]
+    assert len(waits) == 1
+    before = b"".join(part for part in parts[: waits[0]] if isinstance(part, bytes))
+    after = b"".join(part for part in parts[waits[0] :] if isinstance(part, bytes))
+    assert b"message_start" in before
+    assert b"content_block_start" not in before
+    assert b"content_block_start" in after
+    assert b"message_stop" in after

@@ -1,0 +1,46 @@
+{
+  "description": "ci-triage with two answers that take ten seconds each, long enough to pause the worker that waits for one and to unpause it while another worker is in the middle of the job.",
+  "turns": [
+    {
+      "delay_seconds": 10,
+      "content": [
+        {
+          "type": "text",
+          "text": "I will read the CI log from the workspace."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "ci.log"
+          }
+        }
+      ]
+    },
+    {
+      "delay_seconds": 10,
+      "content": [
+        {
+          "type": "text",
+          "text": "One test failed. I will open an issue with the failing line."
+        },
+        {
+          "type": "tool_use",
+          "name": "create_issue",
+          "input": {
+            "title": "CI failed: test_checkout_total",
+            "body": "From ci.log:\nFAILED tests/test_checkout.py::test_checkout_total - AssertionError: assert 1999 == 2099"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "The CI run failed in test_checkout_total. An issue with the log line is open."
+        }
+      ]
+    }
+  ]
+}

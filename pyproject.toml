@@ -1,7 +1,7 @@
 [project]
 name = "agent-runtime"
 version = "0.0.0"
-description = "Runs long AI agent jobs so they survive crashes, rate limits, and bad tool output."
+description = "Runs long AI agent jobs and continues them from a step log when a worker goes away."
 readme = "README.md"
 requires-python = "==3.15.*"
 dependencies = [
@@ -30,8 +30,9 @@ runtime = "runtime.cli:run"
 dev = [
     # asyncpg ships no type information; mypy --strict needs these.
     "asyncpg-stubs==0.32.0",
-    # The workspace member, so tests can import it.
+    # The workspace members, so tests can import them.
     "fake-provider",
+    "fake-tracker",
     # Property-based tests: generated inputs instead of hand-picked ones.
     "hypothesis==6.170.15",
     "mypy==2.4.1",
@@ -48,10 +49,11 @@ requires = ["uv_build==0.13.8"]
 build-backend = "uv_build"
 
 [tool.uv.workspace]
-members = ["services/fake_provider"]
+members = ["services/fake_provider", "services/fake_tracker"]
 
 [tool.uv.sources]
 fake-provider = { workspace = true }
+fake-tracker = { workspace = true }
 
 [tool.uv.build-backend]
 # The import package is `runtime`, not the project name.
@@ -63,7 +65,7 @@ script_location = "%(here)s/migrations"
 
 [tool.ruff]
 line-length = 100
-src = ["src", "tests", "services/fake_provider/src"]
+src = ["src", "tests", "services/fake_provider/src", "services/fake_tracker/src"]
 
 [tool.ruff.lint]
 # E/W pycodestyle, F pyflakes, I import order, B bugbear, UP pyupgrade,
@@ -76,7 +78,14 @@ select = ["E", "W", "F", "I", "B", "UP", "SIM", "ASYNC", "S", "RUF"]
 
 [tool.mypy]
 strict = true
-files = ["src", "tests", "migrations", "scripts", "services/fake_provider/src"]
+files = [
+    "src",
+    "tests",
+    "migrations",
+    "scripts",
+    "services/fake_provider/src",
+    "services/fake_tracker/src",
+]
 
 [tool.pytest.ini_options]
 # A bare `pytest` runs the unit tests. The other suites need the stack or a key

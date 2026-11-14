@@ -19,3 +19,6 @@ dist/
 # Sidecar files that Windows attaches to downloads; they become real files in WSL.
 *:Zone.Identifier
 *:mshield
+
+# Logs written by the chaos tests.
+.chaos/

@@ -3,8 +3,10 @@
 import asyncio
 import logging
 import signal
+from datetime import timedelta
 
 from runtime.config import WorkerConfig
+from runtime.failpoints import Failpoints
 from runtime.logs import configure_logging
 from runtime.provider.messages import AnthropicProvider
 from runtime.store.engine import create_engine
@@ -34,7 +36,15 @@ async def run(config: WorkerConfig) -> None:
         default_model=config.provider.model,
         max_tokens=config.provider.max_tokens,
         workspace_root=config.workspace_root,
+        lease=timedelta(seconds=config.lease_seconds),
+        heartbeat=config.heartbeat_seconds,
+        failpoints=Failpoints(config.failpoint, tool=config.failpoint_tool),
     )
+    if config.failpoint or config.chaos_log_dir:
+        log.warning(
+            "chaos settings are on; this worker is for failure tests",
+            extra={"failpoint": config.failpoint, "chaos_tools": bool(config.chaos_log_dir)},
+        )
     try:
         async with asyncio.TaskGroup() as tasks:
             tasks.create_task(keep_alive(config.alive_file, stop, ALIVE_INTERVAL_SECONDS))
@@ -42,7 +52,9 @@ async def run(config: WorkerConfig) -> None:
                 work(
                     engine,
                     provider,
-                    default_tools(),
+                    default_tools(
+                        tracker_url=config.tracker_url, chaos_log_dir=config.chaos_log_dir
+                    ),
                     settings,
                     worker_id=config.worker_id,
                     poll_interval=config.poll_interval,

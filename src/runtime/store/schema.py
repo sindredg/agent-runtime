@@ -26,8 +26,9 @@ from sqlalchemy.dialects.postgresql import JSONB
 
 metadata = MetaData()
 
-# Statuses a job can be claimed from, now or once backoff and lease expiry are
-# built. The claim index covers exactly these rows.
+# Statuses a job can be claimed from: `queued`, `running` once its lease has
+# expired, and `waiting` once backoff is built. The claim index covers exactly
+# these rows.
 CLAIMABLE_STATUSES_SQL = "status IN ('queued', 'waiting', 'running')"
 
 jobs = Table(
@@ -43,6 +44,7 @@ jobs = Table(
     Column("lease_owner", Text),
     Column("lease_expires_at", DateTime(timezone=True)),
     Column("lease_epoch", Integer, nullable=False, server_default=text("0")),
+    Column("takeovers", Integer, nullable=False, server_default=text("0")),
     Column("cancel_requested", Boolean, nullable=False, server_default=false()),
     Column("error", Text),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=text("now()")),

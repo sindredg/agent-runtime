@@ -27,6 +27,7 @@ JOB_COLUMNS = {
     "lease_owner",
     "lease_expires_at",
     "lease_epoch",
+    "takeovers",
     "cancel_requested",
     "error",
     "created_at",
@@ -151,6 +152,7 @@ def test_new_job_gets_defaults(migrated_database_url: str) -> None:
     assert job["status"] == "queued"
     assert job["tokens_used"] == 0
     assert job["lease_epoch"] == 0
+    assert job["takeovers"] == 0
     assert job["cancel_requested"] is False
     assert job["lease_owner"] is None
     assert job["lease_expires_at"] is None
@@ -177,6 +179,8 @@ def test_every_job_status_and_step_kind_is_accepted(migrated_database_url: str) 
         "tokens_used = -1",
         "token_budget = -1",
         "lease_epoch = -1",
+        "takeovers = -1",
+        "takeovers = NULL",
         "lease_owner = 'worker-1'",
         "lease_expires_at = now()",
         "token_budget = NULL",

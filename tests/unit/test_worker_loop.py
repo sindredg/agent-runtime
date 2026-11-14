@@ -1,6 +1,7 @@
 """The worker's outer loop: it keeps going through failures and stops when told."""
 
 import asyncio
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -40,7 +41,13 @@ def test_keep_alive_returns_at_once_when_already_stopped(tmp_path: Path) -> None
     assert not alive.exists()
 
 
-SETTINGS = AgentSettings(default_model="m", max_tokens=10, workspace_root=Path("unused"))
+SETTINGS = AgentSettings(
+    default_model="m",
+    max_tokens=10,
+    workspace_root=Path("unused"),
+    lease=timedelta(seconds=7),
+    heartbeat=1.0,
+)
 
 
 def run_work(stop_after: float) -> None:
@@ -82,6 +89,7 @@ def test_a_job_that_cannot_be_finished_does_not_stop_the_loop(
 
     class FakeJob:
         lease_epoch = 1
+        takeovers = 0
 
         def __init__(self, job_id: str) -> None:
             self.id = job_id
@@ -93,13 +101,19 @@ def test_a_job_that_cannot_be_finished_does_not_stop_the_loop(
         async def __aexit__(self, *error: object) -> None:
             return None
 
-    async def claim(conn: object, *, worker_id: str) -> FakeJob | None:
+    async def claim(
+        conn: object, *, worker_id: str, lease: timedelta, failed: list[Any]
+    ) -> FakeJob | None:
+        # The configured lease reaches the claim.
+        assert lease == timedelta(seconds=7)
         if len(claimed) == 3:
             return None
         claimed.append(f"job-{len(claimed)}")
         return FakeJob(claimed[-1])
 
-    async def crash(*args: Any) -> None:
+    async def crash(*args: Any, **named: Any) -> None:
+        # The loop says when it sent the claim, on the monotonic clock.
+        assert isinstance(named["claimed_at"], float)
         raise RuntimeError("database went away")
 
     monkeypatch.setattr(loop, "claim_job", claim)
@@ -110,3 +124,49 @@ def test_a_job_that_cannot_be_finished_does_not_stop_the_loop(
     assert claimed == ["job-0", "job-1", "job-2"]
     stuck = [r for r in caplog.records if r.getMessage() == "job could not be finished"]
     assert [r.__dict__["job_id"] for r in stuck] == claimed
+
+
+def test_a_cleanup_that_fails_after_the_claim_does_not_lose_the_claimed_job(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The claim is committed by then. The job it returned still has to be run."""
+    ran: list[str] = []
+
+    class FakeJob:
+        lease_epoch = 1
+        takeovers = 0
+
+        def __init__(self, job_id: str) -> None:
+            self.id = job_id
+
+    class NoConnection:
+        async def __aenter__(self) -> None:
+            return None
+
+        async def __aexit__(self, *error: object) -> None:
+            return None
+
+    async def claim(
+        conn: object, *, worker_id: str, lease: timedelta, failed: list[Any]
+    ) -> FakeJob | None:
+        if ran:
+            return None
+        failed.append(FakeJob("capped"))
+        return FakeJob("claimed")
+
+    async def run(
+        engine: object, provider: object, tools: object, job: Any, *a: Any, **k: Any
+    ) -> None:
+        ran.append(job.id)
+
+    def broken_cleanup(root: Path, job_id: str) -> None:
+        raise OSError("volume gone")
+
+    monkeypatch.setattr(loop, "claim_job", claim)
+    monkeypatch.setattr(loop, "run_job", run)
+    monkeypatch.setattr(loop, "remove_workspace", broken_cleanup)
+    monkeypatch.setattr("sqlalchemy.ext.asyncio.AsyncEngine.begin", lambda self: NoConnection())
+    run_work(stop_after=0.2)
+
+    assert ran == ["claimed"]
+    assert any("workspace" in r.getMessage() for r in caplog.records)
