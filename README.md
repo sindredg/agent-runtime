@@ -24,7 +24,7 @@ a guard container per call holds the firewall, and the count of dropped
 packets goes into the log. `read_file` and `create_issue` still run in the
 worker process.
 
-Not built: retry on provider errors and rate limits, deadlines, and cancel.
+Not built: retry on provider errors and rate limits.
 The full list is in
 [Known limits](docs/architecture.md#known-limits).
 
@@ -84,13 +84,16 @@ curl http://127.0.0.1:8002/issues
 uv run runtime status <job id>
 uv run runtime logs <job id>
 uv run runtime approve <job id>
+uv run runtime cancel <job id>
 make clean
 ```
 
 `runtime approve` is for a job in `needs_approval`: a worker went away during
 a tool call and nobody can tell whether the call happened. Approving runs the
 call again, so look at the system the tool changes first. A command that
-follows such a job prints how to approve it and exits with status 3. `make
+follows such a job prints how to approve it and exits with status 3.
+`runtime cancel` cancels a job: at once if no worker holds it, otherwise its
+worker stops it within a few seconds and kills a running tool command. `make
 clean` stops the stack and deletes its database.
 
 ## Job files
@@ -105,7 +108,7 @@ clean` stops the stack and deletes its database.
 | `files` | no | Text files written into the job's workspace before it starts: relative path to content. 1 MiB in total, paths included. Paths are plain relative paths: no `..`, no `./`, no trailing `/`, and no path that is also a directory of another. |
 | `scope` | no | What `run_shell` may reach on the network: a list of targets, each `{"host": ..., "ports": [...]}`. `host` is an IPv4 address (`10.0.0.5`), an IPv4 range (`10.0.0.0/24`) or a host name (`lab.example`, resolved by the worker once per call to its IPv4 addresses, no wildcards; a name that spells a number such as `2852039166` is refused); `ports` are TCP and UDP ports, left out for all. At most 64 targets. A target in the fixed deny list (link-local and the cloud metadata address) is refused here; one in the runtime's own networks is refused when a call starts. Left out: no network. |
 | `token_budget` | no | At least 1. A model call is not made when the upper bound of its input does not fit what is left; the job then fails. See [Limits](docs/architecture.md). |
-| `timeout_seconds` | no | 1 to 604800 (one week). Sets the job's deadline. Not enforced yet. |
+| `timeout_seconds` | no | 1 to 604800 (one week). Sets the job's deadline. At the deadline the job is `failed`, also in the middle of a model call or a tool command, and also while it waits for a worker or for an approval. |
 
 Any other field is refused.
 
@@ -132,7 +135,7 @@ tool's own log file, and for the paused worker its container log.
 | A job that crashes its worker every time does not loop forever | Tested | A job whose tool ends the worker's process: `failed` after 5 takeovers, with 6 runs in the tool's own log. | Limit removed: the job was still running after 180 s and had been taken over 34 times. |
 | Provider rate limits slow jobs, they do not fail them | Not built | | |
 | Throughput scales with workers | Not measured | | |
-| Every job stays inside its token budget and deadline, and can be cancelled | Budget tested; deadline and cancel not built | A job that loops (thirty rounds of reading a 2 KB file) with a budget of 20,000 tokens: `failed` with "the token budget does not cover the next model call" after 7 calls, at 13,636 tokens by the fake provider's own count, which equals the job's `tokens_used`. For each call the provider's input stayed within the recorded bound, and the count, the bound and `max_tokens` together fit the budget. At `dfe2936` on 2026-11-14, `tests/integration/test_budget.py`, Linux aarch64 under WSL2. | Bound removed (`max_tokens` never cut, no check): the job ran all 31 calls and spent 282,118 tokens, and the test fails. |
+| Every job stays inside its token budget and deadline, and can be cancelled | Tested | A job that loops (thirty rounds of reading a 2 KB file) with a budget of 20,000 tokens: `failed` with "the token budget does not cover the next model call" after 7 calls, at 13,636 tokens by the fake provider's own count, which equals the job's `tokens_used`. For each call the provider's input stayed within the recorded bound, and the count, the bound and `max_tokens` together fit the budget. At `dfe2936` on 2026-11-14, `tests/integration/test_budget.py`, Linux aarch64 under WSL2. Cancel and deadline, at `cb15d5b` on 2026-11-14, `tests/integration/test_halt_worker.py`, `test_halt_store.py` and the halt tests of `test_sandbox.py`: a cancel in the middle of a model call and of a sandboxed `sleep 300` ended the job `cancelled`, and the deadline in the middle of each ended it `failed` with an `error` step, each within 5 s and with the command's container removed. A claim cancels a job whose cancel was requested and fails one past its deadline; a job waiting for an approval is failed by the workers' timer within 5 s of its deadline. | Bound removed (`max_tokens` never cut, no check): the job ran all 31 calls and spent 282,118 tokens, and the test fails. Cancel check removed: both cancel tests fail. Deadline timer removed: both deadline tests fail; the job runs on. The claim's deadline check removed: both claim tests fail. |
 | A tool can reach only its job's scope, and nothing else of the host | Tested | Without a scope, `make escape`: 12 escape attempts, each as a `run_shell` call: DNS, TCP out, the cloud metadata address, a network interface besides loopback, the Docker socket, a write to the root file system, a mount, capabilities, gaining privileges, running as root, 200 forks, 512 MiB of memory. Each was stopped and came back as a failed tool result; 61 of 200 forks ran, the memory hog was killed (137). The host's canary file and another job's file were not found, while the same search found a file of the job's own, and both stayed unchanged. No metadata service runs on this machine, so the metadata attempt shows only that the address was unreachable. With a scope, against two targets on the guards' network: the target in scope answered and the one outside was blocked, its packets counted (3) and reported to the model; a port outside the scope's ports was blocked; a pinned name resolved and no other name did; the metadata address and Docker's DNS stayed blocked even in a scope that listed them, each with its own count; `nft flush ruleset` as root in the namespace, without capabilities, was refused and the outside target stayed blocked. 22 of 22 tests passed at `2ed5361` on 2026-11-14, Linux aarch64 under WSL2, Docker 29.1.3, kernel.yama.ptrace_scope 1. | Docker's default container settings with only the workspace mounted, and for a scope the command on the network directly (`ESCAPE_DOCKER_DEFAULTS=1`): 13 tests failed. A guard with no rules (`ESCAPE_NO_RULES=1`): all 7 scope tests failed. |
 | Bad tool output does not break a job | Built for `run_shell` and `list_dir`, no result recorded yet | An integration test runs one job whose commands run past the timeout, exit non-zero, print 100 MB and print bytes that are not UTF-8. Each becomes a tool result of at most 64 KiB, the 100 MB one flagged `truncated`, and the job succeeds. `read_file` and `create_issue` run in the worker and have no general timeout. | |
 
@@ -208,8 +211,8 @@ What these results do not show:
   enforce a job's target scope in the network namespace of its tools. Built
   for `run_shell`.
 - [ADR 0010](docs/adr/0010-one-halt-path-and-a-budget-bound.md): halt a job
-  through one path, and bound a model call's tokens before it is sent. Not
-  built.
+  through one path, and bound a model call's tokens before it is sent.
+  Built.
 - [ADR 0011](docs/adr/0011-ask-a-person-before-a-risky-tool-call.md): ask a
   person before a risky tool call runs. Not built.
 

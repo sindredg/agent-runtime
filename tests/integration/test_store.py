@@ -251,7 +251,10 @@ def test_claim_statement_uses_the_claim_index(database_url: str) -> None:
     # One value per $n placeholder, in order, written as SQL literals.
     values = [statement.params[name] for name in statement.positiontup or ()]
     arguments = ", ".join(
-        "NULL" if value is None else "'" + str(getattr(value, "value", value)) + "'"
+        # A quote inside a value is doubled, as SQL writes it.
+        "NULL"
+        if value is None
+        else "'" + str(getattr(value, "value", value)).replace("'", "''") + "'"
         for value in values
     )
 

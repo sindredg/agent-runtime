@@ -141,16 +141,18 @@ such as `1e22`, is read back as an int.
 
 | Status | Moves to | Used today |
 |---|---|---|
-| `queued` | `running`, `cancelled`, `failed` | To `running`, by a claim |
-| `running` | `succeeded`, `failed`, `needs_approval`, `queued`, `waiting`, `cancelled` | To `succeeded`, `failed`, `needs_approval`, and `queued` when its worker is stopped |
-| `needs_approval` | `queued`, `cancelled` | Yes: to `queued` by an approval |
+| `queued` | `running`, `cancelled`, `failed` | To `running` by a claim, `cancelled` by a cancel, `failed` at its deadline |
+| `running` | `succeeded`, `failed`, `needs_approval`, `queued`, `waiting`, `cancelled` | All but `waiting`: `queued` when its worker is stopped, `cancelled` after a cancel request, by its worker or by a claim |
+| `needs_approval` | `queued`, `cancelled`, `failed` | Yes: to `queued` by an approval, `cancelled` by a cancel, `failed` at its deadline |
 | `waiting` | `running`, `cancelled`, `failed` | No, planned |
-| `succeeded`, `failed`, `cancelled` | nothing | `cancelled` is never set yet |
+| `succeeded`, `failed`, `cancelled` | nothing | Yes |
 
 A job becomes `running` only through a claim. A `running` job is moved only by
 the worker that holds it, through a fenced write, or by a claim that finds its
 lease expired. `update_status` moves jobs that no worker holds and checks the
-move inside its `UPDATE`. Nothing calls it yet: it is there for cancel.
+move inside its `UPDATE`. Nothing calls it yet. A cancel has its own
+statements (`cancel_job`), and so do the deadline's failures (`fail_overdue`
+and the claim).
 
 ## Mechanisms
 
@@ -162,6 +164,7 @@ move inside its `UPDATE`. Nothing calls it yet: it is there for cancel.
 | Fencing | Every write of a worker to its job is one statement in `store/held.py` that updates the job row and only matches while the job is `running` under the worker's `lease_epoch`: a step with its token count, a renewal, the move out of `running`, and a failure. The update locks the row, so a write and a claim of one job cannot overlap. The statements are sent in autocommit, outside a transaction block. A write that changes no row raises `LeaseLost` ([ADR 0004](adr/0004-fence-writes-with-the-lease-epoch-and-a-row-lock.md)). |
 | Failure | A worker fails its job with one fenced statement: the move to `failed` and the `error` step, which takes the next `seq` by itself. A worker that stops while it fails a job leaves both or neither. A job with an `error` step is therefore never `running`, and no worker takes it over. |
 | Dropping a job | On `LeaseLost`, or when the database cannot be reached, the worker drops the job: it writes nothing more, starts no tool and no model call, and leaves the status and the workspace alone. A model call in flight is cancelled as soon as a heartbeat is refused: its answer would be refused too, so the worker does not wait for it. What the provider did up to the cancel may still be billed. A call is not cancelled for the worker's own deadline alone: its answer is still stored if nobody took the job. The job stays as it is until its lease runs out and another worker takes it over. |
+| Halt | A requested cancel and the deadline halt a job, through one signal (`worker/halt.py`, [ADR 0010](adr/0010-one-halt-path-and-a-budget-bound.md)). `POST /jobs/{id}/cancel` is one statement: a job that no worker holds (one that waits, or a `running` one whose lease is over) is `cancelled`; a `running` one under a live lease gets `cancel_requested`, which its worker reads every second. A job that its worker would park in `needs_approval` while its cancel is requested is `cancelled` instead. Right after the claim the worker reads the time left before the deadline from the database clock and keeps a timer. On a halt the worker starts nothing more (it checks again right before a tool's intent), gives up a model call in flight, a tool's check and a name lookup, and kills a running sandboxed command, which removes its containers; a tool in the worker process runs on in its thread and its result is dropped. The job then ends with a fenced write: `cancelled`, or `failed` with an `error` step that says the deadline passed. A claim cancels a `running` job whose cancel was requested and fails a job past its deadline, instead of handing it out. Each worker fails, every second, the jobs past their deadline that no worker holds, each with an `error` step; it skips rows another worker has locked, and an index on the deadline of open jobs keeps finished jobs out of it. A worker that loses its lease also kills a running sandboxed command now: its result would be refused. |
 | Duplicate steps | A second step with the same (`job_id`, `seq`) is refused. In a fenced write the refusal undoes the token count with it. |
 | Resume | See [What happens when a worker goes away](#what-happens-when-a-worker-goes-away). |
 | Graceful stop | On SIGTERM the worker claims nothing more. At the next step boundary it releases the job: `running` to `queued`, fenced, so the next claim is not a takeover. A model call in flight is cancelled at once. A running tool is waited for and its result stored. The compose stack gives the worker 45 seconds before Docker kills it, longer than the sandbox timeout of 30. |
@@ -169,7 +172,7 @@ move inside its `UPDATE`. Nothing calls it yet: it is there for cancel.
 | Scope | A job's `scope` (`scope.py`) is checked at submit: IPv4 addresses and ranges and host names, ports 1 to 65535, nothing in the fixed deny list, no IPv6 (the guards' network has none, and IPv6 has spellings of IPv4 addresses), no name that spells an IPv4 address. Before the intent of each `run_shell` call the worker checks that it has a guard image, resolves the names once to their IPv4 addresses, refuses any target that touches the deny list (a range that covers part of it is refused whole), and writes the addresses into the `tool_intent`; a refused call gets an error result and no intent. The call then gets a guard container on `SANDBOX_NETWORK` (`runner.py`, `guard_config`): root with `NET_ADMIN` only, no other capability, read-only root, 32 MiB. It loads the rules and prints `ready` with a random token of the call; the worker waits for that within the start bound. The rules, in its network namespace: output drops the deny list, then allows loopback addresses on the loopback interface, replies and the scope's targets (with their ports, TCP and UDP), then counts and drops the rest; input allows loopback and replies; forward drops everything. The deny list is link-local with 169.254.169.254, Docker's DNS server at 127.0.0.11, and every subnet of `SANDBOX_NETWORK` and `SANDBOX_DENY_NETWORKS`, read from Docker when the worker starts. The command's container joins the guard's namespace with no capabilities, so it cannot change the rules. Names are pinned in the guard's hosts file, which the command shares; nothing else resolves. After the command the worker removes its container, sends the guard TERM, and reads its counter of dropped packets into the `tool_result`; if the command's container could not be removed, no count is stored. `list_dir` never gets network. |
 | Tool calls | A response is checked before any of its tools run: every tool call needs an id, a name and an object input, ids must differ, and no id may repeat one from an earlier response of the job. A response that fails the check fails the job. The calls of one response run one after another. A failed call is an error result for the model, and the job goes on. |
 | Provider errors | A failed model call fails the job with an `error` step. There is no retry. |
-| Limits | Before each model call the worker bounds the call's input (`worker/budget.py`, [ADR 0010](adr/0010-one-halt-path-and-a-budget-bound.md)): the input and output tokens of the previous response, plus the bytes of the messages added since, plus 1024 for what the provider adds around messages and tool definitions; for the first call, the bytes of the whole request plus 1024. If `tokens_used` plus the bound plus one output token does not fit `token_budget`, the job fails without the call. Otherwise `max_tokens` is cut to what is left. `tokens_used` is counted from the usage of each response that was received in full. A call that fails or is abandoned part way is not counted. `deadline` is stored and not enforced. |
+| Limits | Before each model call the worker bounds the call's input (`worker/budget.py`, [ADR 0010](adr/0010-one-halt-path-and-a-budget-bound.md)): the input and output tokens of the previous response, plus the bytes of the messages added since, plus 1024 for what the provider adds around messages and tool definitions; for the first call, the bytes of the whole request plus 1024. If `tokens_used` plus the bound plus one output token does not fit `token_budget`, the job fails without the call. Otherwise `max_tokens` is cut to what is left. `tokens_used` is counted from the usage of each response that was received in full. A call that fails or is abandoned part way is not counted. The deadline: see Halt. |
 | Workspace | `WORKSPACE_ROOT/<job id>`. Made once, by the first claim: the files from the spec are written into `.<job id>.new` and the directory is renamed into place, so it appears whole or not at all. A later claim finds it and leaves it exactly as the tools left it, also when a command removed, replaced or locked a file of the spec. In the stack every worker mounts the same volume. The worker that made a job final removes its workspace, after giving the owner back access to any directory a command locked. Every worker also sweeps its `WORKSPACE_ROOT` every `SWEEP_INTERVAL_SECONDS` (`worker/sweep.py`): it removes the directories and staging directories of jobs that are final or that the database does not know, and leaves those of open jobs and anything not named after a job. That covers a final write whose answer was lost, and a job that finished on a worker with another workspace root. `read_file` refuses absolute paths, `..`, and symlinks that lead out, checked after symlinks are followed. |
 | Event stream | The API polls for steps with a higher `seq`. Status and steps are read in one statement, so when the status is final every step has been seen. |
 
@@ -246,6 +249,7 @@ These exist for the tests in `tests/chaos` and do nothing unless switched on.
 | `GET /jobs/{id}/steps?after=&limit=` | Steps with `seq` above `after`, in order, at most 1000. |
 | `GET /jobs/{id}/events` | Server-sent events: one `step` event per step with `id` set to its `seq`, then one `end` event with the final status. A job that stops in `needs_approval` gets one `status` event that says so, and the stream stays open. `Last-Event-ID` or `?after=` continues a broken stream. |
 | `POST /jobs/{id}/approve` | The job, now `queued`, after an `approval_given` step was appended in the same transaction. 409 unless the job is `needs_approval`. Of several approvals sent at once, one succeeds. |
+| `POST /jobs/{id}/cancel` | 200 and the job, now `cancelled`, if no worker held it (`queued`, `waiting`, `needs_approval`, or `running` with its lease over), or if it was cancelled already. 202 and the job, still `running`, with `cancel_requested` set: its worker stops it. 409 for a job that succeeded or failed, 404 for none. |
 | `GET /healthz` | 200 while the process serves. It does not check Postgres. |
 
 A job id that is not a UUID, or a parameter out of range, is a 422. The job
@@ -294,7 +298,7 @@ stack by accident. See `.env.example`.
 | Suite | Needs | Covers |
 |---|---|---|
 | `tests/unit` | nothing | Status transitions, replay, the decision about an interrupted call, the lease deadline with a fake clock, failpoints, scenario parsing, the fake provider and the fake tracker in process, the provider client's failure handling, the tools, the container settings, the output cut and the result text, the Docker client against a mock transport, the CLI against a stubbed API. |
-| `tests/integration` | `make up` | Migrations. The store on real Postgres: claims, takeovers, the limit, fenced writes with two connections. The worker against the fake provider: heartbeat, lost lease, resume at each interruption point, each row of the decision table, approval, graceful stop, each failpoint. The API over HTTP. The sandbox against the Docker daemon: output and exit status, the container's settings, the timeout, the cut, a job whose commands misbehave in four ways, a container that ends by itself when its worker is gone, and a takeover during a sandboxed call that removes the container and waits. The workspace sweep: what it removes and what it keeps. A job that loops until its token budget stops it. Three jobs end to end through the stack. |
+| `tests/integration` | `make up` | Migrations. The store on real Postgres: claims, takeovers, the limit, fenced writes with two connections. The worker against the fake provider: heartbeat, lost lease, resume at each interruption point, each row of the decision table, approval, graceful stop, each failpoint. The API over HTTP. The sandbox against the Docker daemon: output and exit status, the container's settings, the timeout, the cut, a job whose commands misbehave in four ways, a container that ends by itself when its worker is gone, and a takeover during a sandboxed call that removes the container and waits. The workspace sweep: what it removes and what it keeps. A job that loops until its token budget stops it. Cancel and the deadline: in the store, by the claim, by the timer for waiting jobs, and in the middle of a model call and of a sandboxed command, each within 5 s. Three jobs end to end through the stack. |
 | `tests/escape` | `make escape` (the sandbox image, no stack) | Escape attempts from a `run_shell` call: the network, the cloud metadata address, the Docker socket, the root file system, mounts, capabilities, privileges, root, processes, memory, a file on the host and another job's workspace. Each must be a failed tool result, and the host's file unchanged. |
 | `tests/chaos` | `make chaos` | Workers that are killed at random times, end themselves at failpoints, are paused past their lease, crash on every run, are killed during a sandboxed call, and get SIGTERM. Each test writes its result to `.chaos/results.jsonl` when it is over, with a `verdict`: `passed`, `failed`, or `void` when the machine's clock was set during the run. See the [results](../README.md#results). |
 | `tests/contract` | `make up`, a Claude API key | The fake provider against the Claude API: the same tool call exchange through the runtime's client, the raw JSON of both responses, and the refusal of an unknown model. Everything the fake returns has to be in what the API returns. The fake returns less: the API's `tool_use` block has a `caller` field, for example. Run by hand; see the [README](../README.md#development) for the last run. |
@@ -335,10 +339,22 @@ Accepted, with the reason in the decision records:
   tool or model call when it wakes. Its result is refused, but the tool ran.
   If a check answered "not done" for that call in the meantime and it was run
   again, the change is made twice and no person was asked.
-- A tool that is running when its worker loses the lease runs to its end.
-  A tool in the worker process cannot be stopped from outside. A sandboxed
-  command runs until it ends, reaches its timeout, or a worker that takes the
+- A tool in the worker process that is running when its worker loses the
+  lease, or when its job is halted, runs to its end in its thread; its result
+  is dropped. A sandboxed command is killed then. A command whose worker went
+  away runs until it ends, reaches its timeout, or a worker that takes the
   job over on the same host removes its container.
+- A cancel leaves no step: the job's status and its `cancel_requested` are
+  the record. A deadline failure has its `error` step.
+- A halt waits for what it cannot race: removing the containers of a killed
+  command and of earlier leases (Docker requests of up to 10 s each), and
+  the fenced write that ends the job. A slow Docker daemon can push a cancel
+  or a deadline past 5 s.
+- A cancel that arrives as the job finishes can find it `succeeded`; the API
+  had answered 202.
+- The deadline timer counts from the database clock read once after the
+  claim, on the worker's monotonic clock after that. The tests run worker
+  and database on one machine, so a skew between them is not tested.
 - The wait before a decision about an interrupted sandboxed call assumes the
   worker that started it was not paused or slowed between the intent and the
   start of the call, for example by a slow commit of the intent, and that
@@ -356,14 +372,13 @@ Accepted, with the reason in the decision records:
   is still refused.
 - Five takeovers fail a job, also when the workers were lost for reasons that
   have nothing to do with the job. The limit is a constant.
-- A job that waits in `needs_approval` waits until a person approves it.
-  Nothing times the wait out. Approve offers a rerun only: entering the
-  result by hand, skipping the call and cancelling are not built.
+- A job that waits in `needs_approval` waits until a person approves or
+  cancels it, or until its deadline. Approve offers a rerun only: entering
+  the result by hand and skipping the call are not built.
 
 Not built or not closed:
 
 - A failed model call fails the job. There is no retry and no backoff.
-- Budget and deadline are not enforced. A job cannot be cancelled.
 - `read_file`, `create_issue` and `crash_worker` run in the worker process,
   with no general timeout. A tool that outlasts the stop grace period is
   killed with its worker, and the job is taken over when its lease runs out.
@@ -395,8 +410,7 @@ Not built or not closed:
 - The workspace of a job that is final but left behind is removed by the next
   sweep, up to `SWEEP_INTERVAL_SECONDS` later. A workspace root that no
   running worker mounts is not swept.
-- `not_before` and `cancel_requested` are columns that nothing reads or sets
-  yet.
+- `not_before` is a column that nothing reads or sets yet.
 - All workers have to see the same workspace directory. The stack does that
   with one volume on one host. Tool containers mount the same volume by name.
 - The whole conversation is sent with every model call. A job that outgrows

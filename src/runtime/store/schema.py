@@ -30,6 +30,8 @@ metadata = MetaData()
 # expired, and `waiting` once backoff is built. The claim index covers exactly
 # these rows.
 CLAIMABLE_STATUSES_SQL = "status IN ('queued', 'waiting', 'running')"
+# Jobs that are not final: the ones whose deadline the workers watch.
+OPEN_STATUSES_SQL = "status IN ('queued', 'waiting', 'needs_approval', 'running')"
 
 jobs = Table(
     "jobs",
@@ -54,6 +56,7 @@ jobs = Table(
         "id",
         postgresql_where=text(CLAIMABLE_STATUSES_SQL),
     ),
+    Index("jobs_open_deadline", "deadline", postgresql_where=text(OPEN_STATUSES_SQL)),
 )
 
 steps = Table(

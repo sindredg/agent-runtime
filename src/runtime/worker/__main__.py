@@ -15,7 +15,7 @@ from runtime.sandbox.runner import Sandbox, check_host, deny_list
 from runtime.store.engine import create_engine
 from runtime.tools import default_tools
 from runtime.worker.agent import AgentSettings
-from runtime.worker.loop import keep_alive, work
+from runtime.worker.loop import keep_alive, keep_failing_overdue, work
 from runtime.worker.sweep import keep_sweeping
 
 ALIVE_INTERVAL_SECONDS = 5.0
@@ -74,6 +74,7 @@ async def run(config: WorkerConfig) -> None:
             tasks.create_task(
                 keep_sweeping(engine, config.workspace_root, stop, config.sweep_interval)
             )
+            tasks.create_task(keep_failing_overdue(engine, stop))
             tasks.create_task(
                 work(
                     engine,

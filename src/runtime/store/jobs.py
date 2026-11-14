@@ -13,12 +13,13 @@ from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Row, Update, and_, case, func, insert, literal, or_, select, update
+from sqlalchemy import Row, Select, Update, and_, case, func, insert, literal, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncConnection
+from sqlalchemy.sql.elements import ColumnElement
 
 from runtime.store.payload import check_json
 from runtime.store.schema import jobs, steps
-from runtime.store.status import JobStatus, sources_of
+from runtime.store.status import FINAL_STATUSES, JobStatus, sources_of
 from runtime.store.steps import StepKind, next_seq
 
 log = logging.getLogger("runtime.store")
@@ -31,6 +32,9 @@ TAKEOVER_LIMIT = 5
 TAKEOVER_LIMIT_ERROR = (
     f"the job was taken over {TAKEOVER_LIMIT} times after its worker stopped; it is not run again"
 )
+DEADLINE_ERROR = "the job's deadline passed"
+# The statuses of a job that no worker holds and that is not final.
+_UNHELD = (JobStatus.QUEUED, JobStatus.WAITING, JobStatus.NEEDS_APPROVAL)
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,9 +103,11 @@ def claim_statement(worker_id: str, lease: timedelta) -> Update:
     """The one statement that is a claim. Separate so a test can inspect its plan.
 
     It picks the oldest job that is `queued`, or `running` under a lease
-    that has expired. The second kind is a takeover. A takeover of a job
-    that has already been taken over TAKEOVER_LIMIT times is not made: the
-    same statement marks the job `failed`.
+    that has expired. The second kind is a takeover. The same statement ends
+    a job instead of handing it out, in this order: one whose cancel was
+    requested is `cancelled`; one past its deadline is `failed`; a takeover
+    of a job that has already been taken over TAKEOVER_LIMIT times is
+    `failed`.
     """
     queued = _literal(JobStatus.QUEUED.value)
     running = _literal(JobStatus.RUNNING.value)
@@ -128,21 +134,35 @@ def claim_statement(worker_id: str, lease: timedelta) -> Update:
     )
     # In SET, a column name is the value before the update.
     takeover = jobs.c.status == running
-    at_limit = and_(takeover, jobs.c.takeovers >= TAKEOVER_LIMIT)
+    cancelled = jobs.c.cancel_requested
+    overdue = and_(~cancelled, jobs.c.deadline <= func.clock_timestamp())
+    at_limit = and_(~cancelled, ~overdue, takeover, jobs.c.takeovers >= TAKEOVER_LIMIT)
+    ended = or_(cancelled, overdue, at_limit)
     return (
         update(jobs)
         .where(jobs.c.id == oldest_claimable)
         .values(
-            status=case((at_limit, JobStatus.FAILED.value), else_=JobStatus.RUNNING.value),
-            lease_owner=case((at_limit, None), else_=worker_id),
+            status=case(
+                (cancelled, JobStatus.CANCELLED.value),
+                (or_(overdue, at_limit), JobStatus.FAILED.value),
+                else_=JobStatus.RUNNING.value,
+            ),
+            lease_owner=case((ended, None), else_=worker_id),
             # The database clock, never the worker's. clock_timestamp() is the
             # time the statement runs; now() is the time the transaction
             # began, which would shorten the lease by whatever ran before.
-            lease_expires_at=case((at_limit, None), else_=func.clock_timestamp() + lease),
-            # A claim that fails the job hands it to nobody, so it is not counted.
-            lease_epoch=jobs.c.lease_epoch + case((at_limit, 0), else_=1),
-            takeovers=jobs.c.takeovers + case((and_(takeover, ~at_limit), 1), else_=0),
-            error=case((at_limit, TAKEOVER_LIMIT_ERROR), else_=jobs.c.error),
+            lease_expires_at=case((ended, None), else_=func.clock_timestamp() + lease),
+            # A claim that ends the job hands it to nobody, so it is not
+            # counted. A stale worker is fenced off all the same: the job is
+            # no longer `running`.
+            lease_epoch=jobs.c.lease_epoch + case((ended, 0), else_=1),
+            takeovers=jobs.c.takeovers + case((and_(takeover, ~ended), 1), else_=0),
+            error=case(
+                (overdue, DEADLINE_ERROR),
+                (at_limit, TAKEOVER_LIMIT_ERROR),
+                (cancelled, None),
+                else_=jobs.c.error,
+            ),
         )
         .returning(*jobs.c)
     )
@@ -168,12 +188,13 @@ async def _append_next_step(
     )
 
 
-async def _record_takeover_limit(conn: AsyncConnection, job: Job) -> None:
-    """Append the `error` step for a job the claim just failed."""
-    await _append_next_step(conn, job, StepKind.ERROR, {"message": TAKEOVER_LIMIT_ERROR})
+async def _record_end(conn: AsyncConnection, job: Job) -> None:
+    """Record a job the claim ended: an `error` step for a failure, a log line for both."""
+    if job.status is JobStatus.FAILED:
+        await _append_next_step(conn, job, StepKind.ERROR, {"message": job.error})
     log.warning(
-        "job failed at the takeover limit",
-        extra={"job_id": job.id, "takeovers": job.takeovers},
+        "job ended by the claim",
+        extra={"job_id": job.id, "status": job.status.value, "error": job.error},
     )
 
 
@@ -192,11 +213,11 @@ async def claim_job(
     increments `takeovers`. The claim is final when the caller's transaction
     commits.
 
-    A job that would be taken over for the time after TAKEOVER_LIMIT is
-    marked `failed` with an `error` step instead, in the caller's
-    transaction, and the next claimable job is looked for. Such jobs are
-    appended to `failed`, if given: no worker runs them again, so the caller
-    is the one to clean up after them once its transaction has committed.
+    A job that the claim ends instead (see `claim_statement`) gets an
+    `error` step if it failed, in the caller's transaction, and the next
+    claimable job is looked for. Such jobs are appended to `failed`, if
+    given: no worker runs them again, so the caller is the one to clean up
+    after them once its transaction has committed.
 
     Jobs that are backing off (`waiting`) are not picked up yet.
     """
@@ -210,7 +231,7 @@ async def claim_job(
         job = job_from_row(row)
         if job.status is JobStatus.RUNNING:
             return job
-        await _record_takeover_limit(conn, job)
+        await _record_end(conn, job)
         if failed is not None:
             failed.append(job)
 
@@ -278,3 +299,103 @@ async def approve_job(conn: AsyncConnection, job_id: UUID) -> Job:
     named = {key: asked[key] for key in ("tool_use_id", "operation_id") if key in asked}
     await _append_next_step(conn, job, StepKind.APPROVAL_GIVEN, named)
     return job
+
+
+class JobNotFound(Exception):
+    """No job has this id."""
+
+
+def _unheld() -> ColumnElement[bool]:
+    """A job that no worker holds: waiting for one, or `running` under a lease that is over.
+
+    A worker whose lease is over can no longer write: every write is fenced
+    on `running` and its epoch.
+    """
+    # Constants in the SQL, so the planner can match the deadline index.
+    return or_(
+        jobs.c.status.in_([_literal(status.value) for status in _UNHELD]),
+        and_(
+            jobs.c.status == _literal(JobStatus.RUNNING.value),
+            jobs.c.lease_expires_at < func.clock_timestamp(),
+        ),
+    )
+
+
+async def cancel_job(conn: AsyncConnection, job_id: UUID) -> tuple[Job, bool]:
+    """Cancel a job, or ask the worker that holds it to. Returns the job and whether it is done.
+
+    One statement. A job that no worker holds is `cancelled` by it: one that
+    waits (`queued`, `waiting`, `needs_approval`), or a `running` one whose
+    lease is over. A `running` job under a live lease gets `cancel_requested`:
+    its worker sees the flag within a second and stops it. A job that is
+    already `cancelled` is returned as it is. Raises JobNotFound, or
+    InvalidTransition for a job that ended otherwise.
+    """
+    unheld = _unheld()
+    result = await conn.execute(
+        update(jobs)
+        .where(
+            jobs.c.id == job_id,
+            jobs.c.status.not_in([status.value for status in FINAL_STATUSES]),
+        )
+        .values(
+            status=case((unheld, JobStatus.CANCELLED.value), else_=jobs.c.status),
+            cancel_requested=True,
+            lease_owner=case((unheld, None), else_=jobs.c.lease_owner),
+            lease_expires_at=case((unheld, None), else_=jobs.c.lease_expires_at),
+        )
+        .returning(*jobs.c)
+    )
+    row = result.one_or_none()
+    if row is not None:
+        job = job_from_row(row)
+        return job, job.status is JobStatus.CANCELLED
+    found = await get_job(conn, job_id)
+    if found is None:
+        raise JobNotFound(job_id)
+    if found.status is JobStatus.CANCELLED:
+        return found, True
+    raise InvalidTransition(job_id, JobStatus.CANCELLED)
+
+
+async def cancel_wanted(conn: AsyncConnection, job_id: UUID) -> bool:
+    """True when a cancel of the job was requested."""
+    result = await conn.execute(select(jobs.c.cancel_requested).where(jobs.c.id == job_id))
+    return bool(result.scalar_one_or_none())
+
+
+def overdue_statement() -> Select[tuple[UUID]]:
+    """The jobs that no worker holds and whose deadline passed. Separate so a test can plan it."""
+    return (
+        select(jobs.c.id)
+        .where(_unheld(), jobs.c.deadline <= func.clock_timestamp())
+        # Rows another worker is ending, claiming or cancelling are left to
+        # it: no waiting, and no two workers lock the same rows in turn.
+        .with_for_update(skip_locked=True)
+    )
+
+
+async def fail_overdue(conn: AsyncConnection) -> list[Job]:
+    """Fail every job past its deadline that no worker holds, each with an `error` step.
+
+    No worker holds a job that waits (`queued`, `waiting`, `needs_approval`)
+    or a `running` one whose lease is over. A job under a live lease is its
+    worker's to fail. The rows stay locked until the caller's transaction
+    ends, so the steps cannot race a worker. Returns the jobs.
+    """
+    result = await conn.execute(
+        update(jobs)
+        .where(jobs.c.id.in_(overdue_statement()))
+        .values(
+            status=JobStatus.FAILED,
+            error=DEADLINE_ERROR,
+            lease_owner=None,
+            lease_expires_at=None,
+        )
+        .returning(*jobs.c)
+    )
+    ended = [job_from_row(row) for row in result]
+    for job in ended:
+        await _append_next_step(conn, job, StepKind.ERROR, {"message": DEADLINE_ERROR})
+        log.warning("job failed at its deadline while waiting", extra={"job_id": job.id})
+    return ended

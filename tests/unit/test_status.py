@@ -26,6 +26,8 @@ EXPECTED_MOVES = {
     (S.WAITING, S.FAILED),
     (S.NEEDS_APPROVAL, S.QUEUED),
     (S.NEEDS_APPROVAL, S.CANCELLED),
+    # Nobody answered before the job's deadline.
+    (S.NEEDS_APPROVAL, S.FAILED),
 }
 
 

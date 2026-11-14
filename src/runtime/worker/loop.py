@@ -8,7 +8,7 @@ from pathlib import Path
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from runtime.provider.base import Provider
-from runtime.store.jobs import Job, claim_job
+from runtime.store.jobs import Job, claim_job, fail_overdue
 from runtime.tools.base import ToolRegistry
 from runtime.worker.agent import AgentSettings, run_job
 from runtime.worker.workspace import remove_workspace
@@ -66,8 +66,9 @@ async def work(
             log.exception("claim failed")
             await _wait(stop, poll_interval)
             continue
-        # Jobs the claim failed at the takeover limit are final, and this
-        # worker made them so. Their workspaces go, like any finished job's.
+        # Jobs the claim ended (cancelled, past their deadline, at the
+        # takeover limit) are final, and this worker made them so. Their
+        # workspaces go, like any finished job's.
         # The claim is committed by now: a failure here must not cost the
         # job that was claimed with them.
         for ended in failed:
@@ -89,3 +90,25 @@ async def work(
             # longer write to. This is anything else; the job stays `running`
             # until its lease runs out.
             log.exception("job could not be finished", extra={"job_id": job.id})
+
+
+# How often a worker fails the jobs that wait past their deadline. The
+# deadline of a waiting job takes effect within this.
+OVERDUE_INTERVAL = 1.0
+
+
+async def keep_failing_overdue(
+    engine: AsyncEngine, stop: asyncio.Event, interval: float = OVERDUE_INTERVAL
+) -> None:
+    """Fail the jobs that wait past their deadline, every `interval` seconds, until `stop`.
+
+    It runs beside the work loop, so a worker busy with a long job still does
+    it. Their workspaces go with the next workspace sweep.
+    """
+    while not stop.is_set():
+        try:
+            async with engine.begin() as conn:
+                await fail_overdue(conn)
+        except Exception:
+            log.exception("failing overdue jobs failed")
+        await _wait(stop, interval)

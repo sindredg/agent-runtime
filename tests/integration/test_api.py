@@ -8,6 +8,7 @@ decide exactly when each step appears.
 import asyncio
 import json
 import time
+import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -656,3 +657,58 @@ def test_a_scope_is_stored_with_the_job_in_its_plain_form(database_url: str) -> 
         {"host": "lab.example", "ports": [80, 443]},
         {"host": "10.0.1.0/24"},
     ]
+
+
+# Cancel
+
+
+@pytest.mark.parametrize("status", [JobStatus.QUEUED, JobStatus.NEEDS_APPROVAL])
+def test_cancel_of_a_job_nobody_holds_is_200_and_done(database_url: str, status: JobStatus) -> None:
+    async def body(api: Api) -> tuple[httpx2.Response, httpx2.Response]:
+        job = await api.new_job()
+        await api.finish(job, status)
+        first = await api.client.post(f"/jobs/{job.id}/cancel")
+        again = await api.client.post(f"/jobs/{job.id}/cancel")
+        return first, again
+
+    first, again = api_test(database_url, body)
+
+    assert (first.status_code, first.json()["status"]) == (200, "cancelled")
+    # Cancelling a cancelled job is no error.
+    assert (again.status_code, again.json()["status"]) == (200, "cancelled")
+
+
+def test_cancel_of_a_held_job_is_202_and_requested(database_url: str) -> None:
+    async def body(api: Api) -> httpx2.Response:
+        job = await api.new_job()
+        return await api.client.post(f"/jobs/{job.id}/cancel")
+
+    response = api_test(database_url, body)
+
+    assert response.status_code == 202
+    assert response.json()["status"] == "running"
+
+
+@pytest.mark.parametrize("status", [JobStatus.SUCCEEDED, JobStatus.FAILED])
+def test_cancel_of_a_job_that_ended_otherwise_is_409(database_url: str, status: JobStatus) -> None:
+    async def body(api: Api) -> httpx2.Response:
+        job = await api.new_job()
+        await api.finish(job, status)
+        return await api.client.post(f"/jobs/{job.id}/cancel")
+
+    response = api_test(database_url, body)
+
+    assert response.status_code == 409
+    assert status.value in response.json()["detail"]
+
+
+def test_cancel_of_an_unknown_job_is_404_and_of_a_bad_id_422(database_url: str) -> None:
+    async def body(api: Api) -> tuple[httpx2.Response, httpx2.Response]:
+        unknown = await api.client.post(f"/jobs/{uuid.UUID(int=1)}/cancel")
+        bad = await api.client.post("/jobs/not-a-job/cancel")
+        return unknown, bad
+
+    unknown, bad = api_test(database_url, body)
+
+    assert unknown.status_code == 404
+    assert bad.status_code == 422

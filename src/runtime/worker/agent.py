@@ -11,11 +11,13 @@ nothing more and leaves the status and the workspace to whoever holds the
 job next.
 
 The token budget is kept with an upper bound of each call's input
-(`runtime.worker.budget`). Not built yet: the deadline is not enforced.
+(`runtime.worker.budget`). A cancel and the deadline halt the job
+(`runtime.worker.halt`).
 """
 
 import asyncio
 import dataclasses
+import inspect
 import logging
 import math
 import time
@@ -38,13 +40,14 @@ from runtime.spec import JobSpec
 from runtime.store import held
 from runtime.store.clock import seconds_until
 from runtime.store.held import LeaseLost
-from runtime.store.jobs import Job
+from runtime.store.jobs import DEADLINE_ERROR, Job
 from runtime.store.payload import InvalidPayload, check_json
 from runtime.store.status import FINAL_STATUSES, JobStatus
 from runtime.store.steps import Step, StepKind, read_steps
 from runtime.tools.base import AnyTool, ToolCall, ToolRegistry, ToolResult, operation_id
 from runtime.tools.sandboxed import SandboxTool
 from runtime.worker.budget import input_bound, max_tokens_within
+from runtime.worker.halt import Halt, Halted, HaltReason, watch_cancel
 from runtime.worker.lease import Lease, keep_renewing
 from runtime.worker.recovery import Ask, Recovered, decide
 from runtime.worker.replay import Replay, replay
@@ -145,45 +148,88 @@ def _usable(result: object) -> ToolResult:
     return result
 
 
-async def _run_tool(tool: AnyTool | None, name: str, call: ToolCall) -> ToolResult:
+async def _race[T](
+    work: Awaitable[T], *, lease: Lease, halt: Halt, stop: asyncio.Event | None = None
+) -> tuple[bool, T | None]:
+    """Await `work` unless the job is halted, the lease is lost, or `stop` is set first.
+
+    Returns (True, its result) when `work` completed, also if something
+    else happened at the same moment: a complete answer is never thrown
+    away. Returns (False, None) when `stop` came first. Raises LeaseLost or
+    Halted when one of those came first. Unless it completed, `work` is
+    cancelled and waited for: a sandboxed call removes its containers then.
+    """
+    if lease.lost or halt.reason is not None:
+        # Nothing is started for a job that is already halted or dropped.
+        if inspect.iscoroutine(work):
+            work.close()
+        if lease.lost:
+            raise LeaseLost(lease.job_id, lease.epoch)
+        halt.check()
+    task = asyncio.ensure_future(work)
+    watchers: list[asyncio.Future[Any]] = [
+        asyncio.ensure_future(lease.wait_lost()),
+        asyncio.ensure_future(halt.wait()),
+    ]
+    if stop is not None:
+        watchers.append(asyncio.ensure_future(stop.wait()))
+    try:
+        await asyncio.wait({task, *watchers}, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for watcher in watchers:
+            watcher.cancel()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, *watchers, return_exceptions=True)
+    for watcher in watchers:
+        # A watcher that failed says nothing about a stop, the lease or a
+        # halt. Read as one of them, the work would be given up for nothing.
+        if not watcher.cancelled() and (broken := watcher.exception()) is not None:
+            raise broken
+    if task.done() and not task.cancelled():
+        return True, task.result()
+    if lease.lost:
+        raise LeaseLost(lease.job_id, lease.epoch)
+    halt.check()
+    return False, None
+
+
+async def _run_tool(
+    tool: AnyTool | None, name: str, call: ToolCall, lease: Lease, halt: Halt
+) -> ToolResult:
     """Run one tool call. A failure of the tool becomes an error result for the model.
 
-    A sandboxed tool runs its command in a container and is awaited here. A
-    tool that is runtime code runs in a thread, so it may block.
+    A sandboxed tool runs its command in a container. A tool that is runtime
+    code runs in a thread, so it may block. When the job is halted or the
+    lease is lost, the call is given up: a sandboxed command is killed and
+    its containers removed, a thread runs on and its result is dropped.
+    Raises Halted or LeaseLost then.
     """
     if tool is None:
         return ToolResult(f"unknown tool: {name}", is_error=True)
-    try:
-        if isinstance(tool, SandboxTool):
-            result = await tool.run(call)
-        else:
-            result = await asyncio.to_thread(tool.run, call)
-    # SystemExit too: a tool that calls sys.exit() must not take the worker down.
-    except (Exception, SystemExit) as error:
-        log.exception("tool raised", extra={"tool": name})
-        result = ToolResult(f"the tool failed: {error}", is_error=True)
+
+    async def attempt() -> ToolResult:
+        # A failure of the tool is caught here, inside the task: asyncio lets
+        # a SystemExit out of a task straight through the event loop.
+        try:
+            if isinstance(tool, SandboxTool):
+                return await tool.run(call)
+            return await asyncio.to_thread(tool.run, call)
+        # SystemExit too: a tool that calls sys.exit() must not take the worker down.
+        except (Exception, SystemExit) as error:
+            log.exception("tool raised", extra={"tool": name})
+            return ToolResult(f"the tool failed: {error}", is_error=True)
+
+    _, result = await _race(attempt(), lease=lease, halt=halt)
     return _usable(result)
 
 
-async def _wait_unless_stopped(seconds: float, stop: asyncio.Event, lease: Lease) -> bool:
-    """Wait `seconds`. False if `stop` was set first. Raises LeaseLost when the lease goes."""
-    slept = asyncio.ensure_future(asyncio.sleep(seconds))
-    stopped = asyncio.ensure_future(stop.wait())
-    lost = asyncio.ensure_future(lease.wait_lost())
-    try:
-        await asyncio.wait({slept, stopped, lost}, return_when=asyncio.FIRST_COMPLETED)
-    finally:
-        for waiter in (slept, stopped, lost):
-            waiter.cancel()
-        await asyncio.gather(slept, stopped, lost, return_exceptions=True)
-    for waiter in (slept, stopped, lost):
-        # A watcher that failed says nothing about the time, a stop or the
-        # lease. Read as the end of the wait, the call would be decided early.
-        if not waiter.cancelled() and (broken := waiter.exception()) is not None:
-            raise broken
-    if lease.lost:
-        raise LeaseLost(lease.job_id, lease.epoch)
-    return not stop.is_set()
+async def _wait_unless_stopped(
+    seconds: float, stop: asyncio.Event, lease: Lease, halt: Halt
+) -> bool:
+    """Wait `seconds`. False if `stop` was set first. Raises LeaseLost or Halted."""
+    done, _ = await _race(asyncio.sleep(seconds), lease=lease, halt=halt, stop=stop)
+    return done
 
 
 def _bound(tool: AnyTool | None, intent: dict[str, Any]) -> float | None:
@@ -214,6 +260,7 @@ async def _outlast_container(
     intent: dict[str, Any],
     written: datetime | None,
     stop: asyncio.Event,
+    halt: Halt,
 ) -> bool:
     """Make sure the interrupted call's container has ended. False if `stop` came first.
 
@@ -245,7 +292,7 @@ async def _outlast_container(
         "waiting for an interrupted call's container to end",
         extra={"job_id": job.id, "seconds": round(left, 1)},
     )
-    return await _wait_unless_stopped(left, stop, lease)
+    return await _wait_unless_stopped(left, stop, lease, halt)
 
 
 async def _next_tool_call(
@@ -258,6 +305,7 @@ async def _next_tool_call(
     failpoints: Failpoints,
     stop: asyncio.Event,
     scope: tuple[Target, ...] | None,
+    halt: Halt,
 ) -> bool:
     """Deal with the first open tool call. False means the job now waits for a person.
 
@@ -280,11 +328,19 @@ async def _next_tool_call(
     if interrupted is not None and interrupted.get("tool_use_id") == tool_use_id:
         # Nothing is decided while the interrupted call may still be running.
         if not await _outlast_container(
-            writer, tool, job, lease, interrupted, state.interrupted_at, stop
+            writer, tool, job, lease, interrupted, state.interrupted_at, stop, halt
         ):
             return True
         lease.check()
-        decision = await asyncio.to_thread(decide, tool, call, approved=state.approval == "given")
+        # Raced: a halt does not wait for a slow check. The check runs on in
+        # its thread; it only asks, it changes nothing.
+        _, found = await _race(
+            asyncio.to_thread(decide, tool, call, approved=state.approval == "given"),
+            lease=lease,
+            halt=halt,
+        )
+        assert found is not None  # noqa: S101 - _race returns the result when it completed
+        decision = found
         log.info(
             "interrupted tool call",
             extra={
@@ -342,7 +398,11 @@ async def _next_tool_call(
             try:
                 if tool.sandbox.settings.guard_image is None:
                     raise ScopeRefused("this worker has no guard image, so it cannot enforce one")
-                resolved = await resolve(scope, tool.sandbox.settings.deny)
+                _, looked_up = await _race(
+                    resolve(scope, tool.sandbox.settings.deny), lease=lease, halt=halt
+                )
+                assert looked_up is not None  # noqa: S101 - _race returns the result
+                resolved = looked_up
             except ScopeRefused as refused:
                 # Before the intent: the call does not start.
                 await writer.append(
@@ -356,11 +416,13 @@ async def _next_tool_call(
                 return True
             call = dataclasses.replace(call, scope=resolved)
             intent["scope"] = resolved.record()
+    # The last moment to give up a call: after the intent the tool runs.
+    halt.check()
     await writer.append(StepKind.TOOL_INTENT, intent)
     failpoints.hit("after_tool_intent", takeovers=job.takeovers, tool=name)
     # And immediately before the run, in case the write was slow.
     lease.check()
-    result = await _run_tool(tool, name, call)
+    result = await _run_tool(tool, name, call, lease, halt)
     failpoints.hit("after_tool_ran", takeovers=job.takeovers, tool=name)
     payload: dict[str, Any] = {
         "tool_use_id": tool_use_id,
@@ -407,7 +469,7 @@ def _response_problem(response: ModelResponse, used_ids: set[str]) -> str | None
 
 
 async def _complete_unless_stopped(
-    provider: Provider, request: ModelRequest, stop: asyncio.Event, lease: Lease
+    provider: Provider, request: ModelRequest, stop: asyncio.Event, lease: Lease, halt: Halt
 ) -> ModelResponse | None:
     """Call the model. Returns None if `stop` was set before the answer was complete.
 
@@ -416,33 +478,14 @@ async def _complete_unless_stopped(
     the job next. A complete answer is never thrown away.
 
     The call is cancelled as well when the heartbeat learns that the lease
-    is gone: its answer would be refused by the fenced write, so there is
-    nothing to wait for. Raises LeaseLost then.
+    is gone (raises LeaseLost: its answer would be refused by the fenced
+    write), and when the job is halted (raises Halted).
     """
     if stop.is_set():
         # The stop arrived while the request step was written. Nothing is sent.
         return None
-    call = asyncio.ensure_future(provider.complete(request))
-    stopped = asyncio.ensure_future(stop.wait())
-    lost = asyncio.ensure_future(lease.wait_lost())
-    try:
-        await asyncio.wait({call, stopped, lost}, return_when=asyncio.FIRST_COMPLETED)
-    finally:
-        stopped.cancel()
-        lost.cancel()
-        if not call.done():
-            call.cancel()
-        await asyncio.gather(call, stopped, lost, return_exceptions=True)
-    for watcher in (stopped, lost):
-        # A watcher that failed says nothing about a stop or the lease. Read
-        # as a stop, the request would be sent again and again.
-        if not watcher.cancelled() and (broken := watcher.exception()) is not None:
-            raise broken
-    if call.cancelled():
-        if lease.lost:
-            raise LeaseLost(lease.job_id, lease.epoch)
-        return None
-    return call.result()
+    done, response = await _race(provider.complete(request), lease=lease, halt=halt, stop=stop)
+    return response if done else None
 
 
 async def _loop(
@@ -456,13 +499,14 @@ async def _loop(
     lease: Lease,
     steps: list[Step],
     stop: asyncio.Event,
+    halt: Halt,
 ) -> JobStatus:
     """Run until the model ends its turn, a person has to decide, or the worker is stopped.
 
     Returns the status to leave the job in: `succeeded`, `needs_approval`,
     or `queued` when `stop` was set and the job is to be given back. Raises
-    _JobFailed if the job cannot finish, and LeaseLost as soon as the worker
-    can no longer rely on its lease.
+    _JobFailed if the job cannot finish, LeaseLost as soon as the worker
+    can no longer rely on its lease, and Halted when the job is halted.
     """
     model = spec.model or settings.default_model
     failpoints = settings.failpoints
@@ -471,6 +515,8 @@ async def _loop(
     state = replay(spec.prompt, steps)
     writer.state = state
     while True:
+        # A step boundary: a halted job starts nothing more.
+        halt.check()
         if state.problem:
             raise _JobFailed(f"the model's response is not usable: {state.problem}")
 
@@ -529,7 +575,7 @@ async def _loop(
             # lease must not send it.
             lease.check()
             try:
-                response = await _complete_unless_stopped(provider, request, stop, lease)
+                response = await _complete_unless_stopped(provider, request, stop, lease, halt)
             except ProviderError as error:
                 raise _JobFailed(f"model call failed: {error}") from error
             if response is None:
@@ -568,7 +614,16 @@ async def _loop(
         # response run one after another, one per pass.
         if calls_open:
             if not await _next_tool_call(
-                writer, tools, job, workspace, lease, state, settings.failpoints, stop, spec.scope
+                writer,
+                tools,
+                job,
+                workspace,
+                lease,
+                state,
+                settings.failpoints,
+                stop,
+                spec.scope,
+                halt,
             ):
                 return JobStatus.NEEDS_APPROVAL
             continue
@@ -596,11 +651,15 @@ async def _run(
     settings: AgentSettings,
     lease: Lease,
     stop: asyncio.Event,
+    halt: Halt,
 ) -> JobStatus:
     """Run the job and record its outcome. Returns the status it was left in:
-    `succeeded`, `failed`, `needs_approval` when a person has to decide
-    about an interrupted tool call, or `queued` when the worker was stopped
-    and released the job.
+    `succeeded`, `failed`, `cancelled`, `needs_approval` when a person has
+    to decide about an interrupted tool call, or `queued` when the worker
+    was stopped and released the job.
+
+    The job is halted at its deadline, by the database clock: the time left
+    is read once, here, and a timer kept on the worker's clock.
 
     Raises LeaseLost or _StoreUnreachable when the worker has to drop the job.
     """
@@ -609,6 +668,10 @@ async def _run(
     writer = _StepWriter(engine, lease, last_seq=steps[-1].seq if steps else 0)
     status = JobStatus.FAILED
     failure: str | None = None
+    left = await _stored(seconds_until(engine, job.deadline))
+    if left <= 0:
+        halt.set(HaltReason.DEADLINE)
+    deadline = asyncio.get_running_loop().call_later(max(left, 0), halt.set, HaltReason.DEADLINE)
     try:
         spec = JobSpec.model_validate(job.spec)
         # A worker that was paused past its lease right after the claim must
@@ -621,8 +684,13 @@ async def _run(
             prepare_workspace, settings.workspace_root, job.id, spec.files
         )
         status = await _loop(
-            writer, provider, tools, job, spec, settings, workspace, lease, steps, stop
+            writer, provider, tools, job, spec, settings, workspace, lease, steps, stop, halt
         )
+    except Halted as halted:
+        if halted.reason is HaltReason.CANCELLED:
+            status = JobStatus.CANCELLED
+        else:
+            failure = DEADLINE_ERROR
     except _JobFailed as error:
         failure = str(error)
     except LeaseLost, _StoreUnreachable:
@@ -630,6 +698,8 @@ async def _run(
     except Exception as error:
         log.exception("job crashed", extra={"job_id": job.id})
         failure = f"{type(error).__name__}: {error}"
+    finally:
+        deadline.cancel()
 
     if failure is not None:
         try:
@@ -645,9 +715,12 @@ async def _run(
         )
         log.info("step", extra={"job_id": job.id, "seq": step.seq, "kind": step.kind.value})
     else:
-        await _stored(
+        left_as = await _stored(
             held.leave_running(engine, job_id=job.id, lease_epoch=lease.epoch, new_status=status)
         )
+        # A job that would wait for a person is cancelled instead if its
+        # cancel was requested meanwhile.
+        status = left_as.status
     log.info(
         "job finished" if status in FINAL_STATUSES else "job handed back",
         extra={"job_id": job.id, "status": status.value, "error": failure},
@@ -676,6 +749,10 @@ async def run_job(
     running tool is waited for, so that it does not leave an intent without
     a result.
 
+    A requested cancel, seen within a second, and the deadline halt the job
+    (ADR 0010): a model call in flight is abandoned, a running sandboxed
+    command is killed, and the job ends `cancelled` or `failed`.
+
     A failure of the job (a bad spec, a provider error, a response that
     cannot be used) is recorded as an `error` step and the status `failed`.
 
@@ -691,8 +768,12 @@ async def run_job(
         claimed_at=time.monotonic() if claimed_at is None else claimed_at,
     )
     heartbeat = asyncio.create_task(keep_renewing(engine, lease, settings.heartbeat))
+    halt = Halt(job.id)
+    watcher = asyncio.create_task(watch_cancel(engine, job.id, halt))
     try:
-        status = await _run(engine, provider, tools, job, settings, lease, stop or asyncio.Event())
+        status = await _run(
+            engine, provider, tools, job, settings, lease, stop or asyncio.Event(), halt
+        )
     except LeaseLost:
         log.warning(
             "job dropped: the lease is gone",
@@ -707,7 +788,8 @@ async def run_job(
         return None
     finally:
         heartbeat.cancel()
-        await asyncio.gather(heartbeat, return_exceptions=True)
+        watcher.cancel()
+        await asyncio.gather(heartbeat, watcher, return_exceptions=True)
     if status in FINAL_STATUSES:
         try:
             await asyncio.to_thread(remove_workspace, settings.workspace_root, job.id)

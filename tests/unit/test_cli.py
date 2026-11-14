@@ -90,6 +90,7 @@ class StubApi:
         self.submit_response = httpx2.Response(201, json=job())
         self.drop_after: int | None = None
         self.approve_response = httpx2.Response(200, json=job("queued"))
+        self.cancel_response = httpx2.Response(200, json=job("cancelled"))
         # A `status` event the stream carries after the steps, if any.
         self.status: str | None = None
 
@@ -102,6 +103,8 @@ class StubApi:
             return httpx2.Response(200, json=self.final)
         if request.method == "POST" and path == f"/jobs/{JOB_ID}/approve":
             return self.approve_response
+        if request.method == "POST" and path == f"/jobs/{JOB_ID}/cancel":
+            return self.cancel_response
         if path == f"/jobs/{JOB_ID}/steps":
             # Pages of two, to show that the command reads on.
             after = int(request.url.params.get("after", "0"))
@@ -610,3 +613,29 @@ def test_a_tool_name_or_model_with_control_codes_is_not_printed_raw() -> None:
     for line in (format_step(intent), format_step(request)):
         assert "\x1b" not in line
         assert "\x07" not in line
+
+
+def test_cancel_posts_to_the_job_and_prints_its_new_status() -> None:
+    api = StubApi()
+    code, out, err = run("cancel", JOB_ID, api=api)
+    assert (code, err) == (0, "")
+    assert out == "cancelled\n"
+    assert [(r.method, r.url.path) for r in api.requests] == [("POST", f"/jobs/{JOB_ID}/cancel")]
+
+
+def test_cancel_of_a_running_job_says_its_worker_stops_it() -> None:
+    api = StubApi()
+    api.cancel_response = httpx2.Response(202, json=job("running"))
+    code, out, err = run("cancel", JOB_ID, api=api)
+    assert (code, err) == (0, "")
+    assert out == "running; cancel requested, its worker stops it\n"
+
+
+def test_a_cancel_the_api_refuses_exits_with_2_and_shows_why() -> None:
+    api = StubApi()
+    api.cancel_response = httpx2.Response(
+        409, json={"detail": "job is succeeded; it cannot be cancelled"}
+    )
+    code, out, err = run("cancel", JOB_ID, api=api)
+    assert (code, out) == (2, "")
+    assert "cannot be cancelled" in err
