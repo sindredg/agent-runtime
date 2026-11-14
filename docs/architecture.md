@@ -250,7 +250,7 @@ routes answer 404 for a job that does not exist. FastAPI also serves `/docs`,
 | `TRACKER_URL` | worker | unset | The tracker `create_issue` talks to. Unset, the tool is not offered. The stack sets it to the fake tracker. |
 | `WORKSPACE_ROOT` | worker | `/tmp/workspaces` | Parent of the job workspaces. The stack sets it to the shared volume at `/workspaces`. |
 | `POLL_INTERVAL_SECONDS` | worker | 1 | Wait between two looks for a job when none was found. |
-| `SWEEP_INTERVAL_SECONDS` | worker | 300 | Time between two sweeps of `WORKSPACE_ROOT` for the workspaces of final and unknown jobs. |
+| `SWEEP_INTERVAL_SECONDS` | worker | 300 | Time between two sweeps of `WORKSPACE_ROOT` for the workspaces of final and unknown jobs. A workspace root belongs to one database: a worker removes the workspaces of jobs its database does not know. |
 | `WORKER_ID` | worker | host name and process id | Stored as `lease_owner`. |
 | `WORKER_ALIVE_FILE` | worker | `/tmp/worker.alive` | Touched every 5 seconds. The compose health check reads its age at this path. |
 | `SANDBOX_IMAGE` | worker | unset | The image of the tool containers. Unset, `run_shell` and `list_dir` are not offered. The stack sets it to `agent-runtime-sandbox:dev`, which it builds. |

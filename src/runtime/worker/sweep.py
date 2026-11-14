@@ -6,6 +6,10 @@ answer did not reach the worker, or the job finished on a worker with
 another workspace root. Every worker therefore sweeps its workspace root
 now and then. A final job is never claimed again, so its directory is not
 in use and cannot come back.
+
+A workspace root belongs to one database: a directory named after a job
+that the database does not know is removed too. A link is never followed
+or removed.
 """
 
 import asyncio
