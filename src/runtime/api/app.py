@@ -71,11 +71,12 @@ def create_app(
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(request: Request, error: RequestValidationError) -> Response:
-        """422 with what is wrong and where, without echoing the input back.
+        """422 with what is wrong and where, without the rejected input as a field.
 
         The default handler includes the rejected input. Input that is not
         valid Unicode cannot be encoded into the response, and the request
-        would end as a 500.
+        would end as a 500. A message may still quote a value, as `repr`
+        does, which always encodes.
         """
         detail = [
             {"loc": list(item["loc"]), "msg": item["msg"], "type": item["type"]}
