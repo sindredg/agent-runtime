@@ -4,6 +4,7 @@ The API is plain HTTP, so the worker's HTTP client is enough and no Docker
 library is added (ADR 0008).
 """
 
+import json
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from typing import Any
@@ -109,6 +110,22 @@ class Docker:
         if not isinstance(status, int):
             raise SandboxError("Docker gave no exit status")
         return status
+
+    async def containers(self, labels: dict[str, str]) -> list[dict[str, Any]]:
+        """Every container, running or not, that has all these labels with these values."""
+        filters = json.dumps({"label": [f"{key}={value}" for key, value in labels.items()]})
+        response = await self._send(
+            "GET", "/containers/json", 200, params={"all": "1", "filters": filters}
+        )
+        try:
+            found = response.json()
+        except ValueError as error:
+            raise SandboxError("Docker's list of containers is not JSON") from error
+        if not isinstance(found, list) or not all(
+            isinstance(item, dict) and isinstance(item.get("Id"), str) for item in found
+        ):
+            raise SandboxError("Docker's list of containers has an unexpected shape")
+        return found
 
     async def remove(self, container_id: str) -> None:
         """Remove the container, killing it first if it still runs. Gone already is fine."""

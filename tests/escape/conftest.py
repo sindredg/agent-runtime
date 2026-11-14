@@ -42,7 +42,7 @@ def docker_cli(*args: str) -> str:
 
 
 def default_config(
-    settings: SandboxSettings, job_id: uuid.UUID, argv: Sequence[str]
+    settings: SandboxSettings, job_id: uuid.UUID, lease_epoch: int, argv: Sequence[str]
 ) -> dict[str, Any]:
     """A container as `docker run` makes it, with only the job's workspace mounted."""
     return {
@@ -71,10 +71,17 @@ class OwnClientSandbox:
     def __init__(self, settings: SandboxSettings) -> None:
         self.settings = settings
 
-    async def run(self, job_id: uuid.UUID, argv: Sequence[str]) -> Run:
+    async def run(self, job_id: uuid.UUID, lease_epoch: int, argv: Sequence[str]) -> Run:
         docker = Docker(SOCKET)
         try:
-            return await Sandbox(docker, self.settings).run(job_id, argv)
+            return await Sandbox(docker, self.settings).run(job_id, lease_epoch, argv)
+        finally:
+            await docker.aclose()
+
+    async def remove_older(self, job_id: uuid.UUID, lease_epoch: int) -> int:
+        docker = Docker(SOCKET)
+        try:
+            return await Sandbox(docker, self.settings).remove_older(job_id, lease_epoch)
         finally:
             await docker.aclose()
 
@@ -96,7 +103,9 @@ class Host:
     def shell(self, script: str) -> ToolResult:
         """Run `script` with run_shell in the job's workspace, as a tool call of the job."""
         tool = run_shell_tool(OwnClientSandbox(self.settings))
-        call = ToolCall(self.root / str(self.job), {"command": script}, f"{self.job}:toolu_1")
+        call = ToolCall(
+            self.root / str(self.job), {"command": script}, f"{self.job}:toolu_1", lease_epoch=1
+        )
         return asyncio.run(tool.run(call))
 
 
