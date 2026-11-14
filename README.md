@@ -22,8 +22,7 @@ and only the job's workspace directory. Each call has a timeout, and its
 output is cut at 64 KiB. `read_file` and `create_issue` still run in the
 worker process.
 
-Not built: retry on provider errors and rate limits, token budgets, deadlines,
-and cancel. The full list is in
+Not built: retry on provider errors and rate limits, deadlines, and cancel. The full list is in
 [Known limits](docs/architecture.md#known-limits).
 
 Decided and not built: removal of the tool containers a stopped worker leaves
@@ -103,7 +102,7 @@ clean` stops the stack and deletes its database.
 | `system` | no | System prompt. Not empty if given. |
 | `model` | no | Model id. Default: the worker's `MODEL`. With the fake provider it names a scenario. |
 | `files` | no | Text files written into the job's workspace before it starts: relative path to content. 1 MiB in total, paths included. Paths are plain relative paths: no `..`, no `./`, no trailing `/`, and no path that is also a directory of another. |
-| `token_budget` | no | At least 1. Stored with the job. Not enforced yet. |
+| `token_budget` | no | At least 1. A model call is not made when the upper bound of its input does not fit what is left; the job then fails. See [Limits](docs/architecture.md). |
 | `timeout_seconds` | no | 1 to 604800 (one week). Sets the job's deadline. Not enforced yet. |
 
 Any other field is refused.

@@ -5,7 +5,11 @@ call the worker bounds it from what it knows:
 
 - the input and output tokens of the previous response: everything up to and
   including that response is already counted in tokens;
+<<<<<<< Updated upstream
 - plus the bytes of the text added to the conversation since, the tool
+=======
+- plus the bytes of what was added to the conversation since, the tool
+>>>>>>> Stashed changes
   results: a token is never shorter than one byte of the text it came from;
 - plus a fixed allowance for what the provider adds around messages and tool
   definitions.
@@ -15,6 +19,10 @@ A call whose bound does not fit into what is left is not made. Otherwise
 `max_tokens` is cut to what is left after the bound, which bounds the output.
 """
 
+<<<<<<< Updated upstream
+=======
+import json
+>>>>>>> Stashed changes
 from collections.abc import Sequence
 from typing import Any
 
@@ -24,6 +32,7 @@ ALLOWANCE = 1024
 
 
 def _bytes(value: Any) -> int:
+<<<<<<< Updated upstream
     """The UTF-8 bytes of every key and value in `value`.
 
     The text itself, not its JSON: an escape such as `\\n` for a newline
@@ -37,6 +46,9 @@ def _bytes(value: Any) -> int:
     if isinstance(value, list | tuple):
         return sum(_bytes(item) for item in value)
     return len(str(value).encode())
+=======
+    return len(json.dumps(value, ensure_ascii=False).encode())
+>>>>>>> Stashed changes
 
 
 def input_bound(

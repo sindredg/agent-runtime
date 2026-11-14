@@ -1,5 +1,9 @@
 """The token budget's bound of a model call's input, and the max_tokens it leaves."""
 
+<<<<<<< Updated upstream
+=======
+import json
+>>>>>>> Stashed changes
 from typing import Any
 
 import pytest
@@ -18,6 +22,7 @@ RESULT = {
 
 
 def size(value: Any) -> int:
+<<<<<<< Updated upstream
     """The bytes of every key and value, counted by hand."""
     if isinstance(value, str):
         return len(value.encode())
@@ -36,6 +41,9 @@ def test_an_escaped_character_counts_as_its_text_not_its_json() -> None:
 
     assert bound == size({"system": None, "tools": [], "messages": [message]}) + ALLOWANCE
     assert bound < 1000 + 100 + ALLOWANCE
+=======
+    return len(json.dumps(value, ensure_ascii=False).encode())
+>>>>>>> Stashed changes
 
 
 def test_the_first_call_is_bounded_by_the_bytes_of_the_whole_request() -> None:
