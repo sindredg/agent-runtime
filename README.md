@@ -19,6 +19,10 @@ Not built: retry on provider errors and rate limits, token budgets, deadlines,
 cancel, and a sandbox for tools. Tools run in the worker process. The full
 list is in [Known limits](docs/architecture.md#known-limits).
 
+Decided and not built: a container for each tool call, a target scope that
+the tools cannot leave, a way to halt a job, and approval before a risky tool
+call. See ADR 0007 to 0011 under [Design](#design).
+
 Locally the model provider is a fake that answers from scenario files, so
 nothing here calls a paid API.
 
@@ -174,6 +178,19 @@ What these results do not show:
 - [ADR 0006](docs/adr/0006-count-takeovers-apart-from-claims.md): count
   takeovers apart from claims, and release the job when a worker is told to
   stop.
+- [ADR 0007](docs/adr/0007-security-agents-and-owasp-apts-as-the-yardstick.md):
+  build for security agents, and measure the controls against OWASP APTS.
+  Not built.
+- [ADR 0008](docs/adr/0008-run-each-tool-call-in-its-own-container.md): run
+  each tool call in its own container, started by the worker. Not built.
+- [ADR 0009](docs/adr/0009-enforce-the-target-scope-in-the-network-namespace.md):
+  enforce a job's target scope in the network namespace of its tools. Not
+  built.
+- [ADR 0010](docs/adr/0010-one-halt-path-and-a-budget-bound.md): halt a job
+  through one path, and bound a model call's tokens before it is sent. Not
+  built.
+- [ADR 0011](docs/adr/0011-ask-a-person-before-a-risky-tool-call.md): ask a
+  person before a risky tool call runs. Not built.
 
 ## Development
 
