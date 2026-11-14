@@ -10,8 +10,8 @@ from typing import Any, Protocol
 from uuid import UUID
 
 from runtime.sandbox.docker import SandboxError
-from runtime.sandbox.runner import Run, SandboxSettings
-from runtime.tools.base import ToolCall, ToolResult
+from runtime.sandbox.runner import NotStarted, Run, SandboxSettings
+from runtime.tools.base import ToolCall, ToolResult, tool_definition
 
 
 class Runner(Protocol):
@@ -70,12 +70,7 @@ class SandboxTool:
     idempotent: bool = False
 
     def definition(self) -> dict[str, Any]:
-        """The tool as the Messages API wants it in `tools`."""
-        return {
-            "name": self.name,
-            "description": self.description,
-            "input_schema": self.input_schema,
-        }
+        return tool_definition(self.name, self.description, self.input_schema)
 
     async def run(self, call: ToolCall) -> ToolResult:
         """Run the call's command in the job's workspace. A failure is an error result."""
@@ -90,6 +85,8 @@ class SandboxTool:
             return ToolResult("the workspace is not a job's workspace", is_error=True)
         try:
             run = await self.sandbox.run(job_id, argv)
+        except NotStarted as error:
+            return ToolResult(f"the sandbox could not start the command: {error}", True)
         except SandboxError as error:
             # Docker may have started the command before it failed.
             return ToolResult(f"the sandbox failed: {error}. The command may have run.", True)

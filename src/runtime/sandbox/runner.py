@@ -14,7 +14,7 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from runtime.sandbox.docker import Docker, SandboxError
 from runtime.sandbox.output import Output
@@ -56,15 +56,19 @@ class SandboxSettings:
         match = _USER.fullmatch(self.user)
         if match is None or int(match[1]) == 0 or int(match[2]) == 0:
             raise ValueError(f"user must be uid:gid, both numbers above 0, got {self.user!r}")
-        for name in ("timeout", "cpus"):
-            value = getattr(self, name)
-            # `not value > 0` also refuses NaN.
-            if not value > 0 or math.isinf(value):
-                raise ValueError(f"{name} must be a positive number, got {value!r}")
+        # `not value > 0` also refuses NaN.
+        if not self.timeout > 0 or math.isinf(self.timeout):
+            raise ValueError(f"timeout must be a positive number, got {self.timeout!r}")
+        # Docker reads a CPU limit of 0 as no limit, and refuses less than 0.01.
+        if not 0.01 <= self.cpus < math.inf:
+            raise ValueError(f"cpus must be at least 0.01, got {self.cpus!r}")
+        # A tmpfs of size 0 has no size limit.
+        if self.tmp_size < MIB:
+            raise ValueError(f"tmp_size must be at least 1 MiB, got {self.tmp_size!r}")
         if self.output_limit < 1024:
             # The result's notes about the cut and the exit need room.
             raise ValueError(f"output_limit must be at least 1024, got {self.output_limit!r}")
-        for name in ("memory", "pids", "tmp_size"):
+        for name in ("memory", "pids"):
             if getattr(self, name) < 1:
                 raise ValueError(f"{name} must be at least 1, got {getattr(self, name)!r}")
 
@@ -136,12 +140,24 @@ class Run:
         return self.total > len(self.output)
 
 
+class NotStarted(SandboxError):
+    """The sandbox failed before it asked Docker to start the command."""
+
+
 class Sandbox:
     """Runs commands for tool calls. One per worker; it shares the worker's Docker client."""
 
     def __init__(self, docker: Docker, settings: SandboxSettings) -> None:
         self.docker = docker
         self.settings = settings
+        # Removals that go on after the call that started them was cancelled.
+        self._removals: set[asyncio.Task[None]] = set()
+
+    async def _remove(self, name: str) -> None:
+        try:
+            await self.docker.remove(name)
+        except SandboxError:
+            log.exception("tool container not removed", extra={"container": name})
 
     async def run(self, job_id: UUID, argv: Sequence[str]) -> Run:
         """Run `argv` in a new container with the job's workspace. Raises SandboxError.
@@ -150,24 +166,36 @@ class Sandbox:
         cancelled. A command still running at the timeout is killed.
         """
         settings = self.settings
-        container_id = await self.docker.create(container_config(settings, job_id, argv))
+        # Chosen here, not by Docker: a container whose create was cut off
+        # before Docker's answer arrived can still be removed by its name.
+        name = f"agent-runtime-sandbox-{uuid4().hex}"
+        output = Output(settings.output_limit)
+        deadline = asyncio.timeout(settings.timeout)
+        exit_code: int | None = None
+        started = False
         try:
-            output = Output(settings.output_limit)
-            deadline = asyncio.timeout(settings.timeout)
-            async with self.docker.attach(container_id) as stream:
+            await self.docker.create(name, container_config(settings, job_id, argv))
+            async with self.docker.attach(name) as stream:
                 try:
                     async with deadline:
-                        await self.docker.start(container_id)
+                        # From here on the command may run, whatever Docker answers.
+                        started = True
+                        await self.docker.start(name)
                         async for chunk in stream:
                             output.feed(chunk)
+                        exit_code = await self.docker.wait(name)
                 except TimeoutError:
                     if not deadline.expired():
                         raise
-            # The removal below kills a command that is still running.
-            exit_code = None if deadline.expired() else await self.docker.wait(container_id)
+        except SandboxError as error:
+            if not started:
+                raise NotStarted(str(error)) from error
+            raise
         finally:
-            try:
-                await self.docker.remove(container_id)
-            except SandboxError:
-                log.exception("tool container not removed", extra={"container_id": container_id})
+            # Kills a command that still runs. Shielded, so that a second
+            # cancel does not stop the removal half way.
+            removal = asyncio.ensure_future(self._remove(name))
+            self._removals.add(removal)
+            removal.add_done_callback(self._removals.discard)
+            await asyncio.shield(removal)
         return Run(bytes(output.kept), output.total, exit_code)

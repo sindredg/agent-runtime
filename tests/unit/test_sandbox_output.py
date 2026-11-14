@@ -6,6 +6,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
+from runtime.sandbox.docker import SandboxError
 from runtime.sandbox.output import FramingError, Output
 
 
@@ -56,6 +57,8 @@ def test_a_frame_of_size_zero_is_skipped() -> None:
     ],
 )
 def test_bytes_that_are_not_a_frame_header_are_refused(header: bytes) -> None:
+    # A sandbox error: the tool turns it into an error result.
+    assert issubclass(FramingError, SandboxError)
     with pytest.raises(FramingError):
         read([header + b"x"])
 

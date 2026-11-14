@@ -15,6 +15,11 @@ if TYPE_CHECKING:
     from runtime.tools.sandboxed import SandboxTool
 
 
+def tool_definition(name: str, description: str, input_schema: dict[str, Any]) -> dict[str, Any]:
+    """A tool as the Messages API wants it in `tools`."""
+    return {"name": name, "description": description, "input_schema": input_schema}
+
+
 @dataclass(frozen=True, slots=True)
 class ToolResult:
     """What goes back to the model. `is_error` marks a failed call; the job goes on."""
@@ -74,12 +79,7 @@ class Tool:
     check: Callable[[ToolCall], CheckAnswer] | None = None
 
     def definition(self) -> dict[str, Any]:
-        """The tool as the Messages API wants it in `tools`."""
-        return {
-            "name": self.name,
-            "description": self.description,
-            "input_schema": self.input_schema,
-        }
+        return tool_definition(self.name, self.description, self.input_schema)
 
 
 # Either kind of tool.

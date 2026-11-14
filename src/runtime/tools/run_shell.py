@@ -24,8 +24,8 @@ def run_shell_tool(sandbox: Runner) -> SandboxTool:
         description=(
             "Run a command with /bin/sh in the job workspace and return its output and exit"
             f" status. It has no network. It is stopped after {settings.timeout:g} seconds,"
-            f" and output past {settings.output_limit} bytes is cut. Only the workspace is"
-            " writable, plus a small /tmp; nothing but the workspace is kept between calls."
+            f" and output past {settings.output_limit} bytes is cut. Only files in the"
+            " workspace are kept between calls."
         ),
         input_schema={
             "type": "object",

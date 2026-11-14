@@ -23,16 +23,17 @@ def with_docker[T](handler: Handler, body: Callable[[Docker], Awaitable[T]]) -> 
     return asyncio.run(go())
 
 
-def test_create_sends_the_config_to_the_pinned_api_version_and_returns_the_id() -> None:
+def test_create_sends_the_name_and_config_to_the_pinned_api_version() -> None:
     seen: list[httpx2.Request] = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         seen.append(request)
         return httpx2.Response(201, json={"Id": "abc", "Warnings": []})
 
-    assert with_docker(handler, lambda docker: docker.create({"Image": "x"})) == "abc"
+    with_docker(handler, lambda docker: docker.create("sandbox-1", {"Image": "x"}))
     assert seen[0].method == "POST"
     assert seen[0].url.path == "/v1.45/containers/create"
+    assert dict(seen[0].url.params) == {"name": "sandbox-1"}
     assert json.loads(seen[0].content) == {"Image": "x"}
 
 
@@ -41,7 +42,7 @@ def test_an_error_status_carries_dockers_message() -> None:
         return httpx2.Response(404, json={"message": "No such image: x"})
 
     with pytest.raises(DockerError, match="404: No such image: x") as raised:
-        with_docker(handler, lambda docker: docker.create({"Image": "x"}))
+        with_docker(handler, lambda docker: docker.create("sandbox-1", {"Image": "x"}))
     assert raised.value.status == 404
 
 
@@ -71,6 +72,15 @@ def test_wait_returns_the_exit_status() -> None:
         return httpx2.Response(200, json={"StatusCode": 3})
 
     assert with_docker(handler, lambda docker: docker.wait("abc")) == 3
+
+
+@pytest.mark.parametrize("body", [[], {}, {"StatusCode": "3"}, "x"])
+def test_wait_without_an_exit_status_is_a_sandbox_error(body: object) -> None:
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=body)
+
+    with pytest.raises(SandboxError, match="no exit status"):
+        with_docker(handler, lambda docker: docker.wait("abc"))
 
 
 async def frames() -> AsyncIterator[bytes]:

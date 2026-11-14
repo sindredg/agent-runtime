@@ -6,11 +6,13 @@ payload size as a 32-bit big-endian number, then the payload. A frame can be
 split across the chunks the connection delivers.
 """
 
+from runtime.sandbox.docker import SandboxError
+
 HEADER_SIZE = 8
 _STREAMS = frozenset({1, 2})
 
 
-class FramingError(Exception):
+class FramingError(SandboxError):
     """The bytes are not Docker's frames."""
 
 

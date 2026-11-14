@@ -456,8 +456,8 @@ async def _run(
         # not write to the workspace: the job may be finished and its
         # workspace removed by now.
         lease.check()
-        # Files that are already there are left alone, so a job that is
-        # taken over keeps what its tools wrote and gets back what is missing.
+        # Made with the spec's files on the first claim only. A job that is
+        # taken over finds its workspace as its tools left it.
         workspace = await asyncio.to_thread(
             prepare_workspace, settings.workspace_root, job.id, spec.files
         )

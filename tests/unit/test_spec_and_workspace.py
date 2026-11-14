@@ -1,6 +1,7 @@
 """The job spec's validation and the workspace it seeds."""
 
 import os
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -95,24 +96,101 @@ def everything_under(directory: Path) -> set[str]:
 @pytest.mark.parametrize("name", ["../escape.txt", "/escape.txt", "a/../../escape.txt"])
 def test_workspace_refuses_a_file_outside_it(tmp_path: Path, name: str) -> None:
     with pytest.raises(PathNotAllowed):
-        prepare_workspace(tmp_path / "root", JOB, {name: "x"})
-    # Nothing was written anywhere: only the empty workspace exists.
-    assert everything_under(tmp_path) == {"root", f"root/{JOB}"}
+        prepare_workspace(tmp_path / "root", JOB, {"ok.txt": "x", name: "x"})
+    # Nothing was created: the names are checked first.
+    assert everything_under(tmp_path) == set()
     assert not Path("/escape.txt").exists()
 
 
-@pytest.mark.parametrize("name", ["out/escape.txt", "out/made/by/seeding/escape.txt"])
-def test_workspace_creates_nothing_through_a_symlink_that_leaves_it(
-    tmp_path: Path, name: str
+def leave_a_link_out(workspace: Path, outside: Path) -> None:
+    (workspace / "hello.txt").unlink()
+    os.symlink(outside, workspace / "hello.txt")
+
+
+def leave_a_loop(workspace: Path, outside: Path) -> None:
+    (workspace / "hello.txt").unlink()
+    os.symlink("hello.txt", workspace / "hello.txt")
+
+
+def replace_a_directory_with_a_file(workspace: Path, outside: Path) -> None:
+    (workspace / "a" / "b" / "c.txt").unlink()
+    (workspace / "a" / "b").rmdir()
+    (workspace / "a" / "b").write_text("now a file")
+
+
+def remove_a_file(workspace: Path, outside: Path) -> None:
+    (workspace / "hello.txt").unlink()
+
+
+def lock_the_workspace(workspace: Path, outside: Path) -> None:
+    workspace.chmod(0)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [leave_a_link_out, leave_a_loop, replace_a_directory_with_a_file, remove_a_file,
+     lock_the_workspace],
+)  # fmt: skip
+def test_a_workspace_that_exists_is_left_as_the_tools_left_it(
+    tmp_path: Path, command: Callable[[Path, Path], None]
 ) -> None:
+    """What a command in the sandbox can leave behind does not stop the next claim."""
     outside = tmp_path / "outside"
     outside.mkdir()
-    workspace = prepare_workspace(tmp_path / "root", JOB, {})
-    os.symlink(outside, workspace / "out")
-    with pytest.raises(PathNotAllowed):
-        prepare_workspace(tmp_path / "root", JOB, {name: "x"})
-    # Not the file, and not the directories on the way to it.
+    files = {"hello.txt": "Hi\n", "a/b/c.txt": "deep"}
+    workspace = prepare_workspace(tmp_path / "root", JOB, files)
+    command(workspace, outside)
+    before = os.lstat(workspace)
+
+    assert prepare_workspace(tmp_path / "root", JOB, files) == workspace
+
+    assert os.lstat(workspace) == before
     assert list(outside.iterdir()) == []
+    workspace.chmod(0o700)
+
+
+def test_a_file_a_tool_removed_is_not_written_again(tmp_path: Path) -> None:
+    workspace = prepare_workspace(tmp_path, JOB, {"hello.txt": "Hi\n"})
+    (workspace / "hello.txt").unlink()
+
+    prepare_workspace(tmp_path, JOB, {"hello.txt": "Hi\n"})
+
+    assert list(workspace.iterdir()) == []
+
+
+def test_a_workspace_half_made_by_a_stopped_worker_is_made_again(tmp_path: Path) -> None:
+    staging = tmp_path / f".{JOB}.new"
+    staging.mkdir()
+    (staging / "partial.txt").write_text("from the worker that stopped")
+
+    workspace = prepare_workspace(tmp_path, JOB, {"hello.txt": "Hi\n"})
+
+    assert everything_under(tmp_path) == {str(JOB), f"{JOB}/hello.txt"}
+    assert (workspace / "hello.txt").read_text() == "Hi\n"
+
+
+def test_remove_workspace_removes_directories_a_command_locked(tmp_path: Path) -> None:
+    workspace = prepare_workspace(tmp_path, JOB, {"a/b/c.txt": "deep"})
+    (workspace / "a" / "b").chmod(0)
+    (workspace / "a").chmod(0o500)
+    remove_workspace(tmp_path, JOB)
+    assert everything_under(tmp_path) == set()
+
+
+def test_remove_workspace_does_not_follow_links_out(tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    (outside / "inner").mkdir(parents=True)
+    (outside / "inner").chmod(0o500)
+    workspace = prepare_workspace(tmp_path / "root", JOB, {"a.txt": "x"})
+    os.symlink(outside, workspace / "out")
+    (workspace / "locked").mkdir()
+    (workspace / "locked").chmod(0)
+
+    remove_workspace(tmp_path / "root", JOB)
+
+    assert not workspace.exists()
+    assert (outside / "inner").stat().st_mode & 0o777 == 0o500
+    (outside / "inner").chmod(0o700)
 
 
 def test_remove_workspace_deletes_one_job_and_nothing_else(tmp_path: Path) -> None:

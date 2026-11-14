@@ -16,7 +16,7 @@ import httpx2
 API_VERSION = "1.45"
 # Seconds for one request. Reading the output of a running command has no
 # such limit: the command's own timeout bounds it.
-REQUEST_TIMEOUT = 30.0
+REQUEST_TIMEOUT = 10.0
 
 
 class SandboxError(Exception):
@@ -71,13 +71,12 @@ class Docker:
             raise DockerError(response.status_code, _message(response))
         return response
 
-    async def create(self, config: dict[str, Any]) -> str:
-        """Create a container and return its id. The image must be there: nothing is pulled."""
-        response = await self._send("POST", "/containers/create", 201, json=config)
-        container_id = response.json().get("Id")
-        if not isinstance(container_id, str) or not container_id:
-            raise SandboxError("Docker created a container but gave no id")
-        return container_id
+    async def create(self, name: str, config: dict[str, Any]) -> None:
+        """Create a container with this name. The image must be there: nothing is pulled.
+
+        The other calls take the name in place of an id.
+        """
+        await self._send("POST", "/containers/create", 201, params={"name": name}, json=config)
 
     @asynccontextmanager
     async def attach(self, container_id: str) -> AsyncIterator[AsyncIterator[bytes]]:
@@ -103,7 +102,10 @@ class Docker:
     async def wait(self, container_id: str) -> int:
         """Wait until the container has stopped and return its exit status."""
         response = await self._send("POST", f"/containers/{container_id}/wait", 200)
-        status = response.json().get("StatusCode")
+        try:
+            status = response.json()["StatusCode"]
+        except ValueError, LookupError, TypeError:
+            status = None
         if not isinstance(status, int):
             raise SandboxError("Docker gave no exit status")
         return status

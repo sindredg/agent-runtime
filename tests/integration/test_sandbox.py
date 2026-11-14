@@ -40,8 +40,11 @@ def docker_cli(*args: str) -> str:
     ).stdout
 
 
-def our_containers() -> list[str]:
-    return docker_cli("ps", "--all", "--quiet", "--filter", f"label={LABEL}").split()
+def our_containers(volume: str) -> list[str]:
+    """Sandbox containers that mount this test's volume, running or not."""
+    return docker_cli(
+        "ps", "--all", "--quiet", "--filter", f"label={LABEL}", "--filter", f"volume={volume}"
+    ).split()
 
 
 @pytest.fixture
@@ -116,7 +119,7 @@ def test_output_and_exit_status_come_back(
     assert sorted(done.output.splitlines()) == [b"err", b"out"]
     assert done.total == 8
     assert not done.truncated
-    assert our_containers() == []
+    assert our_containers(workspace_volume[1]) == []
 
 
 def test_the_container_has_only_its_jobs_directory_and_no_privileges(
@@ -161,7 +164,7 @@ def test_a_command_past_its_timeout_is_killed_and_its_container_removed(
     assert done.timed_out
     assert done.output == b"started\n"
     assert took < TIMEOUT + 5
-    assert our_containers() == []
+    assert our_containers(workspace_volume[1]) == []
 
 
 def test_output_past_the_limit_is_counted_and_not_kept(
@@ -175,6 +178,33 @@ def test_output_past_the_limit_is_counted_and_not_kept(
     assert done.total == 100_000_000
     assert len(done.output) == LIMIT
     assert done.truncated
+
+
+@pytest.mark.parametrize("cancels", [1, 2])
+def test_a_cancelled_call_still_removes_its_container(
+    settings: SandboxSettings, workspace_volume: tuple[Path, str], cancels: int
+) -> None:
+    """Also when the removal itself is cancelled once more, as a shutdown can do."""
+    job_id = new_workspace(workspace_volume[0])
+
+    async def go() -> None:
+        docker = Docker(SOCKET)
+        call = asyncio.ensure_future(Sandbox(docker, settings).run(job_id, ["sleep", "30"]))
+        await asyncio.sleep(1.0)
+        for _ in range(cancels):
+            call.cancel()
+            await asyncio.sleep(0.005)
+        with pytest.raises(asyncio.CancelledError):
+            await call
+        # The shielded removal goes on without the cancelled call.
+        for _ in range(100):
+            if not our_containers(workspace_volume[1]):
+                break
+            await asyncio.sleep(0.1)
+        await docker.aclose()
+
+    asyncio.run(go())
+    assert our_containers(workspace_volume[1]) == []
 
 
 # The G9 cases through a whole job: each becomes a tool result, and the job goes on.
@@ -208,7 +238,7 @@ def test_bad_output_becomes_tool_results_and_the_job_goes_on(
     assert undecodable["is_error"] is False
     assert undecodable["content"] == "bad �� bytes � end\n[exit status 0]"
     assert not any("truncated" in result for result in (timed_out, failed, undecodable))
-    assert our_containers() == []
+    assert our_containers(workspace_volume[1]) == []
 
     # What the model was sent, by the fake provider's own log: every result,
     # in the last request of the job.

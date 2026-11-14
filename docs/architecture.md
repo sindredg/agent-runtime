@@ -20,6 +20,9 @@ flowchart LR
     W2 --> WS
     W1 -->|create_issue| T[fake-tracker]
     W2 --> T
+    W1 -->|Docker socket| D[Docker]
+    D --> C[tool container, one per call]
+    C --> WS
     M[migrate] --> DB
 ```
 
@@ -32,7 +35,8 @@ flowchart LR
 | `fake-provider` | `services/fake_provider/` | Answers `POST /v1/messages` from scenario files and keeps a log of the requests in memory, the newest 10,000 ([ADR 0003](adr/0003-official-sdk-and-a-wire-compatible-fake.md)). A scenario turn can ask for a delay. |
 | `fake-tracker` | `services/fake_tracker/` | A stand-in for an issue tracker. Stores the issues it is sent with their operation ids, in memory, up to 100,000, and never merges two. |
 | Provider client | `src/runtime/provider/` | The worker's one way to call a model: the official SDK behind a `Provider` interface. |
-| Tools | `src/runtime/tools/` | `read_file`, `create_issue`, and `crash_worker` for failure tests. They run inside the worker process, not in a sandbox. |
+| Tools | `src/runtime/tools/` | `list_dir` and `run_shell` run in a container per call. `read_file`, `create_issue`, and `crash_worker` for failure tests run inside the worker process. |
+| Sandbox | `src/runtime/sandbox/`, `images/sandbox/` | Starts one container per sandboxed tool call through the Docker Engine API on the unix socket, reads its output from the attach stream, and removes it ([ADR 0008](adr/0008-run-each-tool-call-in-its-own-container.md)). The `sandbox-image` service builds the image, checks that it starts, and exits. |
 | CLI | `src/runtime/cli.py` | `runtime submit`, `status`, `logs`, `approve`. Talks to the API only. |
 
 ## How a job runs
@@ -58,7 +62,7 @@ sequenceDiagram
         W->>D: step model_response with tokens_used (fenced)
         opt the message calls tools, one at a time
             W->>D: step tool_intent (fenced)
-            W->>W: run the tool
+            W->>W: run the tool, in the worker or in a container
             W->>D: step tool_result (fenced)
         end
     end
@@ -122,7 +126,7 @@ that are `queued`, `waiting` or `running`.
 | `model_request` | `model`, `max_tokens`, `messages` (a count) | Before each model call |
 | `model_response` | `id`, `content`, `stop_reason`, `usage`. `problem` if the response cannot be used. If the content cannot be stored, it is replaced by an empty list and `content_dropped` is set. | After each model call, in one statement with the `tokens_used` update |
 | `tool_intent` | `tool_use_id`, `name`, `input` | Before every run of a tool. A call that is run again gets a new one. |
-| `tool_result` | `tool_use_id`, `content`, `is_error`. `recovered` when the result came from the tool's check and the tool did not run again. | After a tool ran, or could not run |
+| `tool_result` | `tool_use_id`, `content`, `is_error`. `recovered` when the result came from the tool's check and the tool did not run again. `truncated` when the output was cut to fit 64 KiB. | After a tool ran, or could not run |
 | `approval_requested` | `tool_use_id`, `name`, `input`, `operation_id`, `reason` | When nobody can tell whether an interrupted call happened |
 | `approval_given` | `tool_use_id`, `operation_id` | By `POST /jobs/{id}/approve` |
 | `error` | `message` | When the job fails, by its worker or by the claim at the takeover limit |
@@ -160,11 +164,12 @@ move inside its `UPDATE`. Nothing calls it yet: it is there for cancel.
 | Dropping a job | On `LeaseLost`, or when the database cannot be reached, the worker drops the job: it writes nothing more, starts no tool and no model call, and leaves the status and the workspace alone. A model call in flight is cancelled as soon as a heartbeat is refused: its answer would be refused too, so the worker does not wait for it. What the provider did up to the cancel may still be billed. A call is not cancelled for the worker's own deadline alone: its answer is still stored if nobody took the job. The job stays as it is until its lease runs out and another worker takes it over. |
 | Duplicate steps | A second step with the same (`job_id`, `seq`) is refused. In a fenced write the refusal undoes the token count with it. |
 | Resume | See [What happens when a worker goes away](#what-happens-when-a-worker-goes-away). |
-| Graceful stop | On SIGTERM the worker claims nothing more. At the next step boundary it releases the job: `running` to `queued`, fenced, so the next claim is not a takeover. A model call in flight is cancelled at once. A running tool is waited for and its result stored. The compose stack gives the worker 30 seconds before Docker kills it. |
+| Graceful stop | On SIGTERM the worker claims nothing more. At the next step boundary it releases the job: `running` to `queued`, fenced, so the next claim is not a takeover. A model call in flight is cancelled at once. A running tool is waited for and its result stored. The compose stack gives the worker 45 seconds before Docker kills it, longer than the sandbox timeout of 30. |
+| Sandbox | Each `run_shell` or `list_dir` call is one container (`sandbox/runner.py`), created from fixed settings: the model's input becomes only the command's arguments. No network, a read-only root with an in-memory `/tmp` of 16 MiB, all capabilities dropped, `no-new-privileges`, uid 10001, 1 CPU, 256 MiB of memory and no swap, 64 processes, no log driver. The one mount is the job's directory of the workspace volume, by `volume-subpath`, at `/workspace`. The worker names the container itself, reads stdout and stderr from the attach stream as one stream, and keeps the first 64 KiB. The timeout counts from the start to the exit status; when it passes, the container is killed. It is removed by name after every call, also when the call was cancelled, in a task that a second cancel does not stop. The result is the output, then the exit status or the timeout, and a note if the output was cut. Invalid UTF-8 and NUL bytes become U+FFFD, and the whole text is at most 64 KiB. A non-zero exit, a timeout, or a Docker failure is an error result, and the job goes on. A Docker failure before the start says the command did not run; after it, that it may have run. |
 | Tool calls | A response is checked before any of its tools run: every tool call needs an id, a name and an object input, ids must differ, and no id may repeat one from an earlier response of the job. A response that fails the check fails the job. The calls of one response run one after another. A failed call is an error result for the model, and the job goes on. |
 | Provider errors | A failed model call fails the job with an `error` step. There is no retry. |
 | Limits | `token_budget` and `deadline` are stored and not enforced. `tokens_used` is counted from the usage of each response that was received in full. A call that fails or is abandoned part way is not counted. |
-| Workspace | `WORKSPACE_ROOT/<job id>`. Files from the spec are written if they are missing and left alone if they are there, so a job that is taken over keeps what its tools wrote. In the stack every worker mounts the same volume. Only the worker that made a job final removes its workspace. `read_file` refuses absolute paths, `..`, and symlinks that lead out, checked after symlinks are followed. |
+| Workspace | `WORKSPACE_ROOT/<job id>`. Made once, by the first claim: the files from the spec are written into `.<job id>.new` and the directory is renamed into place, so it appears whole or not at all. A later claim finds it and leaves it exactly as the tools left it, also when a command removed, replaced or locked a file of the spec. In the stack every worker mounts the same volume. Only the worker that made a job final removes its workspace, after giving the owner back access to any directory a command locked. `read_file` refuses absolute paths, `..`, and symlinks that lead out, checked after symlinks are followed. |
 | Event stream | The API polls for steps with a higher `seq`. Status and steps are read in one statement, so when the status is final every step has been seen. |
 
 ### Interrupted tool calls
@@ -195,6 +200,8 @@ is asked again.
 | `read_file` | Yes | |
 | `create_issue` | No | Asks the tracker for an issue with the operation id. Found: done. A clear answer with none: not done. Anything else: unknown. |
 | `crash_worker` | Yes, on purpose | |
+| `list_dir` | Yes | |
+| `run_shell` | No | None: an interrupted command needs a person |
 
 `create_issue` uses the same lookup when its own request gets no answer: a
 timeout or a broken connection. Found: the result says the issue was created.
@@ -245,6 +252,11 @@ routes answer 404 for a job that does not exist. FastAPI also serves `/docs`,
 | `POLL_INTERVAL_SECONDS` | worker | 1 | Wait between two looks for a job when none was found. |
 | `WORKER_ID` | worker | host name and process id | Stored as `lease_owner`. |
 | `WORKER_ALIVE_FILE` | worker | `/tmp/worker.alive` | Touched every 5 seconds. The compose health check reads its age at this path. |
+| `SANDBOX_IMAGE` | worker | unset | The image of the tool containers. Unset, `run_shell` and `list_dir` are not offered. The stack sets it to `agent-runtime-sandbox:dev`, which it builds. |
+| `SANDBOX_VOLUME` | worker | required with `SANDBOX_IMAGE` | The named volume mounted at `WORKSPACE_ROOT`. A tool container gets the job's directory of it. The stack sets it to `agent-runtime_workspaces`. |
+| `SANDBOX_TIMEOUT_SECONDS` | worker | 30 | Time a sandboxed command may run before its container is killed. |
+| `DOCKER_SOCKET` | worker | `/var/run/docker.sock` | The Docker Engine API socket. The stack mounts the host's socket there. |
+| `DOCKER_GID` | compose | set by `make` | The group of the host's Docker socket, added to the worker so it can use the socket. Every compose command needs it. |
 | `FAILPOINT`, `FAILPOINT_TOOL`, `CHAOS_TOOLS`, `CHAOS_LOG_DIR` | worker | unset | See [Failure tests](#failure-tests). |
 | `DEFAULT_TOKEN_BUDGET` | api | 1000000 | For a submission without `token_budget`. |
 | `DEFAULT_TIMEOUT_SECONDS` | api | 3600 | For a submission without `timeout_seconds`. |
@@ -261,8 +273,8 @@ stack by accident. See `.env.example`.
 
 | Suite | Needs | Covers |
 |---|---|---|
-| `tests/unit` | nothing | Status transitions, replay, the decision about an interrupted call, the lease deadline with a fake clock, failpoints, scenario parsing, the fake provider and the fake tracker in process, the provider client's failure handling, the tools, the CLI against a stubbed API. |
-| `tests/integration` | `make up` | Migrations. The store on real Postgres: claims, takeovers, the limit, fenced writes with two connections. The worker against the fake provider: heartbeat, lost lease, resume at each interruption point, each row of the decision table, approval, graceful stop, each failpoint. The API over HTTP. Two jobs end to end through the stack. |
+| `tests/unit` | nothing | Status transitions, replay, the decision about an interrupted call, the lease deadline with a fake clock, failpoints, scenario parsing, the fake provider and the fake tracker in process, the provider client's failure handling, the tools, the container settings, the output cut and the result text, the Docker client against a mock transport, the CLI against a stubbed API. |
+| `tests/integration` | `make up` | Migrations. The store on real Postgres: claims, takeovers, the limit, fenced writes with two connections. The worker against the fake provider: heartbeat, lost lease, resume at each interruption point, each row of the decision table, approval, graceful stop, each failpoint. The API over HTTP. The sandbox against the Docker daemon: output and exit status, the container's settings, the timeout, the cut, and a job whose commands misbehave in four ways. Three jobs end to end through the stack. |
 | `tests/chaos` | `make chaos` | Workers that are killed at random times, end themselves at failpoints, are paused past their lease, crash on every run, and get SIGTERM. Each test writes its result to `.chaos/results.jsonl` when it is over, with a `verdict`: `passed`, `failed`, or `void` when the machine's clock was set during the run. See the [results](../README.md#results). |
 | `tests/contract` | `make up`, a Claude API key | The fake provider against the Claude API: the same tool call exchange through the runtime's client, the raw JSON of both responses, and the refusal of an unknown model. Everything the fake returns has to be in what the API returns. The fake returns less: the API's `tool_use` block has a `caller` field, for example. Run by hand; see the [README](../README.md#development) for the last run. |
 
@@ -281,7 +293,11 @@ Accepted, with the reason in the decision records:
   If a check answered "not done" for that call in the meantime and it was run
   again, the change is made twice and no person was asked.
 - A tool that is running when its worker loses the lease runs to its end.
-  Tools run in the worker process and cannot be stopped from outside.
+  A tool in the worker process cannot be stopped from outside. A sandboxed
+  command runs until it ends or reaches its timeout.
+- The worker holds the Docker socket. Whoever controls the worker controls
+  the host. Tool containers share the host's kernel
+  ([ADR 0008](adr/0008-run-each-tool-call-in-its-own-container.md)).
 - "Not done" from a tool's check is the tool author's claim. A check that
   cannot rule out a request still on its way has to answer unknown.
 - The worker's lease deadline is on its monotonic clock and the lease itself
@@ -298,9 +314,29 @@ Not built or not closed:
 
 - A failed model call fails the job. There is no retry and no backoff.
 - Budget and deadline are not enforced. A job cannot be cancelled.
-- Tools run in the worker process. There is no sandbox, no output cap and no
-  tool timeout. A tool that outlasts the stop grace period is killed with its
-  worker, and the job is taken over when its lease runs out.
+- `read_file`, `create_issue` and `crash_worker` run in the worker process,
+  with no general timeout. A tool that outlasts the stop grace period is
+  killed with its worker, and the job is taken over when its lease runs out.
+- A tool container whose worker is killed keeps running until its command
+  ends, and is not removed. Nothing bounds it from inside the container yet.
+  A worker that takes the job over decides about the interrupted call at
+  once, without waiting for that container: `run_shell` asks a person, and
+  `list_dir` runs again.
+- Tool containers have no network at all. A target scope is not built.
+- The workspace has no disk quota. A command can fill the disk that holds
+  the Docker volumes, Postgres among them, for the length of its timeout,
+  and the next call can go on
+  ([issue 28](https://github.com/sindredg/agent-runtime/issues/28)).
+- Besides the workspace and `/tmp`, a command can write to `/dev/shm` (counted
+  against its memory limit) and `/dev/mqueue`. Neither outlives the call.
+- Only the command's run is under the timeout. Creating the container,
+  attaching and removing it each have a 10 second request timeout, so a slow
+  Docker daemon can make a call outlast the 45 second stop grace period.
+  `SANDBOX_TIMEOUT_SECONDS` is not checked against that period
+  ([issue 29](https://github.com/sindredg/agent-runtime/issues/29)).
+- A container whose `create` was cut off by a cancel is removed by name. If
+  Docker had not created it yet when the removal arrived, it is left in the
+  `created` state, without running.
 - A worker told to stop while it writes a `tool_intent` step still runs that
   tool, because the intent is already in the log.
 - The operation id protects a call that the runtime runs again. It does not
@@ -312,7 +348,7 @@ Not built or not closed:
 - `not_before` and `cancel_requested` are columns that nothing reads or sets
   yet.
 - All workers have to see the same workspace directory. The stack does that
-  with one volume on one host.
+  with one volume on one host. Tool containers mount the same volume by name.
 - The whole conversation is sent with every model call. A job that outgrows
   the model's context window fails.
 - The API has no authentication, and it does not cap the size of a request

@@ -11,7 +11,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from runtime.sandbox.docker import SandboxError
-from runtime.sandbox.runner import Run, SandboxSettings
+from runtime.sandbox.runner import NotStarted, Run, SandboxSettings
 from runtime.store.payload import check_json
 from runtime.tools.base import ToolCall, ToolResult
 from runtime.tools.list_dir import list_dir_tool
@@ -102,12 +102,24 @@ def test_only_list_dir_is_idempotent() -> None:
     assert not run_shell_tool(FakeSandbox()).idempotent
 
 
-def test_a_sandbox_that_fails_gives_an_error_result() -> None:
+def test_a_sandbox_that_fails_after_the_start_says_the_command_may_have_run() -> None:
     sandbox = FakeSandbox(SandboxError("Docker could not be reached"))
     result = call(run_shell_tool(sandbox), {"command": "true"})
 
     assert result.is_error
-    assert "Docker could not be reached" in result.content
+    assert result.content == (
+        "the sandbox failed: Docker could not be reached. The command may have run."
+    )
+
+
+def test_a_sandbox_that_fails_before_the_start_says_the_command_did_not_run() -> None:
+    sandbox = FakeSandbox(NotStarted("Docker answered 404: No such image: x"))
+    result = call(run_shell_tool(sandbox), {"command": "true"})
+
+    assert result.is_error
+    assert result.content == (
+        "the sandbox could not start the command: Docker answered 404: No such image: x"
+    )
 
 
 # The result the model gets
