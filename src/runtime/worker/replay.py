@@ -33,6 +33,9 @@ class Replay:
     problem: str | None = None
     # `seq` of the last step folded in, 0 before the first.
     last_seq: int = 0
+    # The id of every tool call the model has made in this job. A call's
+    # operation id is built from its id, so no later call may use one again.
+    used_ids: set[str] = field(default_factory=set)
 
     @property
     def needs_model_call(self) -> bool:
@@ -66,6 +69,7 @@ class Replay:
                 if self.problem
                 else [block for block in content if block.get("type") == "tool_use"]
             )
+            self.used_ids.update(block["id"] for block in self.pending)
             self.stop_reason = payload["stop_reason"]
             self.interrupted, self.approval = None, None
         elif step.kind is StepKind.TOOL_INTENT:

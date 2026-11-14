@@ -160,7 +160,7 @@ move inside its `UPDATE`. Nothing calls it yet: it is there for cancel.
 | Duplicate steps | A second step with the same (`job_id`, `seq`) is refused. In a fenced write the refusal undoes the token count with it. |
 | Resume | See [What happens when a worker goes away](#what-happens-when-a-worker-goes-away). |
 | Graceful stop | On SIGTERM the worker claims nothing more. At the next step boundary it releases the job: `running` to `queued`, fenced, so the next claim is not a takeover. A model call in flight is cancelled at once. A running tool is waited for and its result stored. The compose stack gives the worker 30 seconds before Docker kills it. |
-| Tool calls | A response is checked before any of its tools run: every tool call needs an id, a name and an object input, and ids must differ. The calls of one response run one after another. A failed call is an error result for the model, and the job goes on. |
+| Tool calls | A response is checked before any of its tools run: every tool call needs an id, a name and an object input, ids must differ, and no id may repeat one from an earlier response of the job. A response that fails the check fails the job. The calls of one response run one after another. A failed call is an error result for the model, and the job goes on. |
 | Provider errors | A failed model call fails the job with an `error` step. There is no retry. |
 | Limits | `token_budget` and `deadline` are stored and not enforced. `tokens_used` is counted from the usage of each response that was received in full. A call that fails or is abandoned part way is not counted. |
 | Workspace | `WORKSPACE_ROOT/<job id>`. Files from the spec are written if they are missing and left alone if they are there, so a job that is taken over keeps what its tools wrote. In the stack every worker mounts the same volume. Only the worker that made a job final removes its workspace. `read_file` refuses absolute paths, `..`, and symlinks that lead out, checked after symlinks are followed. |
@@ -301,8 +301,7 @@ Not built or not closed:
   `error` step in the middle of its log.
 - The operation id protects a call that the runtime runs again. It does not
   protect against the model: a model that is told a call failed and asks for
-  it again makes a new call with a new id. A model that reuses a call id in a
-  later turn gets the same operation id for a different call.
+  it again makes a new call with a new id.
 - A worker that learns from its heartbeat that the lease is gone does not
   cancel a model call in flight. The call runs to its end and its answer is
   then refused.
