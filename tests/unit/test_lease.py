@@ -1,5 +1,6 @@
 """The worker's own view of its lease: a deadline on its monotonic clock."""
 
+import asyncio
 from datetime import timedelta
 from uuid import uuid4
 
@@ -96,3 +97,38 @@ def test_a_lease_marked_lost_is_over_whatever_the_clock_says() -> None:
 def test_a_lease_must_have_a_positive_length() -> None:
     with pytest.raises(ValueError, match="positive"):
         lease_of(0, FakeClock())
+
+
+def test_waiting_for_the_loss_ends_when_the_database_refused_the_lease() -> None:
+    async def body() -> bool:
+        lease = lease_of(30, FakeClock())
+        waiting = asyncio.ensure_future(lease.wait_lost())
+        await asyncio.sleep(0.01)
+        before = waiting.done()
+        lease.mark_lost()
+        async with asyncio.timeout(1):
+            await waiting
+        return before
+
+    assert asyncio.run(body()) is False
+
+
+def test_waiting_for_the_loss_does_not_end_when_only_the_deadline_passed() -> None:
+    """Past the deadline the worker starts nothing new, but the job may still be its own.
+
+    A model answer that arrives then is still stored if nobody took the job,
+    so a call in flight is not given up for the deadline alone.
+    """
+
+    async def body() -> bool:
+        clock = FakeClock()
+        lease = lease_of(30, clock)
+        waiting = asyncio.ensure_future(lease.wait_lost())
+        clock.now += 3600
+        await asyncio.sleep(0.01)
+        done = waiting.done()
+        waiting.cancel()
+        await asyncio.gather(waiting, return_exceptions=True)
+        return done
+
+    assert asyncio.run(body()) is False

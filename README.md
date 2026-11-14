@@ -229,13 +229,21 @@ Individual checks:
 | `uv run pre-commit install` | Run lint, format, type, JSON and YAML checks before each commit. It does not run tests. |
 
 The contract test compares the fake provider with the Claude API. It sends
-four small requests to the Claude API, one of which is refused on purpose, and
-is run by hand. It has not been run yet:
+five small requests to the Claude API, one of which is refused on purpose, and
+is run by hand:
 
 ```sh
 make up
 ANTHROPIC_API_KEY=<key> CONTRACT_MODEL=<model id> uv run pytest tests/contract
 ```
+
+It was run once, on 2026-11-14, against `claude-haiku-5-5` at commit 8f73f6e.
+Three of four tests passed: the runtime's client completed a tool call and
+its answer against the API, and both providers refuse an unknown model with
+the same error shape. The fourth test failed on an assumption of its own. It
+expected text before the tool call in the same response, and the model wrote
+none. The comparison now covers both responses of the exchange. That version
+has not been run against the API yet.
 
 The schema is defined by the Alembic migrations in `migrations/`. Print the
 SQL without a database:

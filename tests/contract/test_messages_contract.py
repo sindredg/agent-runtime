@@ -1,14 +1,14 @@
 """The fake provider and the Claude API answer the same requests the same way.
 
-Run by hand, never in CI: it calls the Claude API (four small requests) and
-needs a key.
+Run by hand, never in CI: it calls the Claude API (five small requests, one
+of them refused on purpose) and needs a key.
 
     make up
     ANTHROPIC_API_KEY=... CONTRACT_MODEL=<model id> uv run pytest tests/contract
 
 The same two-turn exchange (a tool call, then the answer) runs against both
-providers through the runtime's own client. Then the raw JSON of one
-response from each is compared: everything the fake returns must also be in
+providers through the runtime's own client. Then the raw JSON of the same
+exchange from each is compared: everything the fake returns must also be in
 what the real API returns.
 """
 
@@ -110,11 +110,13 @@ def test_tool_call_then_answer(name: str) -> None:
     assert any(block["type"] == "text" and block["text"] for block in second.content)
 
 
-def raw_message(base_url: str, api_key: str, model: str) -> dict[str, Any]:
+def raw_message(
+    base_url: str, api_key: str, model: str, messages: list[dict[str, Any]]
+) -> dict[str, Any]:
     response = httpx2.post(
         f"{base_url}/v1/messages",
         headers={"x-api-key": api_key, "anthropic-version": "2026-10-21"},
-        json={"model": model, "max_tokens": 2048, "tools": [TOOL], "messages": [PROMPT]},
+        json={"model": model, "max_tokens": 2048, "tools": [TOOL], "messages": messages},
         timeout=120,
     )
     response.raise_for_status()
@@ -122,22 +124,75 @@ def raw_message(base_url: str, api_key: str, model: str) -> dict[str, Any]:
     return message
 
 
-def test_everything_the_fake_returns_is_also_in_the_real_response() -> None:
-    fake = raw_message(*target("fake"))
-    real = raw_message(*target("claude"))
+def raw_exchange(base_url: str, api_key: str, model: str) -> list[dict[str, Any]]:
+    """The raw JSON of both responses of the exchange: the tool call, then the answer."""
+    first = raw_message(base_url, api_key, model, [PROMPT])
+    results = [
+        {"type": "tool_result", "tool_use_id": block["id"], "content": "Hello from the file."}
+        for block in first["content"]
+        if block["type"] == "tool_use"
+    ]
+    second = raw_message(
+        base_url,
+        api_key,
+        model,
+        [
+            PROMPT,
+            {"role": "assistant", "content": first["content"]},
+            {"role": "user", "content": results},
+        ],
+    )
+    return [first, second]
 
-    assert set(fake) <= set(real)
-    assert set(fake["usage"]) <= set(real["usage"])
-    for field in ("type", "role", "stop_reason", "stop_sequence"):
-        assert fake[field] == real[field]
 
-    def keys_by_type(message: dict[str, Any]) -> dict[str, set[str]]:
-        return {block["type"]: set(block) for block in message["content"]}
+def differences(fake: list[dict[str, Any]], real: list[dict[str, Any]]) -> list[str]:
+    """What the fake returns that the real API does not. Empty when there is nothing.
 
-    real_blocks = keys_by_type(real)
-    for block_type, keys in keys_by_type(fake).items():
-        assert block_type in real_blocks
-        assert keys <= real_blocks[block_type]
+    Both lists hold the responses of the same exchange, turn by turn. The
+    message fields are compared turn by turn. Content blocks are compared by
+    type over the whole exchange: a model may write text before it calls a
+    tool or not, so the turn a block type shows up in is the model's choice
+    and not the shape of the API.
+    """
+    found = []
+    if len(fake) != len(real):
+        return [f"the fake gave {len(fake)} responses, the API {len(real)}"]
+    for turn, (ours, theirs) in enumerate(zip(fake, real, strict=True)):
+        if extra := set(ours) - set(theirs):
+            found.append(f"turn {turn}: message fields only the fake has: {sorted(extra)}")
+        if extra := set(ours["usage"]) - set(theirs["usage"]):
+            found.append(f"turn {turn}: usage fields only the fake has: {sorted(extra)}")
+        found += [
+            f"turn {turn}: {field} is {ours[field]!r} in the fake and {theirs[field]!r} in the API"
+            for field in ("type", "role", "stop_reason", "stop_sequence")
+            if ours[field] != theirs[field]
+        ]
+
+    def blocks_by_type(responses: list[dict[str, Any]]) -> dict[str, list[set[str]]]:
+        """The field names of every content block of the exchange, grouped by block type."""
+        blocks: dict[str, list[set[str]]] = {}
+        for response in responses:
+            for block in response["content"]:
+                blocks.setdefault(block["type"], []).append(set(block))
+        return blocks
+
+    real_blocks = blocks_by_type(real)
+    for block_type, blocks in blocks_by_type(fake).items():
+        if block_type not in real_blocks:
+            found.append(f"the API sent no {block_type} block in the whole exchange")
+            continue
+        # Every field the fake puts on any block of the type has to be on
+        # every block of that type the API sent.
+        always = set.intersection(*real_blocks[block_type])
+        if extra := set.union(*blocks) - always:
+            found.append(f"{block_type} block fields only the fake has: {sorted(extra)}")
+    return found
+
+
+def test_everything_the_fake_returns_is_also_in_the_real_responses() -> None:
+    fake = raw_exchange(*target("fake"))
+    real = raw_exchange(*target("claude"))
+    assert differences(fake, real) == []
 
 
 def test_both_refuse_an_unknown_model_with_the_same_error_shape() -> None:
