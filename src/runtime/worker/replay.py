@@ -31,6 +31,11 @@ class Replay:
     # Why the last assistant message cannot be used, as its `model_response`
     # step recorded it. None when it is fine.
     problem: str | None = None
+    # Input plus output tokens of the last response, and the length of the
+    # conversation then, its own message included. The budget's bound of
+    # the next call starts from them (`runtime.worker.budget`).
+    counted: int | None = None
+    counted_messages: int = 0
     # `seq` of the last step folded in, 0 before the first.
     last_seq: int = 0
     # The id of every tool call the model has made in this job. A call's
@@ -61,6 +66,9 @@ class Replay:
         if step.kind is StepKind.MODEL_RESPONSE:
             content = payload["content"]
             self.messages.append({"role": "assistant", "content": content})
+            usage = payload.get("usage") or {}
+            self.counted = int(usage.get("input_tokens", 0)) + int(usage.get("output_tokens", 0))
+            self.counted_messages = len(self.messages)
             self.problem = payload.get("problem")
             # A response with a problem is stored as it came and may not have
             # the shape of a message. No call is taken from it.

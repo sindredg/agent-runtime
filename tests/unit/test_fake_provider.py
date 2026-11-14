@@ -9,7 +9,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from fake_provider.app import create_app
-from fake_provider.messages import build_message, stream_events
+from fake_provider.messages import build_message, estimate_tokens, stream_events
 from fake_provider.scenario import Scenario, parse_scenario
 
 TWO_TURNS = parse_scenario(
@@ -175,7 +175,7 @@ blocks = st.one_of(
 def test_any_turn_survives_the_event_stream(content: list[dict[str, Any]]) -> None:
     """Whatever a scenario scripts, the pieces of the stream add up to the whole message."""
     scenario = Scenario.model_validate({"turns": [{"content": content}]})
-    message = build_message("s", scenario, 0, model="s", input_tokens=7)
+    message = build_message("s", scenario, 0, model="s", input_tokens=7, max_tokens=100_000)
     assert reassemble(list(stream_events(message))) == message
     scripted = [{k: v for k, v in block.items() if k != "id"} for block in message["content"]]
     assert scripted == content
@@ -376,7 +376,7 @@ def test_a_delayed_stream_starts_at_once_and_pauses_before_its_content() -> None
     """The wait falls inside the stream, so a client that is stopped during it is mid-stream."""
     from fake_provider.app import stream_parts
 
-    message = build_message("slow", delayed(0.3), 0, model="slow", input_tokens=1)
+    message = build_message("slow", delayed(0.3), 0, model="slow", input_tokens=1, max_tokens=100)
     parts = list(stream_parts(message, delay=0.3))
     waits = [index for index, part in enumerate(parts) if part == 0.3]
     assert len(waits) == 1
@@ -386,3 +386,57 @@ def test_a_delayed_stream_starts_at_once_and_pauses_before_its_content() -> None
     assert b"content_block_start" not in before
     assert b"content_block_start" in after
     assert b"message_stop" in after
+
+
+# max_tokens
+
+
+LONG = parse_scenario(
+    json.dumps(
+        {
+            "turns": [
+                {
+                    "content": [
+                        {"type": "text", "text": "x" * 4000},
+                        {"type": "tool_use", "name": "read_file", "input": {"path": "a"}},
+                    ]
+                }
+            ]
+        }
+    )
+)
+
+
+@pytest.mark.parametrize("max_tokens", [1, 9, 10, 50, 999])
+def test_an_answer_never_has_more_output_tokens_than_max_tokens(max_tokens: int) -> None:
+    """Like the API: a turn that needs more is cut off with stop_reason max_tokens."""
+    body = {"model": "long", "max_tokens": max_tokens, "messages": [USER]}
+
+    message = client({"long": LONG}).post("/v1/messages", json=body, headers=HEADERS).json()
+
+    assert message["stop_reason"] == "max_tokens"
+    assert message["usage"]["output_tokens"] == max_tokens
+    # No tool call survives the cut, and the text left is no longer than the count.
+    assert all(block["type"] == "text" for block in message["content"])
+    assert estimate_tokens(message["content"]) <= max(max_tokens, 1)
+
+
+def test_an_answer_that_fits_is_not_cut() -> None:
+    body = {"model": "long", "max_tokens": 5000, "messages": [USER]}
+
+    message = client({"long": LONG}).post("/v1/messages", json=body, headers=HEADERS).json()
+
+    assert message["stop_reason"] == "tool_use"
+    assert [block["type"] for block in message["content"]] == ["text", "tool_use"]
+
+
+def test_the_request_log_has_the_usage_of_each_answer() -> None:
+    app = client()
+    message = app.post("/v1/messages", json=request(), headers=HEADERS).json()
+
+    entry = app.get("/_fake/requests").json()[-1]
+
+    assert entry["usage"] == {
+        "input_tokens": message["usage"]["input_tokens"],
+        "output_tokens": message["usage"]["output_tokens"],
+    }
