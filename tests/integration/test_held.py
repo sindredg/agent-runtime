@@ -13,6 +13,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import event, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.util import await_only
 
@@ -25,7 +26,7 @@ from runtime.store.schema import jobs
 from runtime.store.status import JobStatus
 from runtime.store.steps import Step, StepConflict, StepKind, read_steps
 
-from .conftest import expire_lease, new_job, with_engine
+from .conftest import add_step, expire_lease, new_job, with_engine
 
 S = JobStatus
 
@@ -218,6 +219,58 @@ def test_a_failure_that_cannot_be_stored_is_refused_before_it_is_sent(database_u
 
     job, steps = with_engine(database_url, body)
     assert (job.status, job.error, steps) == (S.RUNNING, None, [])
+
+
+def test_a_failure_that_waits_for_the_job_row_goes_through_when_it_is_free(
+    database_url: str,
+) -> None:
+    async def body(engine: AsyncEngine) -> tuple[bool, Step, Job, list[Step]]:
+        job = await held_job(engine)
+        async with engine.connect() as other:
+            await other.execute(select(jobs.c.id).where(jobs.c.id == job.id).with_for_update())
+            waiting = asyncio.create_task(fail(engine, job.id, 1))
+            await asyncio.sleep(0.5)
+            waited = not waiting.done()
+            await other.commit()
+            async with asyncio.timeout(10):
+                step = await waiting
+        return waited, step, *await stored(engine, job.id)
+
+    waited, step, job, steps = with_engine(database_url, body)
+    assert waited
+    assert steps == [step]
+    assert (step.seq, step.kind) == (1, StepKind.ERROR)
+    assert (job.status, job.error) == (S.FAILED, FAILURE)
+
+
+def test_a_failure_whose_seq_was_taken_while_it_waited_changes_nothing(database_url: str) -> None:
+    """The failure picks its `seq` from the log as it was when the statement was sent.
+
+    Here another session holds the job row, writes the step with that `seq`
+    and commits. No worker does this: the holder writes its steps one after
+    another. If it happens, the step is refused, and the status change must
+    go with it. A job that is `failed` without its `error` step is the
+    state this write exists to rule out.
+    """
+
+    async def body(engine: AsyncEngine) -> tuple[bool, Job, list[Step]]:
+        job = await held_job(engine)
+        async with engine.connect() as other:
+            await other.execute(select(jobs.c.id).where(jobs.c.id == job.id).with_for_update())
+            await add_step(other, job.id, 1)
+            waiting = asyncio.create_task(fail(engine, job.id, 1))
+            await asyncio.sleep(0.5)
+            waited = not waiting.done()
+            await other.commit()
+            with pytest.raises(IntegrityError):
+                async with asyncio.timeout(10):
+                    await waiting
+        return waited, *await stored(engine, job.id)
+
+    waited, job, steps = with_engine(database_url, body)
+    assert waited
+    assert (job.status, job.error, job.lease_owner) == (S.RUNNING, None, "w1")
+    assert [(step.seq, step.kind) for step in steps] == [(1, StepKind.MODEL_REQUEST)]
 
 
 def test_leave_running_does_not_fail_a_job(database_url: str) -> None:

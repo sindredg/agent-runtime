@@ -57,9 +57,9 @@ def step_from_row(row: Row[Any]) -> Step:
 def next_seq(job_id: UUID) -> ScalarSelect[int]:
     """A subquery for the job's next free `seq`: its last one plus one, or 1.
 
-    Only for a statement that holds the job row's lock, or runs in a
-    transaction that does. Without the lock two writers can pick the same
-    `seq`, and the second is refused by the unique constraint.
+    It reads the log as the statement that uses it sees it. A step that is
+    committed after that is not counted: the insert then picks a `seq` that
+    is taken, and the unique constraint refuses it.
     """
     return (
         select(func.coalesce(func.max(steps.c.seq), 0) + 1)

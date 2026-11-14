@@ -173,10 +173,11 @@ async def fail(engine: AsyncEngine, *, job_id: UUID, lease_epoch: int, error: st
     a job leaves both or neither. A job that was still `running` with an
     `error` step in its log would be taken over and run on.
 
-    The step takes the next free `seq` by itself. The update holds the job
-    row's lock, and every other step for the job is written under that lock
-    too, so the `seq` cannot be taken in between. If it were, the unique
-    constraint would refuse the step and undo the status change with it.
+    The step takes the next free `seq` by itself, as the statement saw the
+    log when it was sent. The holder writes its steps one after another, so
+    nothing takes that `seq` in between. If a step did, while this statement
+    waited for the job row, the unique constraint refuses the step with
+    IntegrityError and the status change is undone with it.
     """
     payload = {"message": error}
     check_json(payload)
