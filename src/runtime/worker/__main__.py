@@ -15,6 +15,7 @@ from runtime.store.engine import create_engine
 from runtime.tools import default_tools
 from runtime.worker.agent import AgentSettings
 from runtime.worker.loop import keep_alive, work
+from runtime.worker.sweep import keep_sweeping
 
 ALIVE_INTERVAL_SECONDS = 5.0
 
@@ -56,6 +57,9 @@ async def run(config: WorkerConfig) -> None:
     try:
         async with asyncio.TaskGroup() as tasks:
             tasks.create_task(keep_alive(config.alive_file, stop, ALIVE_INTERVAL_SECONDS))
+            tasks.create_task(
+                keep_sweeping(engine, config.workspace_root, stop, config.sweep_interval)
+            )
             tasks.create_task(
                 work(
                     engine,

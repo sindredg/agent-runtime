@@ -169,7 +169,7 @@ move inside its `UPDATE`. Nothing calls it yet: it is there for cancel.
 | Tool calls | A response is checked before any of its tools run: every tool call needs an id, a name and an object input, ids must differ, and no id may repeat one from an earlier response of the job. A response that fails the check fails the job. The calls of one response run one after another. A failed call is an error result for the model, and the job goes on. |
 | Provider errors | A failed model call fails the job with an `error` step. There is no retry. |
 | Limits | `token_budget` and `deadline` are stored and not enforced. `tokens_used` is counted from the usage of each response that was received in full. A call that fails or is abandoned part way is not counted. |
-| Workspace | `WORKSPACE_ROOT/<job id>`. Made once, by the first claim: the files from the spec are written into `.<job id>.new` and the directory is renamed into place, so it appears whole or not at all. A later claim finds it and leaves it exactly as the tools left it, also when a command removed, replaced or locked a file of the spec. In the stack every worker mounts the same volume. Only the worker that made a job final removes its workspace, after giving the owner back access to any directory a command locked. `read_file` refuses absolute paths, `..`, and symlinks that lead out, checked after symlinks are followed. |
+| Workspace | `WORKSPACE_ROOT/<job id>`. Made once, by the first claim: the files from the spec are written into `.<job id>.new` and the directory is renamed into place, so it appears whole or not at all. A later claim finds it and leaves it exactly as the tools left it, also when a command removed, replaced or locked a file of the spec. In the stack every worker mounts the same volume. The worker that made a job final removes its workspace, after giving the owner back access to any directory a command locked. Every worker also sweeps its `WORKSPACE_ROOT` every `SWEEP_INTERVAL_SECONDS` (`worker/sweep.py`): it removes the directories and staging directories of jobs that are final or that the database does not know, and leaves those of open jobs and anything not named after a job. That covers a final write whose answer was lost, and a job that finished on a worker with another workspace root. `read_file` refuses absolute paths, `..`, and symlinks that lead out, checked after symlinks are followed. |
 | Event stream | The API polls for steps with a higher `seq`. Status and steps are read in one statement, so when the status is final every step has been seen. |
 
 ### Interrupted tool calls
@@ -250,6 +250,7 @@ routes answer 404 for a job that does not exist. FastAPI also serves `/docs`,
 | `TRACKER_URL` | worker | unset | The tracker `create_issue` talks to. Unset, the tool is not offered. The stack sets it to the fake tracker. |
 | `WORKSPACE_ROOT` | worker | `/tmp/workspaces` | Parent of the job workspaces. The stack sets it to the shared volume at `/workspaces`. |
 | `POLL_INTERVAL_SECONDS` | worker | 1 | Wait between two looks for a job when none was found. |
+| `SWEEP_INTERVAL_SECONDS` | worker | 300 | Time between two sweeps of `WORKSPACE_ROOT` for the workspaces of final and unknown jobs. |
 | `WORKER_ID` | worker | host name and process id | Stored as `lease_owner`. |
 | `WORKER_ALIVE_FILE` | worker | `/tmp/worker.alive` | Touched every 5 seconds. The compose health check reads its age at this path. |
 | `SANDBOX_IMAGE` | worker | unset | The image of the tool containers. Unset, `run_shell` and `list_dir` are not offered. The stack sets it to `agent-runtime-sandbox:dev`, which it builds. |
@@ -274,7 +275,7 @@ stack by accident. See `.env.example`.
 | Suite | Needs | Covers |
 |---|---|---|
 | `tests/unit` | nothing | Status transitions, replay, the decision about an interrupted call, the lease deadline with a fake clock, failpoints, scenario parsing, the fake provider and the fake tracker in process, the provider client's failure handling, the tools, the container settings, the output cut and the result text, the Docker client against a mock transport, the CLI against a stubbed API. |
-| `tests/integration` | `make up` | Migrations. The store on real Postgres: claims, takeovers, the limit, fenced writes with two connections. The worker against the fake provider: heartbeat, lost lease, resume at each interruption point, each row of the decision table, approval, graceful stop, each failpoint. The API over HTTP. The sandbox against the Docker daemon: output and exit status, the container's settings, the timeout, the cut, and a job whose commands misbehave in four ways. Three jobs end to end through the stack. |
+| `tests/integration` | `make up` | Migrations. The store on real Postgres: claims, takeovers, the limit, fenced writes with two connections. The worker against the fake provider: heartbeat, lost lease, resume at each interruption point, each row of the decision table, approval, graceful stop, each failpoint. The API over HTTP. The sandbox against the Docker daemon: output and exit status, the container's settings, the timeout, the cut, and a job whose commands misbehave in four ways. The workspace sweep: what it removes and what it keeps. Three jobs end to end through the stack. |
 | `tests/chaos` | `make chaos` | Workers that are killed at random times, end themselves at failpoints, are paused past their lease, crash on every run, and get SIGTERM. Each test writes its result to `.chaos/results.jsonl` when it is over, with a `verdict`: `passed`, `failed`, or `void` when the machine's clock was set during the run. See the [results](../README.md#results). |
 | `tests/contract` | `make up`, a Claude API key | The fake provider against the Claude API: the same tool call exchange through the runtime's client, the raw JSON of both responses, and the refusal of an unknown model. Everything the fake returns has to be in what the API returns. The fake returns less: the API's `tool_use` block has a `caller` field, for example. Run by hand; see the [README](../README.md#development) for the last run. |
 
@@ -342,9 +343,9 @@ Not built or not closed:
 - The operation id protects a call that the runtime runs again. It does not
   protect against the model: a model that is told a call failed and asks for
   it again makes a new call with a new id.
-- A workspace can be left behind: when the write that makes a job final
-  reaches the database but its answer does not reach the worker, and when two
-  workers use different workspace roots.
+- The workspace of a job that is final but left behind is removed by the next
+  sweep, up to `SWEEP_INTERVAL_SECONDS` later. A workspace root that no
+  running worker mounts is not swept.
 - `not_before` and `cancel_requested` are columns that nothing reads or sets
   yet.
 - All workers have to see the same workspace directory. The stack does that
