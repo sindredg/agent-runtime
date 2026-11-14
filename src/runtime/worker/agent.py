@@ -269,8 +269,8 @@ async def _complete_unless_stopped(
     the job next. A complete answer is never thrown away.
 
     The call is cancelled as well when the heartbeat learns that the lease
-    is gone. The answer would be refused by the fenced write, so waiting
-    for it only pays for it. Raises LeaseLost then.
+    is gone: its answer would be refused by the fenced write, so there is
+    nothing to wait for. Raises LeaseLost then.
     """
     if stop.is_set():
         # The stop arrived while the request step was written. Nothing is sent.
@@ -286,6 +286,11 @@ async def _complete_unless_stopped(
         if not call.done():
             call.cancel()
         await asyncio.gather(call, stopped, lost, return_exceptions=True)
+    for watcher in (stopped, lost):
+        # A watcher that failed says nothing about a stop or the lease. Read
+        # as a stop, the request would be sent again and again.
+        if not watcher.cancelled() and (broken := watcher.exception()) is not None:
+            raise broken
     if call.cancelled():
         if lease.lost:
             raise LeaseLost(lease.job_id, lease.epoch)

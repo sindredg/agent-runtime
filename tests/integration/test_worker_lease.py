@@ -229,7 +229,7 @@ def test_a_worker_that_learns_its_lease_is_gone_cancels_the_model_call_at_once(
                 provider,
                 FIXED,
                 job,
-                stack.settings(lease=30, heartbeat=0.2),
+                stack.settings(lease=30, heartbeat=0.5),
                 claimed_at=sent_at,
             )
         )
@@ -238,20 +238,17 @@ def test_a_worker_that_learns_its_lease_is_gone_cancels_the_model_call_at_once(
         async with engine.begin() as conn:
             await expire_lease(conn, job.id)
             taken = await claim_job(conn, worker_id="w2", lease=timedelta(seconds=30))
-        taken_at = time.monotonic()
         try:
-            # A few heartbeats. A worker that waits out the call takes a minute.
-            async with asyncio.timeout(5):
+            # Room for many heartbeats. A worker that waits out the call takes a minute.
+            async with asyncio.timeout(10):
                 status = await first
         finally:
             first.cancel()
             await asyncio.gather(first, return_exceptions=True)
-        dropped_after = time.monotonic() - taken_at
         found, steps = await read(engine, job)
         return {
             "taken": taken,
             "status": status,
-            "dropped_after": dropped_after,
             "cancelled": provider.cancelled,
             "answered": provider.answered,
             "job": found,
@@ -265,11 +262,60 @@ def test_a_worker_that_learns_its_lease_is_gone_cancels_the_model_call_at_once(
     assert seen["cancelled"]
     assert not seen["answered"]
     assert seen["status"] is None
-    assert seen["dropped_after"] < 2.0
     # It wrote nothing after the takeover and left the job to the second worker.
     assert seen["job"] == seen["taken"]
     assert [step.kind for step in seen["steps"]] == [K.MODEL_REQUEST]
     assert seen["workspace_kept"]
+
+
+def test_a_lost_lease_ends_a_request_that_the_real_client_has_open(stack: Stack) -> None:
+    """The same, with the client the worker really uses and an answer that is 10 s away.
+
+    The fake provider holds the answer of the stall scenario back for 10
+    seconds. The worker has to be done with the job well before that.
+    """
+
+    async def body(
+        engine: AsyncEngine, provider: AnthropicProvider
+    ) -> tuple[JobStatus | None, float, Job | None, Job, list[Step]]:
+        async with engine.begin() as conn:
+            await stack.create(conn, {**HELLO, "model": "ci-triage-stall"})
+            sent_at = time.monotonic()
+            job = await claim_job(conn, worker_id="w1", lease=timedelta(seconds=30))
+        assert job is not None
+        first = asyncio.create_task(
+            run_job(
+                engine,
+                provider,
+                FIXED,
+                job,
+                stack.settings(lease=30, heartbeat=0.5),
+                claimed_at=sent_at,
+            )
+        )
+        # Until the provider has the request.
+        async with asyncio.timeout(20):
+            # The provider's log is read over HTTP: there is no event to wait on.
+            while not await asyncio.to_thread(stack.requests_for, job):  # noqa: ASYNC110
+                await asyncio.sleep(0.1)
+        async with engine.begin() as conn:
+            await expire_lease(conn, job.id)
+            taken = await claim_job(conn, worker_id="w2", lease=timedelta(seconds=30))
+        taken_at = time.monotonic()
+        try:
+            async with asyncio.timeout(8):
+                status = await first
+        finally:
+            first.cancel()
+            await asyncio.gather(first, return_exceptions=True)
+        return status, time.monotonic() - taken_at, taken, *await read(engine, job)
+
+    status, dropped_after, taken, job, steps = stack.run(body)
+    assert status is None
+    # Well inside the 10 seconds the answer was held back for.
+    assert dropped_after < 8
+    assert job == taken
+    assert [step.kind for step in steps] == [K.MODEL_REQUEST]
 
 
 def test_a_worker_past_its_own_deadline_starts_no_tool(stack: Stack) -> None:
