@@ -275,8 +275,12 @@ def record(name: str, result: dict[str, Any]) -> None:
     """Keep a result with what is needed to judge and repeat it.
 
     It is written to the results file when the test is over, with how the
-    test ended: `passed`, `failed`, or `void` when the clock was set.
+    test ended in `verdict`: `passed`, `failed`, or `void` when the clock
+    was set. A result may not use that field, or `void`, for its own data.
     """
+    for taken in ("verdict", "void"):
+        if taken in result:
+            raise ValueError(f"a result may not have a field called {taken!r}")
     entry = {
         "test": name,
         "commit": commit(),
@@ -290,12 +294,12 @@ def record(name: str, result: dict[str, Any]) -> None:
     _pending.append(entry)
 
 
-def _write_results(outcome: str, void: str | None = None) -> None:
-    """Append the finished test's results to the results file, each with its outcome."""
+def _write_results(verdict: str, void: str | None = None) -> None:
+    """Append the finished test's results to the results file, each with its verdict."""
     CHAOS_DIR.mkdir(exist_ok=True)
     with (CHAOS_DIR / "results.jsonl").open("a", encoding="utf-8") as file:
         for entry in _pending:
-            entry["outcome"] = outcome
+            entry["verdict"] = verdict
             if void is not None:
                 entry["void"] = void
             file.write(json.dumps(entry) + "\n")

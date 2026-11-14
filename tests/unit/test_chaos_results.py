@@ -6,12 +6,15 @@ read like a pass. The chaos fixtures are run here on three small tests, in a
 pytest process of their own and without the stack.
 """
 
+import importlib.util
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -26,7 +29,7 @@ chaos.CHAOS_DIR = Path(os.environ["RESULTS_DIR"])
 
 
 def test_passes():
-    chaos.record("passes", {"runs": 1})
+    chaos.record("passes", {"runs": 1, "outcome": "the job is resumed from the log"})
 
 
 def test_fails_after_it_recorded():
@@ -76,10 +79,26 @@ def test_every_result_line_says_how_its_test_ended(tmp_path: Path) -> None:
     assert "1 failed, 2 passed, 1 error" in output, output
     assert set(results) == {"passes", "fails", "clock set"}
 
-    assert results["passes"]["outcome"] == "passed"
+    assert results["passes"]["verdict"] == "passed"
     assert "void" not in results["passes"]
+    # What the test recorded itself is kept as it was.
+    assert results["passes"]["outcome"] == "the job is resumed from the log"
     # The result of a failed test is kept, with its seed and counts, and marked.
-    assert results["fails"]["outcome"] == "failed"
+    assert results["fails"]["verdict"] == "failed"
     # The test body passed, and the clock check that follows it made the run void.
-    assert results["clock set"]["outcome"] == "void"
+    assert results["clock set"]["verdict"] == "void"
     assert "wall clock moved +5.0 s" in results["clock set"]["void"]
+
+
+def test_a_result_may_not_use_the_fields_the_verdict_is_written_to(tmp_path: Path) -> None:
+    """Otherwise the verdict would overwrite what the test recorded, without a word."""
+    spec = importlib.util.spec_from_file_location(
+        "chaos_conftest", REPO_ROOT / "tests" / "chaos" / "conftest.py"
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    chaos = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(chaos)
+    for taken in ("verdict", "void"):
+        with pytest.raises(ValueError, match=taken):
+            chaos.record("a test", {"runs": 1, taken: "something"})
