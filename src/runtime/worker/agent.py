@@ -15,6 +15,7 @@ The token budget is kept with an upper bound of each call's input
 """
 
 import asyncio
+import dataclasses
 import logging
 import math
 import time
@@ -32,6 +33,7 @@ from runtime.failpoints import Failpoints
 from runtime.provider.base import ModelRequest, ModelResponse, Provider, ProviderError
 from runtime.sandbox.docker import SandboxError
 from runtime.sandbox.runner import LONGEST_BOUND, ends_within
+from runtime.scope import ScopeRefused, Target, resolve
 from runtime.spec import JobSpec
 from runtime.store import held
 from runtime.store.clock import seconds_until
@@ -255,6 +257,7 @@ async def _next_tool_call(
     state: Replay,
     failpoints: Failpoints,
     stop: asyncio.Event,
+    scope: tuple[Target, ...] | None,
 ) -> bool:
     """Deal with the first open tool call. False means the job now waits for a person.
 
@@ -333,6 +336,26 @@ async def _next_tool_call(
         # A worker that takes the job over waits this long after the intent
         # before it decides about the call.
         intent["ends_within"] = ends_within(tool.sandbox.settings)
+        if tool.networked and scope is not None:
+            # Names are resolved once, here, and the call gets these
+            # addresses and no others (ADR 0009). They are in the log.
+            try:
+                if tool.sandbox.settings.guard_image is None:
+                    raise ScopeRefused("this worker has no guard image, so it cannot enforce one")
+                resolved = await resolve(scope, tool.sandbox.settings.deny)
+            except ScopeRefused as refused:
+                # Before the intent: the call does not start.
+                await writer.append(
+                    StepKind.TOOL_RESULT,
+                    {
+                        "tool_use_id": tool_use_id,
+                        "content": f"the job's scope cannot be used for this call: {refused}",
+                        "is_error": True,
+                    },
+                )
+                return True
+            call = dataclasses.replace(call, scope=resolved)
+            intent["scope"] = resolved.record()
     await writer.append(StepKind.TOOL_INTENT, intent)
     failpoints.hit("after_tool_intent", takeovers=job.takeovers, tool=name)
     # And immediately before the run, in case the write was slow.
@@ -346,6 +369,8 @@ async def _next_tool_call(
     }
     if result.truncated:
         payload["truncated"] = True
+    if result.dropped_packets is not None:
+        payload["dropped_packets"] = result.dropped_packets
     await writer.append(StepKind.TOOL_RESULT, payload)
     failpoints.hit("after_tool_result", takeovers=job.takeovers, tool=name)
     return True
@@ -543,7 +568,7 @@ async def _loop(
         # response run one after another, one per pass.
         if calls_open:
             if not await _next_tool_call(
-                writer, tools, job, workspace, lease, state, settings.failpoints, stop
+                writer, tools, job, workspace, lease, state, settings.failpoints, stop, spec.scope
             ):
                 return JobStatus.NEEDS_APPROVAL
             continue

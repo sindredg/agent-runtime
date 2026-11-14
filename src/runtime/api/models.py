@@ -17,7 +17,8 @@ MAX_TIMEOUT_SECONDS = 7 * 24 * 3600
 class JobSubmission(JobSpec):
     """The body of `POST /jobs`: the job spec plus its limits.
 
-    The limits are stored with the job. Nothing enforces them yet.
+    The limits are stored with the job. The worker keeps the token budget;
+    the deadline is not enforced yet.
     """
 
     # Left out, the API's configured default is used.

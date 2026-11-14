@@ -138,3 +138,37 @@ def test_a_list_of_containers_of_another_shape_is_a_sandbox_error(body: object) 
 
     with pytest.raises(SandboxError, match="list of containers"):
         with_docker(handler, lambda docker: docker.containers({"a": "1"}))
+
+
+def test_kill_sends_the_signal() -> None:
+    seen: list[httpx2.Request] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        seen.append(request)
+        return httpx2.Response(204)
+
+    with_docker(handler, lambda docker: docker.kill("guard-1", "TERM"))
+
+    assert seen[0].method == "POST"
+    assert seen[0].url.path == "/v1.45/containers/guard-1/kill"
+    assert dict(seen[0].url.params) == {"signal": "TERM"}
+
+
+def test_network_subnets_are_read_from_the_ipam_config() -> None:
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        assert request.url.path == "/v1.45/networks/stack-net"
+        config = [{"Subnet": "172.21.0.0/16", "Gateway": "172.21.0.1"}, {"Subnet": "fd00::/64"}]
+        return httpx2.Response(200, json={"Name": "stack-net", "IPAM": {"Config": config}})
+
+    subnets = with_docker(handler, lambda docker: docker.network_subnets("stack-net"))
+
+    assert subnets == ["172.21.0.0/16", "fd00::/64"]
+
+
+@pytest.mark.parametrize("body", [{"IPAM": {"Config": []}}, {"IPAM": {"Config": None}}, {}, []])
+def test_a_network_without_subnets_is_a_sandbox_error(body: object) -> None:
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=body)
+
+    with pytest.raises(SandboxError, match="no subnets"):
+        with_docker(handler, lambda docker: docker.network_subnets("n"))

@@ -11,6 +11,7 @@ from uuid import UUID
 
 from runtime.sandbox.docker import SandboxError
 from runtime.sandbox.runner import NotStarted, Run, SandboxSettings
+from runtime.scope import Resolved
 from runtime.tools.base import ToolCall, ToolResult, tool_definition
 
 
@@ -20,7 +21,9 @@ class Runner(Protocol):
     @property
     def settings(self) -> SandboxSettings: ...
 
-    async def run(self, job_id: UUID, lease_epoch: int, argv: Sequence[str]) -> Run: ...
+    async def run(
+        self, job_id: UUID, lease_epoch: int, argv: Sequence[str], scope: Resolved | None = None
+    ) -> Run: ...
 
     async def remove_older(self, job_id: UUID, lease_epoch: int) -> int: ...
 
@@ -49,16 +52,22 @@ def describe(run: Run, *, timeout: float, limit: int) -> ToolResult:
     else:
         status = f"[exit status {run.exit_code}]"
     cut = f"[output cut to fit {limit} bytes; the command wrote {run.total}]"
+    after = [status]
+    if run.dropped:
+        # The model learns that the scope stopped something, not what.
+        after.append(f"[{run.dropped} packets to addresses outside the job's scope were dropped]")
     truncated = run.truncated
-    content = _with_notes(text, [cut, status] if truncated else [status])
+    content = _with_notes(text, [cut, *after] if truncated else after)
     if len(content.encode()) > limit:
         # Replacement characters take three bytes for one that was invalid,
         # so output under the limit can still be too long as text.
         truncated = True
-        room = limit - len(_with_notes("", [cut, status]).encode()) - 1
+        room = limit - len(_with_notes("", [cut, *after]).encode()) - 1
         body = text.encode()[: max(room, 0)].decode("utf-8", "ignore")
-        content = _with_notes(body, [cut, status])
-    return ToolResult(content, is_error=run.exit_code != 0, truncated=truncated)
+        content = _with_notes(body, [cut, *after])
+    return ToolResult(
+        content, is_error=run.exit_code != 0, truncated=truncated, dropped_packets=run.dropped
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +79,8 @@ class SandboxTool:
     sandbox: Runner
     # As for `Tool`: True when running the call twice does no more than once.
     idempotent: bool = False
+    # True when the call gets the job's scope. False: never any network.
+    networked: bool = False
 
     def definition(self) -> dict[str, Any]:
         return tool_definition(self.name, self.description, self.input_schema)
@@ -86,7 +97,8 @@ class SandboxTool:
         except ValueError:
             return ToolResult("the workspace is not a job's workspace", is_error=True)
         try:
-            run = await self.sandbox.run(job_id, call.lease_epoch, argv)
+            scope = call.scope if self.networked else None
+            run = await self.sandbox.run(job_id, call.lease_epoch, argv, scope)
         except NotStarted as error:
             return ToolResult(f"the sandbox could not start the command: {error}", True)
         except SandboxError as error:

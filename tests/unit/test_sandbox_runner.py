@@ -1,6 +1,7 @@
 """The runner against a stand-in for Docker: what a takeover removes, when a start is given up."""
 
 import asyncio
+import ipaddress
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -19,7 +20,9 @@ from runtime.sandbox.runner import (
     Sandbox,
     SandboxSettings,
     check_host,
+    deny_list,
 )
+from runtime.scope import FIXED_DENY
 
 JOB = uuid.UUID("01a1d655-88bd-7468-afc4-5ca3a1947906")
 
@@ -181,3 +184,35 @@ def test_a_host_where_a_command_could_trace_its_timeout_is_refused(
 def test_a_host_without_yama_is_refused(tmp_path: Path) -> None:
     with pytest.raises(SandboxError, match="Yama"):
         check_host(tmp_path / "missing")
+
+
+class Networks:
+    """Answers `network_subnets` like Docker for a few named networks."""
+
+    def __init__(self, subnets: dict[str, list[str]]) -> None:
+        self.subnets = subnets
+
+    async def network_subnets(self, name: str) -> list[str]:
+        return self.subnets[name]
+
+
+def test_the_deny_list_is_the_fixed_one_plus_every_subnet_of_the_networks() -> None:
+    docker = Networks(
+        {"sandbox-net": ["172.22.0.0/16"], "stack-net": ["172.21.0.0/16", "fd00::/64"]}
+    )
+
+    deny = asyncio.run(deny_list(docker, ("sandbox-net", "stack-net")))  # type: ignore[arg-type]
+
+    assert deny == (
+        *FIXED_DENY,
+        ipaddress.ip_network("172.22.0.0/16"),
+        ipaddress.ip_network("172.21.0.0/16"),
+        ipaddress.ip_network("fd00::/64"),
+    )
+
+
+def test_a_subnet_that_cannot_be_read_is_a_sandbox_error() -> None:
+    docker = Networks({"odd": ["not-a-subnet"]})
+
+    with pytest.raises(SandboxError, match="cannot be read"):
+        asyncio.run(deny_list(docker, ("odd",)))  # type: ignore[arg-type]

@@ -34,7 +34,7 @@ integration:
 # the sandbox image first; needs no stack. ESCAPE_DOCKER_DEFAULTS=1 runs the
 # same attempts with Docker's default container settings, which must fail.
 escape:
-	docker compose build sandbox-image
+	docker compose build sandbox-image guard-image
 	uv run --frozen pytest -v -s tests/escape
 
 # Kills, pauses and crashes workers on purpose and checks what is left.

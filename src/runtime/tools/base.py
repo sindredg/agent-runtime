@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from runtime.scope import Resolved
     from runtime.tools.sandboxed import SandboxTool
 
 
@@ -28,6 +29,8 @@ class ToolResult:
     is_error: bool = False
     # True when the output was cut to fit the result. The content says so too.
     truncated: bool = False
+    # For a call with a scope: packets its guard dropped. None otherwise.
+    dropped_packets: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +48,8 @@ class ToolCall:
     # The lease epoch of the worker that runs the call. A sandboxed call
     # labels its container with it.
     lease_epoch: int
+    # The job's scope, resolved for this call (ADR 0009). None: no network.
+    scope: Resolved | None = None
 
 
 def operation_id(job_id: object, tool_use_id: str) -> str:

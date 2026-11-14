@@ -4,6 +4,7 @@ from pathlib import PurePosixPath
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from runtime.scope import MAX_TARGETS, Target
 from runtime.tools.paths import check_relative
 
 # The spec is one database row. Files that seed the workspace are part of it,
@@ -33,6 +34,9 @@ class JobSpec(BaseModel):
     # Text files written into the job's workspace before it starts:
     # relative path -> content.
     files: dict[str, str] = Field(default_factory=dict)
+    # What the job's tools may reach on the network (ADR 0009). Left out, they
+    # reach nothing. The job cannot change it.
+    scope: tuple[Target, ...] | None = Field(default=None, min_length=1, max_length=MAX_TARGETS)
 
     @field_validator("files")
     @classmethod

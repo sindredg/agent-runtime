@@ -12,6 +12,7 @@ from hypothesis import strategies as st
 
 from runtime.sandbox.docker import SandboxError
 from runtime.sandbox.runner import NotStarted, Run, SandboxSettings
+from runtime.scope import Resolved
 from runtime.store.payload import check_json
 from runtime.tools.base import ToolCall, ToolResult
 from runtime.tools.list_dir import list_dir_tool
@@ -33,9 +34,17 @@ class FakeSandbox:
         self.settings = SandboxSettings(image="sandbox:test", volume="workspaces", timeout=30)
         self.answer = answer
         self.calls: list[tuple[uuid.UUID, int, list[str]]] = []
+        self.scopes: list[Resolved | None] = []
 
-    async def run(self, job_id: uuid.UUID, lease_epoch: int, argv: Sequence[str]) -> Run:
+    async def run(
+        self,
+        job_id: uuid.UUID,
+        lease_epoch: int,
+        argv: Sequence[str],
+        scope: Resolved | None = None,
+    ) -> Run:
         self.calls.append((job_id, lease_epoch, list(argv)))
+        self.scopes.append(scope)
         if isinstance(self.answer, Exception):
             raise self.answer
         return self.answer
