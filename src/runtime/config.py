@@ -137,6 +137,8 @@ class WorkerConfig:
     chaos_log_dir: Path | None
     # Unset when SANDBOX_IMAGE is not set: no sandboxed tools then.
     sandbox: SandboxConfig | None
+    # How often the worker removes the workspaces of final and unknown jobs.
+    sweep_interval: float
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> WorkerConfig:
@@ -171,6 +173,7 @@ class WorkerConfig:
             failpoint_tool=env.get("FAILPOINT_TOOL") or None,
             chaos_log_dir=chaos_log_dir,
             sandbox=SandboxConfig.from_env(env),
+            sweep_interval=_positive_float(env, "SWEEP_INTERVAL_SECONDS", 300.0),
         )
 
 
