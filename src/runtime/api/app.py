@@ -18,12 +18,13 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from runtime.api.models import JobSubmission, JobView, StepList, StepView
+from runtime.api.models import MAX_SEQ, Answer, JobSubmission, JobView, StepList, StepView
 from runtime.config import ApiConfig
 from runtime.store.engine import create_engine
 from runtime.store.jobs import (
     InvalidTransition,
     JobNotFound,
+    OtherQuestion,
     approve_job,
     cancel_job,
     create_job,
@@ -36,9 +37,6 @@ from runtime.store.steps import read_progress
 
 # Most steps one request or one poll of the event stream reads.
 MAX_PAGE = 1000
-# The largest `seq` the steps table can hold. A larger value in a request
-# is refused up front; the database would refuse it with an error.
-MAX_SEQ = 2**31 - 1
 # A comment line is sent after this many silent seconds, so proxies and
 # clients do not take a quiet stream for a dead one.
 KEEP_ALIVE_SECONDS = 15.0
@@ -128,11 +126,17 @@ def create_app(
             raise HTTPException(status_code=404, detail="job not found")
         return JobView.model_validate(job)
 
-    async def answer(job_id: UUID, *, approved: bool) -> JobView:
-        """Record a person's answer for a job in `needs_approval`, and queue the job."""
+    async def answer(job_id: UUID, question: int, *, approved: bool) -> JobView:
+        """Record a person's answer to a job's question, and queue the job."""
         async with engine().begin() as conn:
             try:
-                job = await (approve_job if approved else deny_job)(conn, job_id)
+                job = await (approve_job if approved else deny_job)(conn, job_id, question)
+            except OtherQuestion as other:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"job waits on question {other.waiting_on}, not on {question};"
+                    f" read question {other.waiting_on} before you answer it",
+                ) from None
             except InvalidTransition:
                 found = await get_job(conn, job_id)
                 if found is None:
@@ -145,28 +149,29 @@ def create_app(
         return JobView.model_validate(job)
 
     @app.post("/jobs/{job_id}/approve")
-    async def approve(job_id: UUID) -> JobView:
-        """Approve the tool call a job in `needs_approval` waits for.
+    async def approve(job_id: UUID, body: Answer) -> JobView:
+        """Approve the tool call that question `question` asks about.
 
-        The job's last `approval_requested` step names the call and says why
-        a person is asked. Either the tool needs approval before it runs
-        (ADR 0011): nothing of the call has run. Or the call was interrupted
-        and nobody can tell whether it happened (ADR 0005): approving means
-        to run it again, knowing it may have run before. The approval covers
-        one run. The job goes back to `queued`. Any other status is refused
-        with 409.
+        The question is the job's `approval_requested` step, by its `seq`
+        (ADR 0012). It names the call and says why a person is asked. Either
+        the tool needs approval before it runs (ADR 0011): nothing of the
+        call has run. Or the call was interrupted and nobody can tell whether
+        it happened (ADR 0005): approving means to run it again, knowing it
+        may have run before. The approval covers one run. The job goes back
+        to `queued`. A job that is not in `needs_approval`, or that waits on
+        another question, is refused with 409 and nothing is written.
         """
-        return await answer(job_id, approved=True)
+        return await answer(job_id, body.question, approved=True)
 
     @app.post("/jobs/{job_id}/deny")
-    async def deny(job_id: UUID) -> JobView:
-        """Refuse the tool call a job in `needs_approval` waits for (ADR 0011).
+    async def deny(job_id: UUID, body: Answer) -> JobView:
+        """Refuse the tool call that question `question` asks about (ADR 0011, 0012).
 
         The call does not run. The job goes back to `queued`; its next
         worker stores an error result for the call that says it was denied,
-        and the job goes on. Any other status is refused with 409.
+        and the job goes on. Refused with 409 as an approval is.
         """
-        return await answer(job_id, approved=False)
+        return await answer(job_id, body.question, approved=False)
 
     @app.post("/jobs/{job_id}/cancel")
     async def cancel(job_id: UUID, response: Response) -> JobView:

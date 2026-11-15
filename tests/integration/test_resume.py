@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from runtime.provider.base import ModelRequest, ModelResponse
 from runtime.provider.messages import AnthropicProvider
 from runtime.store import held
-from runtime.store.jobs import Job, approve_job, claim_job, get_job
+from runtime.store.jobs import Job, approve_job, claim_job, get_job, open_question
 from runtime.store.status import JobStatus
 from runtime.store.steps import Step, StepKind, read_steps
 from runtime.tools import default_tools
@@ -591,7 +591,9 @@ def test_an_approved_call_is_run_again_under_its_own_intent(stack: Stack) -> Non
         # Nobody may claim a job that waits for a person.
         async with engine.begin() as conn:
             assert await claim_job(conn, worker_id="w3") is None
-            await approve_job(conn, first_claim.id)
+            asked = await open_question(conn, first_claim.id)
+            assert asked is not None
+            await approve_job(conn, first_claim.id, asked[0])
         async with engine.begin() as conn:
             third_claim = await claim_job(conn, worker_id="w3")
         assert third_claim is not None
@@ -622,7 +624,7 @@ def test_an_approved_call_is_run_again_under_its_own_intent(stack: Stack) -> Non
     a, b = op(job, "toolu_a"), op(job, "toolu_b")
     # Two runs of the first call, for two intents: the abandoned one and the approved one.
     assert acts.runs == [(a, "a"), (a, "a"), (b, "b")]
-    assert steps[4].payload == {"tool_use_id": "toolu_a", "operation_id": a}
+    assert steps[4].payload == {"tool_use_id": "toolu_a", "operation_id": a, "question": 4}
 
 
 def test_an_approved_rerun_that_is_interrupted_too_needs_a_new_approval(stack: Stack) -> None:
@@ -665,7 +667,9 @@ def test_an_approved_rerun_that_is_interrupted_too_needs_a_new_approval(stack: S
             is S.NEEDS_APPROVAL
         )
         async with engine.begin() as conn:
-            await approve_job(conn, job.id)
+            asked = await open_question(conn, job.id)
+            assert asked is not None
+            await approve_job(conn, job.id, asked[0])
         # The approved rerun starts, and its worker stops inside the tool again.
         await abandon_in_the_tool()
         status = await run_job(engine, script, acts.registry(), await claim(), stack.settings())

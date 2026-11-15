@@ -290,7 +290,9 @@ def test_unknown_job_is_404_on_every_job_route_and_a_bad_id_is_422(database_url:
             for path in (f"/jobs/{uuid4()}{kind}", f"/jobs/not-a-uuid{kind}")
         }
         changed = {
-            path: (await api.client.post(path)).status_code
+            path: (
+                await api.client.post(path, json=None if kind == "/cancel" else QUESTION_2)
+            ).status_code
             for kind in ("/approve", "/deny", "/cancel")
             for path in (f"/jobs/{uuid4()}{kind}", f"/jobs/not-a-uuid{kind}")
         }
@@ -506,6 +508,10 @@ def test_a_quiet_event_stream_sends_keep_alive_comments(database_url: str) -> No
 # Approval
 
 
+# The body of an answer to the question of `parked_for_approval`, its step 2.
+QUESTION_2 = {"question": 2}
+
+
 async def parked_for_approval(api: Api) -> Job:
     """A job waiting for a person, with the log a worker leaves: the intent and the question."""
     job = await api.new_job()
@@ -546,7 +552,8 @@ def test_event_stream_says_that_a_job_waits_for_approval_and_goes_on_when_it_is_
             if event[1] == "status":
                 # Long enough for the stream to say it again, if it were to.
                 await asyncio.sleep(0.2)
-                assert (await api.client.post(f"/jobs/{job.id}/approve")).status_code == 200
+                answer = await api.client.post(f"/jobs/{job.id}/approve", json=QUESTION_2)
+                assert answer.status_code == 200
                 async with api.engine.begin() as conn:
                     claimed = await claim_job(conn, worker_id="w2")
                 assert claimed is not None
@@ -583,7 +590,8 @@ def test_event_stream_says_it_again_when_the_job_waits_again_between_two_polls(
                 if event[1] == "status" and len(statuses) == 1:
                     # All of it inside one wait of the stream: answered, run on
                     # by a worker, and parked for the next question.
-                    assert (await api.client.post(f"/jobs/{job.id}/deny")).status_code == 200
+                    answer = await api.client.post(f"/jobs/{job.id}/deny", json=QUESTION_2)
+                    assert answer.status_code == 200
                     async with api.engine.begin() as conn:
                         claimed = await claim_job(conn, worker_id="w2")
                     assert claimed is not None
@@ -619,13 +627,91 @@ def test_event_stream_says_it_again_when_the_job_waits_again_between_two_polls(
 ANSWERS = [("approve", StepKind.APPROVAL_GIVEN), ("deny", StepKind.APPROVAL_DENIED)]
 
 
+async def unchanged_after(
+    api: Api, job: Job, send: Callable[[], Awaitable[httpx2.Response]]
+) -> tuple[httpx2.Response, bool]:
+    """The response to `send`, and whether the job and its steps are as they were before it."""
+    async with api.engine.begin() as conn:
+        before = (await get_job(conn, job.id), await read_steps(conn, job.id))
+    response = await send()
+    async with api.engine.begin() as conn:
+        after = (await get_job(conn, job.id), await read_steps(conn, job.id))
+    return response, after == before
+
+
+@pytest.mark.parametrize("answer", ["approve", "deny"])
+@pytest.mark.parametrize(
+    "sent",
+    [
+        {},
+        {"question": "2"},
+        {"question": 2.0},
+        {"question": True},
+        {"question": None},
+        {"question": 0},
+        {"question": -2},
+        {"question": 2**31},
+        {"question": 2, "operation_id": "x"},
+        [2],
+        "2",
+    ],
+    ids=repr,
+)
+def test_an_answer_without_a_question_number_is_422_and_changes_nothing(
+    database_url: str, answer: str, sent: Any
+) -> None:
+    async def body(api: Api) -> tuple[httpx2.Response, bool]:
+        job = await parked_for_approval(api)
+        return await unchanged_after(
+            api, job, lambda: api.client.post(f"/jobs/{job.id}/{answer}", json=sent)
+        )
+
+    response, unchanged = api_test(database_url, body)
+    assert response.status_code == 422
+    assert unchanged
+
+
+@pytest.mark.parametrize("answer", ["approve", "deny"])
+def test_an_answer_with_no_body_is_422(database_url: str, answer: str) -> None:
+    async def body(api: Api) -> tuple[httpx2.Response, bool]:
+        job = await parked_for_approval(api)
+        return await unchanged_after(api, job, lambda: api.client.post(f"/jobs/{job.id}/{answer}"))
+
+    response, unchanged = api_test(database_url, body)
+    assert response.status_code == 422
+    assert unchanged
+
+
+@pytest.mark.parametrize("answer", ["approve", "deny"])
+@pytest.mark.parametrize("question", [1, 3, 99])
+def test_an_answer_to_another_question_is_409_names_the_open_one_and_changes_nothing(
+    database_url: str, answer: str, question: int
+) -> None:
+    """The job waits on question 2. Step 1 is its intent, 3 does not exist yet."""
+
+    async def body(api: Api) -> tuple[httpx2.Response, bool]:
+        job = await parked_for_approval(api)
+        return await unchanged_after(
+            api,
+            job,
+            lambda: api.client.post(f"/jobs/{job.id}/{answer}", json={"question": question}),
+        )
+
+    response, unchanged = api_test(database_url, body)
+    assert response.status_code == 409
+    assert response.json()["detail"] == (
+        f"job waits on question 2, not on {question}; read question 2 before you answer it"
+    )
+    assert unchanged
+
+
 @pytest.mark.parametrize(("answer", "kind"), ANSWERS)
 def test_an_answer_queues_the_job_and_is_recorded_as_a_step(
     database_url: str, answer: str, kind: StepKind
 ) -> None:
     async def body(api: Api) -> tuple[Job, httpx2.Response, Job | None, list[Any]]:
         job = await parked_for_approval(api)
-        response = await api.client.post(f"/jobs/{job.id}/{answer}")
+        response = await api.client.post(f"/jobs/{job.id}/{answer}", json=QUESTION_2)
         async with api.engine.begin() as conn:
             return job, response, await get_job(conn, job.id), await read_steps(conn, job.id)
 
@@ -645,8 +731,12 @@ def test_an_answer_queues_the_job_and_is_recorded_as_a_step(
         (2, StepKind.APPROVAL_REQUESTED),
         (3, kind),
     ]
-    # The answer names the call it is for.
-    assert steps[2].payload == {"tool_use_id": "toolu_1", "operation_id": f"{parked.id}:toolu_1"}
+    # The answer names the question it answers, and the call that question is about.
+    assert steps[2].payload == {
+        "tool_use_id": "toolu_1",
+        "operation_id": f"{parked.id}:toolu_1",
+        "question": 2,
+    }
 
 
 @pytest.mark.parametrize("answer", ["approve", "deny"])
@@ -663,7 +753,7 @@ def test_an_answer_is_refused_for_a_job_that_is_not_waiting_for_one(
             await api.finish(job, status)
         async with api.engine.begin() as conn:
             before = await read_steps(conn, job.id)
-        response = await api.client.post(f"/jobs/{job.id}/{answer}")
+        response = await api.client.post(f"/jobs/{job.id}/{answer}", json={"question": 1})
         async with api.engine.begin() as conn:
             return response, await get_job(conn, job.id), before, await read_steps(conn, job.id)
 
@@ -684,8 +774,8 @@ def test_an_answer_for_an_unknown_job_is_404_and_for_a_bad_id_422(
 ) -> None:
     async def body(api: Api) -> tuple[httpx2.Response, httpx2.Response]:
         return (
-            await api.client.post(f"/jobs/{uuid4()}/{answer}"),
-            await api.client.post(f"/jobs/not-an-id/{answer}"),
+            await api.client.post(f"/jobs/{uuid4()}/{answer}", json=QUESTION_2),
+            await api.client.post(f"/jobs/not-an-id/{answer}", json=QUESTION_2),
         )
 
     unknown, bad = api_test(database_url, body)
@@ -700,7 +790,7 @@ def test_answers_sent_at_once_answer_once(database_url: str) -> None:
         job = await parked_for_approval(api)
         answers = ["approve", "deny"] * 4
         responses = await asyncio.gather(
-            *(api.client.post(f"/jobs/{job.id}/{answer}") for answer in answers)
+            *(api.client.post(f"/jobs/{job.id}/{answer}", json=QUESTION_2) for answer in answers)
         )
         async with api.engine.begin() as conn:
             steps = await read_steps(conn, job.id)

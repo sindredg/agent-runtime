@@ -317,17 +317,19 @@ def test_following_a_job_that_stops_for_approval_shows_the_call_and_exits_with_3
     target = str(job_file) if command == "submit" else JOB_ID
     code, out, err = run(command, target, "--follow", api=api)
     assert (code, err) == (3, "")
-    assert out.splitlines()[-(len(LINES) + 8) :] == [
+    assert out.splitlines()[-(len(LINES) + 9) :] == [
         *LINES,
         format_step(ASKED),
         "needs_approval  tokens_used=19",
         "The job waits for a person to decide about a tool call.",
-        "  tool:   run_shell",
+        # The number of the question: the seq of its step. The answer names it.
+        "  question: 5",
+        "  tool:     run_shell",
         # Exactly as given, two spaces included.
-        '  input:  {"command": "rm -rf  build\\n\\u001b[2J\\u202e' + "x" * 200 + '"}',
-        "  reason: the job's spec asks for a person's approval before this tool runs",
-        f"To let the call run: runtime approve {JOB_ID}",
-        f"To refuse it:        runtime deny {JOB_ID}",
+        '  input:    {"command": "rm -rf  build\\n\\u001b[2J\\u202e' + "x" * 200 + '"}',
+        "  reason:   the job's spec asks for a person's approval before this tool runs",
+        f"To let the call run: runtime approve {JOB_ID} 5",
+        f"To refuse it:        runtime deny {JOB_ID} 5",
     ]
     # One look at the stream was enough.
     assert len([r for r in api.requests if r.url.path.endswith("/events")]) == 1
@@ -589,12 +591,13 @@ def test_there_is_a_hello_example() -> None:
 # approve
 
 
-def test_approve_posts_to_the_job_and_prints_its_new_status() -> None:
+def test_approve_posts_the_question_to_the_job_and_prints_its_new_status() -> None:
     api = StubApi()
-    code, out, err = run("approve", JOB_ID, api=api)
+    code, out, err = run("approve", JOB_ID, "5", api=api)
     assert (code, err) == (0, "")
     assert out == "queued\n"
     assert [(r.method, r.url.path) for r in api.requests] == [("POST", f"/jobs/{JOB_ID}/approve")]
+    assert json.loads(api.requests[0].content) == {"question": 5}
 
 
 def test_an_approval_the_api_refuses_exits_with_2_and_shows_why() -> None:
@@ -602,18 +605,53 @@ def test_an_approval_the_api_refuses_exits_with_2_and_shows_why() -> None:
     api.approve_response = httpx2.Response(
         409, json={"detail": "job is running; only a job that needs approval can be approved"}
     )
-    code, out, err = run("approve", JOB_ID, api=api)
+    code, out, err = run("approve", JOB_ID, "5", api=api)
     assert (code, out) == (2, "")
     assert "409" in err
     assert "only a job that needs approval" in err
 
 
 @pytest.mark.parametrize("command", ["approve", "deny"])
+def test_an_answer_to_a_question_the_job_no_longer_waits_on_shows_the_open_one(
+    command: str,
+) -> None:
+    api = StubApi()
+    refused = httpx2.Response(
+        409, json={"detail": "job waits on question 9, not on 5; read question 9 before you"}
+    )
+    api.approve_response = api.deny_response = refused
+    code, out, err = run(command, JOB_ID, "5", api=api)
+    assert (code, out) == (2, "")
+    assert "waits on question 9, not on 5" in err
+
+
+@pytest.mark.parametrize("command", ["approve", "deny"])
 def test_an_answer_needs_a_job_id(capsys: pytest.CaptureFixture[str], command: str) -> None:
     with pytest.raises(SystemExit) as stopped:
-        run(command, "not-a-job-id")
+        run(command, "not-a-job-id", "5")
     assert stopped.value.code == 2
     assert "not a job id" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("command", ["approve", "deny"])
+def test_an_answer_needs_the_question_number(
+    capsys: pytest.CaptureFixture[str], command: str
+) -> None:
+    with pytest.raises(SystemExit) as stopped:
+        run(command, JOB_ID)
+    assert stopped.value.code == 2
+    assert "question" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("command", ["approve", "deny"])
+@pytest.mark.parametrize("number", ["0", "-1", "x", "1.0", "+5", " 5", "\u0663", "2147483648"])
+def test_a_question_number_is_a_positive_whole_number(
+    capsys: pytest.CaptureFixture[str], command: str, number: str
+) -> None:
+    with pytest.raises(SystemExit) as stopped:
+        run(command, JOB_ID, number)
+    assert stopped.value.code == 2
+    assert "is not a question number" in capsys.readouterr().err
 
 
 def test_approval_steps_show_the_call_and_the_reason() -> None:
@@ -641,12 +679,13 @@ def test_approval_steps_show_the_call_and_the_reason() -> None:
 # deny
 
 
-def test_deny_posts_to_the_job_and_prints_its_new_status() -> None:
+def test_deny_posts_the_question_to_the_job_and_prints_its_new_status() -> None:
     api = StubApi()
-    code, out, err = run("deny", JOB_ID, api=api)
+    code, out, err = run("deny", JOB_ID, "5", api=api)
     assert (code, err) == (0, "")
     assert out == "queued\n"
     assert [(r.method, r.url.path) for r in api.requests] == [("POST", f"/jobs/{JOB_ID}/deny")]
+    assert json.loads(api.requests[0].content) == {"question": 5}
 
 
 def test_a_denial_the_api_refuses_exits_with_2_and_shows_why() -> None:
@@ -654,23 +693,31 @@ def test_a_denial_the_api_refuses_exits_with_2_and_shows_why() -> None:
     api.deny_response = httpx2.Response(
         409, json={"detail": "job is running; only a job that needs approval can be denied"}
     )
-    code, out, err = run("deny", JOB_ID, api=api)
+    code, out, err = run("deny", JOB_ID, "5", api=api)
     assert (code, out) == (2, "")
     assert "409" in err
     assert "only a job that needs approval" in err
 
 
-def test_a_job_that_waits_without_a_question_in_its_log_still_says_how_to_answer() -> None:
-    """The question is taken from the stream. A stream without one is not fatal."""
+def test_a_job_that_waits_without_a_question_in_its_log_says_so() -> None:
+    """The question is taken from the stream, then from the steps. Without one
+    there is no number to answer with, and no command is printed."""
     api = StubApi(final=job("needs_approval"), end=None)
     api.status = "needs_approval"
     code, out, err = run("logs", JOB_ID, "--follow", api=api)
     assert (code, err) == (3, "")
-    assert out.splitlines()[-3:] == [
+    assert out.splitlines()[-2:] == [
         "The job waits for a person to decide about a tool call.",
-        f"To let the call run: runtime approve {JOB_ID}",
-        f"To refuse it:        runtime deny {JOB_ID}",
+        "Its question is not in the log yet: run `runtime status` again.",
     ]
+
+
+def test_status_of_a_job_that_waits_names_its_question() -> None:
+    api = StubApi(final=job("needs_approval"))
+    api.steps = [*STEPS, ASKED]
+    code, out, _ = run("status", JOB_ID, api=api)
+    assert code == 0
+    assert out.splitlines()[-1] == "question:     5 (run_shell)"
 
 
 def test_a_tool_name_or_model_with_control_codes_is_not_printed_raw() -> None:

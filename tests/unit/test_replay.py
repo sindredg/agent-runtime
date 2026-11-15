@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
+import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
@@ -222,8 +223,9 @@ def approval_requested(tool_use_id: str) -> tuple[StepKind, dict[str, Any]]:
     return StepKind.APPROVAL_REQUESTED, {"tool_use_id": tool_use_id, "name": "read_file"}
 
 
-def approval_given(tool_use_id: str) -> tuple[StepKind, dict[str, Any]]:
-    return StepKind.APPROVAL_GIVEN, {"tool_use_id": tool_use_id}
+def approval_given(tool_use_id: str, question: int) -> tuple[StepKind, dict[str, Any]]:
+    """An approval of the question whose `approval_requested` step has `seq` `question`."""
+    return StepKind.APPROVAL_GIVEN, {"tool_use_id": tool_use_id, "question": question}
 
 
 def test_a_request_without_a_response_is_not_an_interrupted_tool_call() -> None:
@@ -283,7 +285,7 @@ def test_approval_steps_are_reported_with_the_interrupted_call() -> None:
     assert state.interrupted is not None
     assert state.approval == "requested"
 
-    state = replay("go", [*asked, *log(approval_given("t1"))])
+    state = replay("go", [*asked, *log(approval_given("t1", 4))])
     assert state.interrupted is not None
     assert state.approval == "given"
     # Approval changes nothing in the conversation.
@@ -300,7 +302,7 @@ def test_a_new_intent_after_an_approval_starts_without_one() -> None:
             response(call("t1")),
             intent("t1"),
             approval_requested("t1"),
-            approval_given("t1"),
+            approval_given("t1", 4),
             intent("t1"),
         ),
     )
@@ -326,7 +328,7 @@ def test_folding_one_step_at_a_time_gives_the_same_state_as_a_full_replay() -> N
         result("t1"),
         intent("t2"),
         approval_requested("t2"),
-        approval_given("t2"),
+        approval_given("t2", 6),
         intent("t2"),
         result("t2"),
         request(3),
@@ -373,8 +375,8 @@ def test_the_last_request_carries_its_max_tokens() -> None:
 # A call that waits for a person before it runs (ADR 0011)
 
 
-def approval_denied(tool_use_id: str) -> tuple[StepKind, dict[str, Any]]:
-    return StepKind.APPROVAL_DENIED, {"tool_use_id": tool_use_id}
+def approval_denied(tool_use_id: str, question: int) -> tuple[StepKind, dict[str, Any]]:
+    return StepKind.APPROVAL_DENIED, {"tool_use_id": tool_use_id, "question": question}
 
 
 def test_an_approval_before_the_intent_belongs_to_the_call_that_was_asked_about() -> None:
@@ -386,7 +388,7 @@ def test_an_approval_before_the_intent_belongs_to_the_call_that_was_asked_about(
     assert state.pending == [call("t1"), call("t2")]
     assert not state.needs_model_call
 
-    state = replay("go", [*asked, *log(approval_given("t1"))])
+    state = replay("go", [*asked, *log(approval_given("t1", 3))])
     assert state.interrupted is None
     assert (state.approval, state.approval_for) == ("given", "t1")
     # The answer is not part of the conversation.
@@ -399,7 +401,7 @@ def test_an_approval_is_used_up_by_the_intent_of_its_call() -> None:
         request(),
         response(call("t1"), call("t2")),
         approval_requested("t1"),
-        approval_given("t1"),
+        approval_given("t1", 3),
         intent("t1"),
     )
     state = replay("go", steps)
@@ -412,7 +414,7 @@ def test_an_approval_is_used_up_by_the_intent_of_its_call() -> None:
 
 
 def test_a_denial_is_reported_for_the_call_and_changes_nothing_else() -> None:
-    asked = log(request(), response(call("t1")), approval_requested("t1"), approval_denied("t1"))
+    asked = log(request(), response(call("t1")), approval_requested("t1"), approval_denied("t1", 3))
     state = replay("go", asked)
     assert (state.approval, state.approval_for) == ("denied", "t1")
     assert state.interrupted is None
@@ -438,7 +440,7 @@ def test_a_denial_of_an_interrupted_call_keeps_the_call_interrupted() -> None:
             response(call("t1")),
             intent("t1"),
             approval_requested("t1"),
-            approval_denied("t1"),
+            approval_denied("t1", 4),
         ),
     )
     assert state.interrupted is not None
@@ -452,7 +454,7 @@ def test_a_new_response_starts_without_an_answer() -> None:
             request(),
             response(call("t1")),
             approval_requested("t1"),
-            approval_denied("t1"),
+            approval_denied("t1", 3),
             result("t1", is_error=True),
             request(3),
             response(call("t2")),
@@ -461,8 +463,92 @@ def test_a_new_response_starts_without_an_answer() -> None:
     assert (state.approval, state.approval_for) == (None, None)
 
 
-def test_an_answer_that_names_another_call_than_the_question_answers_nothing() -> None:
+# An answer names its question (ADR 0012)
+
+
+def test_a_question_is_known_by_the_seq_of_its_step() -> None:
+    state = replay("go", log(request(), response(call("t1")), approval_requested("t1")))
+    assert (state.approval, state.approval_for, state.approval_question) == ("requested", "t1", 3)
+
+
+@pytest.mark.parametrize("named", [None, 1, 2, 4, "3", 3.0])
+def test_an_answer_that_names_another_question_answers_nothing(named: Any) -> None:
+    """Also one that names the right call: an answer is for a question, not a call."""
     asked = log(request(), response(call("t1"), call("t2")), approval_requested("t1"))
-    for answer in (approval_given("t2"), approval_denied("t2")):
-        state = replay("go", [*asked, *log(answer)])
-        assert (state.approval, state.approval_for) == ("requested", "t1")
+    for kind in (StepKind.APPROVAL_GIVEN, StepKind.APPROVAL_DENIED):
+        payload = {"tool_use_id": "t1", "question": named}
+        state = replay("go", [*asked, Step(JOB, 4, kind, payload, 1, datetime.now(UTC))])
+        assert (state.approval, state.approval_for, state.approval_question) == (
+            "requested",
+            "t1",
+            3,
+        )
+
+
+def test_a_question_number_that_is_a_boolean_answers_nothing() -> None:
+    """JSON `true` is not question 1. A log never has its question at seq 1, so it is made so."""
+    now = datetime.now(UTC)
+    steps = [
+        Step(JOB, 1, StepKind.APPROVAL_REQUESTED, {"tool_use_id": "t1"}, 1, now),
+        Step(JOB, 2, StepKind.APPROVAL_GIVEN, {"tool_use_id": "t1", "question": True}, 1, now),
+    ]
+    assert replay("go", steps).approval == "requested"
+
+
+def test_an_answer_written_before_answers_named_their_question_counts_only_as_a_denial() -> None:
+    """Such an answer has no `question`. A denial can only keep a call from running,
+    so it still counts for the call it names. An approval does not: the job asks again."""
+    asked = log(request(), response(call("t1"), call("t2")), approval_requested("t1"))
+    now = datetime.now(UTC)
+
+    def after(kind: StepKind, tool_use_id: str) -> str | None:
+        answer = Step(JOB, 4, kind, {"tool_use_id": tool_use_id}, 1, now)
+        return replay("go", [*asked, answer]).approval
+
+    assert after(StepKind.APPROVAL_DENIED, "t1") == "denied"
+    assert after(StepKind.APPROVAL_GIVEN, "t1") == "requested"
+    # A denial of another call than the question's denies nothing.
+    assert after(StepKind.APPROVAL_DENIED, "t2") == "requested"
+
+
+def test_an_answer_to_the_first_question_does_not_answer_the_same_call_asked_again() -> None:
+    """The approved run was interrupted, and the call was asked about again.
+    Same call, same operation id: only the question's number tells them apart."""
+    state = replay(
+        "go",
+        log(
+            request(),
+            response(call("t1")),
+            approval_requested("t1"),
+            approval_given("t1", 3),
+            intent("t1"),
+            approval_requested("t1"),
+            approval_given("t1", 3),
+        ),
+    )
+    assert (state.approval, state.approval_for, state.approval_question) == ("requested", "t1", 6)
+
+
+def test_the_first_answer_to_a_question_counts() -> None:
+    state = replay(
+        "go",
+        log(
+            request(),
+            response(call("t1")),
+            approval_requested("t1"),
+            approval_denied("t1", 3),
+            approval_given("t1", 3),
+        ),
+    )
+    assert state.approval == "denied"
+
+
+def test_a_question_is_forgotten_with_its_call() -> None:
+    steps = log(
+        request(),
+        response(call("t1")),
+        approval_requested("t1"),
+        approval_given("t1", 3),
+        intent("t1"),
+    )
+    assert replay("go", steps).approval_question is None

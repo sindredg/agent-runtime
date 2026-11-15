@@ -65,6 +65,17 @@ class InvalidTransition(Exception):
         self.new_status = new_status
 
 
+class OtherQuestion(Exception):
+    """An answer names another question than the one the job waits on (ADR 0012)."""
+
+    def __init__(self, job_id: UUID, question: int, waiting_on: int | None) -> None:
+        super().__init__(f"job {job_id} waits on question {waiting_on}, not on {question}")
+        self.job_id = job_id
+        self.question = question
+        # The `seq` of the question the job waits on. None if it asked none.
+        self.waiting_on = waiting_on
+
+
 def job_from_row(row: Row[Any]) -> Job:
     fields = dict(row._mapping)
     fields["status"] = JobStatus(fields["status"])
@@ -173,7 +184,7 @@ async def _append_next_step(
 ) -> None:
     """Append a step at the job's next `seq`, for a caller that holds the job row's lock.
 
-    The claim and an answer to an approval both update the job row first, in
+    The claim and an answer to an approval both lock the job row first, in
     the same transaction. Until that transaction ends no worker can write a step for
     the job, so the next `seq` cannot be taken in between.
     """
@@ -266,59 +277,81 @@ async def update_status(
     return job_from_row(row)
 
 
-async def _answer(conn: AsyncConnection, job_id: UUID, kind: StepKind) -> Job:
-    """Record a person's answer to the question a job waits on, and queue the job.
+async def open_question(conn: AsyncConnection, job_id: UUID) -> tuple[int, dict[str, Any]] | None:
+    """The `seq` and payload of the job's last `approval_requested` step, or None.
 
-    The job moves from `needs_approval` to `queued` and gets a step of
-    `kind` that names the call, taken from the job's last
-    `approval_requested` step. Both happen in the caller's transaction.
-
-    Raises InvalidTransition when the job does not exist or is not waiting
-    for an answer. Of two answers sent at once, one waits for the other and
-    is then refused: the update locks the job's row.
+    The `seq` is the question's number: an answer names it (ADR 0012).
     """
-    result = await conn.execute(
-        update(jobs)
-        .where(jobs.c.id == job_id, jobs.c.status == JobStatus.NEEDS_APPROVAL.value)
-        .values(status=JobStatus.QUEUED.value)
-        .returning(*jobs.c)
-    )
-    row = result.one_or_none()
-    if row is None:
-        raise InvalidTransition(job_id, JobStatus.QUEUED)
-    job = job_from_row(row)
-    asked = (
+    found = (
         await conn.execute(
-            select(steps.c.payload)
+            select(steps.c.seq, steps.c.payload)
             .where(steps.c.job_id == job_id, steps.c.kind == StepKind.APPROVAL_REQUESTED.value)
             .order_by(steps.c.seq.desc())
             .limit(1)
         )
-    ).scalar_one_or_none() or {}
-    named = {key: asked[key] for key in ("tool_use_id", "operation_id") if key in asked}
-    await _append_next_step(conn, job, kind, named)
+    ).one_or_none()
+    return None if found is None else (found.seq, found.payload)
+
+
+async def _answer(conn: AsyncConnection, job_id: UUID, kind: StepKind, question: int) -> Job:
+    """Record a person's answer to the question a job waits on, and queue the job.
+
+    `question` is the `seq` of the `approval_requested` step the person
+    answers (ADR 0012). The job moves from `needs_approval` to `queued` and
+    gets a step of `kind` that names the question and its call. Both happen
+    in the caller's transaction.
+
+    Raises InvalidTransition when the job does not exist or is not waiting
+    for an answer, and OtherQuestion when it waits on another question than
+    `question`. Nothing is written then. The job's row is locked before
+    anything is checked: of two answers sent at once, one waits for the
+    other and is then refused.
+    """
+    status = (
+        await conn.execute(select(jobs.c.status).where(jobs.c.id == job_id).with_for_update())
+    ).scalar_one_or_none()
+    if status != JobStatus.NEEDS_APPROVAL.value:
+        raise InvalidTransition(job_id, JobStatus.QUEUED)
+    asked = await open_question(conn, job_id)
+    if asked is None or asked[0] != question:
+        raise OtherQuestion(job_id, question, None if asked is None else asked[0])
+    row = (
+        await conn.execute(
+            update(jobs)
+            .where(jobs.c.id == job_id, jobs.c.status == JobStatus.NEEDS_APPROVAL.value)
+            .values(status=JobStatus.QUEUED.value)
+            .returning(*jobs.c)
+        )
+    ).one()
+    job = job_from_row(row)
+    payload = asked[1]
+    answer: dict[str, Any] = {
+        key: payload[key] for key in ("tool_use_id", "operation_id") if key in payload
+    }
+    answer["question"] = question
+    await _append_next_step(conn, job, kind, answer)
     return job
 
 
-async def approve_job(conn: AsyncConnection, job_id: UUID) -> Job:
-    """Approve the tool call a job is waiting for, and return the job, now `queued`.
+async def approve_job(conn: AsyncConnection, job_id: UUID, question: int) -> Job:
+    """Approve the tool call of question `question`, and return the job, now `queued`.
 
     Writes an `approval_given` step. The worker that claims the job next
     runs the call: for the first time if the tool needs approval before it
     runs (ADR 0011), again if the call was interrupted (ADR 0005). The
-    approval covers that one run. Raises InvalidTransition as `_answer` does.
+    approval covers that one run. Raises as `_answer` does.
     """
-    return await _answer(conn, job_id, StepKind.APPROVAL_GIVEN)
+    return await _answer(conn, job_id, StepKind.APPROVAL_GIVEN, question)
 
 
-async def deny_job(conn: AsyncConnection, job_id: UUID) -> Job:
-    """Refuse the tool call a job is waiting for, and return the job, now `queued`.
+async def deny_job(conn: AsyncConnection, job_id: UUID, question: int) -> Job:
+    """Refuse the tool call of question `question`, and return the job, now `queued`.
 
     Writes an `approval_denied` step. The worker that claims the job next
     does not run the call: it stores an error result that says so, and the
-    job goes on. Raises InvalidTransition as `_answer` does.
+    job goes on. Raises as `_answer` does.
     """
-    return await _answer(conn, job_id, StepKind.APPROVAL_DENIED)
+    return await _answer(conn, job_id, StepKind.APPROVAL_DENIED, question)
 
 
 class JobNotFound(Exception):

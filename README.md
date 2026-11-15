@@ -93,26 +93,29 @@ its shell command waits for a person.
 
 ```sh
 uv run runtime submit examples/approval.json --follow
-uv run runtime approve <job id>
+uv run runtime approve <job id> <question>
 uv run runtime logs <job id> --follow
 ```
 
-The first command stops when the job asks, shows the call with its input,
-and exits with status 3:
+The first command stops when the job asks, shows the question's number and
+the call with its input, and exits with status 3:
 
 ```text
 needs_approval  tokens_used=1143
 The job waits for a person to decide about a tool call.
-  tool:   run_shell
-  input:  {"command": "cat hello.txt && echo seen > note.txt && ls"}
-  reason: the job's spec asks for a person's approval before this tool runs
-To let the call run: runtime approve 01a1dc46-ae79-75d6-9dd9-070e7dc3e400
-To refuse it:        runtime deny 01a1dc46-ae79-75d6-9dd9-070e7dc3e400
+  question: 7
+  tool:     run_shell
+  input:    {"command": "cat hello.txt && echo seen > note.txt && ls"}
+  reason:   the job's spec asks for a person's approval before this tool runs
+To let the call run: runtime approve 01a1dc46-ae79-75d6-9dd9-070e7dc3e400 7
+To refuse it:        runtime deny 01a1dc46-ae79-75d6-9dd9-070e7dc3e400 7
 ```
 
-`runtime approve` lets the call run once. `runtime deny <job id>` refuses it
-instead: the command does not run, the model gets an error result that says
-so, and the job goes on.
+`runtime approve` lets the call run once. `runtime deny <job id> <question>`
+refuses it instead: the command does not run, the model gets an error result
+that says so, and the job goes on. The question number is the `seq` of the
+question's step. An answer to a question the job no longer waits on is
+refused and changes nothing.
 
 ```sh
 uv run runtime status <job id>
@@ -250,7 +253,10 @@ What these results do not show:
   through one path, and bound a model call's tokens before it is sent.
   Built.
 - [ADR 0011](docs/adr/0011-ask-a-person-before-a-risky-tool-call.md): ask a
-  person before a risky tool call runs. Built.
+  person before a risky tool call runs. Built. An answer names its question:
+  see 0012.
+- [ADR 0012](docs/adr/0012-an-answer-names-its-question.md): an approval or
+  denial names the question it answers, by the `seq` of its step. Built.
 
 ## Development
 

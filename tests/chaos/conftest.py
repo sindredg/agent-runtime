@@ -217,6 +217,19 @@ class Chaos:
         )
         return found
 
+    def question(self, job_id: str) -> dict[str, Any]:
+        """The job's last `approval_requested` step: the question it waits on."""
+        return [s for s in self.steps(job_id) if s["kind"] == "approval_requested"][-1]
+
+    def answer(self, job_id: str, answer: str, asked: dict[str, Any] | None = None) -> int:
+        """Send `approve` or `deny` for the question, by its number. Returns the status code.
+
+        Without `asked`, the job's last question is answered.
+        """
+        asked = asked if asked is not None else self.question(job_id)
+        response = self.api.post(f"/jobs/{job_id}/{answer}", json={"question": asked["seq"]})
+        return response.status_code
+
     def wait_for(self, job_id: str, reached: Any, *, timeout: float, what: str) -> dict[str, Any]:
         """Poll the job until `reached(job)` is true."""
         deadline = time.monotonic() + timeout
@@ -237,9 +250,9 @@ class Chaos:
             if job["status"] in FINAL:
                 break
             if job["status"] == "needs_approval":
-                asked = [s for s in self.steps(job_id) if s["kind"] == "approval_requested"]
-                operation = asked[-1]["payload"]["operation_id"]
-                if self.api.post(f"/jobs/{job_id}/approve").status_code == 200:
+                asked = self.question(job_id)
+                operation = asked["payload"]["operation_id"]
+                if self.answer(job_id, "approve", asked) == 200:
                     approvals[operation] = approvals.get(operation, 0) + 1
             if time.monotonic() > deadline:
                 raise AssertionError(f"job {job_id} was not final after {timeout:g} s: {job}")
