@@ -1,0 +1,24 @@
+# A throwaway Postgres for tests/integration/test_postgres_init.py: the
+# stack's postgres service, with a health check that always runs past its
+# timeout and leaves a child process behind. No published port and no named
+# volume, and the test gives it a project name of its own, so it never
+# touches the stack.
+name: agent-runtime-orphans
+
+services:
+  postgres:
+    extends:
+      file: ../../docker-compose.yml
+      service: postgres
+    ports: !reset []
+    volumes: !reset []
+    healthcheck:
+      # Docker kills the outer shell at the timeout. The inner shell lives
+      # on as an orphan and exits with 2 a second later, as pg_isready does
+      # when the server does not answer. The orphan goes to the container's
+      # PID 1, which has to reap it. ORPHAN in the test names this command.
+      test: [CMD, /bin/sh, -c, "/bin/sh -c 'sleep 2; exit 2'; exit 0"]
+      interval: 1s
+      timeout: 1s
+      retries: 1000
+      start_period: 0s
