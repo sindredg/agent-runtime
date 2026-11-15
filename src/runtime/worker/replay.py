@@ -122,7 +122,7 @@ class Replay:
             self.approval, self.approval_for = "requested", payload.get("tool_use_id")
             self.approval_question = step.seq
         elif step.kind in (StepKind.APPROVAL_GIVEN, StepKind.APPROVAL_DENIED) and self._answers(
-            payload.get("question")
+            step.kind, payload
         ):
             given = step.kind is StepKind.APPROVAL_GIVEN
             self.approval = "given" if given else "denied"
@@ -130,16 +130,27 @@ class Replay:
     def _forget_question(self) -> None:
         self.approval, self.approval_for, self.approval_question = None, None, None
 
-    def _answers(self, question: Any) -> bool:
-        """True if an answer that names `question` answers the open question.
+    def _answers(self, kind: StepKind, payload: dict[str, Any]) -> bool:
+        """True if this answer answers the open question. The first answer counts.
 
-        The first answer counts. An answer that names another question, or
-        none, as one written before answers named their question, answers
-        nothing: the job waits on its question again.
+        An answer names its question by the `seq` of its step, and counts for
+        that question only. One that names another question answers nothing:
+        the job waits on its question again.
+
+        An answer written before answers named their question has no
+        `question` at all. Such a denial still counts for the call it names:
+        a denial can only keep a call from running. Such an approval does
+        not, and the job asks again.
         """
+        if self.approval != "requested":
+            return False
+        if "question" not in payload:
+            return kind is StepKind.APPROVAL_DENIED and (
+                payload.get("tool_use_id") == self.approval_for
+            )
+        question = payload["question"]
         return (
-            self.approval == "requested"
-            and isinstance(question, int)
+            isinstance(question, int)
             and not isinstance(question, bool)
             and question == self.approval_question
         )

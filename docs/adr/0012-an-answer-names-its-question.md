@@ -41,8 +41,13 @@ An answer names its question by the `seq` of the `approval_requested` step.
 - The answer step keeps `tool_use_id` and `operation_id`, and adds
   `question`.
 - Replay counts an answer only for the question it names, and only the
-  first one. An answer that names another question, or none, answers
-  nothing: the job waits on its question again.
+  first one. An answer that names another question answers nothing: the
+  job waits on its question again.
+- An answer written before this change names no question. Such a denial
+  still counts for the call it names: a denial can only keep a call from
+  running. Such an approval counts for nothing: the call is decided again as
+  if nobody had answered, so the job asks again, or the tool's check
+  settles it.
 - `runtime approve` and `runtime deny` take the number. The CLI prints it
   with the question.
 
@@ -52,7 +57,5 @@ An answer names its question by the `seq` of the `approval_requested` step.
   Both cases above are integration tests.
 - A client must read the question before it answers. An answer cannot be
   prepared in advance, for example to approve whatever a job asks next.
-- An answer step written before this change has no `question`. A job that
-  has one waits on its question again after the change.
 - The API still has no authentication. The number stops mistakes. It does
   not stop someone who can reach the API: they can read the question too.

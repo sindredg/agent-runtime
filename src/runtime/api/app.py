@@ -18,7 +18,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from runtime.api.models import Answer, JobSubmission, JobView, StepList, StepView
+from runtime.api.models import MAX_SEQ, Answer, JobSubmission, JobView, StepList, StepView
 from runtime.config import ApiConfig
 from runtime.store.engine import create_engine
 from runtime.store.jobs import (
@@ -37,9 +37,6 @@ from runtime.store.steps import read_progress
 
 # Most steps one request or one poll of the event stream reads.
 MAX_PAGE = 1000
-# The largest `seq` the steps table can hold. A larger value in a request
-# is refused up front; the database would refuse it with an error.
-MAX_SEQ = 2**31 - 1
 # A comment line is sent after this many silent seconds, so proxies and
 # clients do not take a quiet stream for a dead one.
 KEEP_ALIVE_SECONDS = 15.0

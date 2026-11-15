@@ -460,8 +460,8 @@ def test_an_approval_sent_again_after_the_same_call_was_asked_about_again_is_ref
     assert acts.runs == [(op(job, "toolu_a"), "a")]
 
 
-def test_an_answer_that_names_no_question_does_not_count(stack: Stack) -> None:
-    """As an answer written before answers named their question would be. The job
+def test_an_approval_that_names_no_question_does_not_count(stack: Stack) -> None:
+    """As an approval written before answers named their question would be. The job
     is not taken to be answered: it waits on its question again."""
     acts = Acts(gated=True)
 
@@ -492,6 +492,46 @@ def test_an_answer_that_names_no_question_does_not_count(stack: Stack) -> None:
         K.APPROVAL_GIVEN,
     ]
     assert acts.runs == []
+
+
+def test_a_denial_written_before_answers_named_their_question_still_holds(stack: Stack) -> None:
+    """An interrupted call of a tool that is not gated, whose check could not tell.
+    A person denied the rerun with an answer that names no question, as before
+    answers named their question. Then the check says the call did not happen.
+    Without the denial that would run it again."""
+    acts = Acts(check_answer=CheckOutcome.UNKNOWN)
+
+    async def body(person: Person) -> tuple[Job, list[Step]]:
+        await person.submit()
+        await person.abandon_in_the_tool()
+        assert await person.work(takeover=True) is S.NEEDS_APPROVAL
+        asked = await person.asked()
+        async with person.engine.begin() as conn:
+            await conn.execute(
+                text("UPDATE jobs SET status = 'queued' WHERE id = :id"), {"id": person.job_id}
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO steps (job_id, seq, kind, payload, lease_epoch)"
+                    " VALUES (:id, :seq, 'approval_denied', CAST(:payload AS jsonb), 2)"
+                ),
+                {"id": person.job_id, "seq": asked + 1, "payload": '{"tool_use_id": "toolu_a"}'},
+            )
+        acts.check_answer = CheckOutcome.NOT_DONE
+        assert await person.work() is S.SUCCEEDED
+        return await person.read()
+
+    job, steps = with_person(stack, acts, body)
+    a = op(job, "toolu_a")
+    results = [step.payload for step in steps if step.kind is K.TOOL_RESULT]
+    assert results[0] == {
+        "tool_use_id": "toolu_a",
+        "content": DENIED_RERUN,
+        "is_error": True,
+        "denied": True,
+    }
+    # The interrupted run, and no rerun. The second call is not gated and runs.
+    assert acts.runs == [(a, "a"), (op(job, "toolu_b"), "b")]
 
 
 # Workers that stop around the question

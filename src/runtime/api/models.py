@@ -12,6 +12,9 @@ from runtime.store.steps import StepKind
 
 # One week. A longer job is a mistake more often than a plan.
 MAX_TIMEOUT_SECONDS = 7 * 24 * 3600
+# The largest `seq` the steps table can hold. A larger value in a request
+# is refused up front; the database would refuse it with an error.
+MAX_SEQ = 2**31 - 1
 
 
 class JobSubmission(JobSpec):
@@ -39,7 +42,7 @@ class Answer(BaseModel):
 
     # The `seq` of the `approval_requested` step that asked the question. An
     # answer counts only for that question. strict: "5" or 5.0 is not one.
-    question: int = Field(ge=1, le=2**31 - 1, strict=True)
+    question: int = Field(ge=1, le=MAX_SEQ, strict=True)
 
 
 class JobView(BaseModel):

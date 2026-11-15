@@ -97,17 +97,18 @@ uv run runtime approve <job id> <question>
 uv run runtime logs <job id> --follow
 ```
 
-The first command stops when the job asks, shows the call with its input,
-and exits with status 3:
+The first command stops when the job asks, shows the question's number and
+the call with its input, and exits with status 3:
 
 ```text
 needs_approval  tokens_used=1143
 The job waits for a person to decide about a tool call.
-  tool:   run_shell
-  input:  {"command": "cat hello.txt && echo seen > note.txt && ls"}
-  reason: the job's spec asks for a person's approval before this tool runs
-To let the call run: runtime approve 01a1dc46-ae79-75d6-9dd9-070e7dc3e400
-To refuse it:        runtime deny 01a1dc46-ae79-75d6-9dd9-070e7dc3e400
+  question: 7
+  tool:     run_shell
+  input:    {"command": "cat hello.txt && echo seen > note.txt && ls"}
+  reason:   the job's spec asks for a person's approval before this tool runs
+To let the call run: runtime approve 01a1dc46-ae79-75d6-9dd9-070e7dc3e400 7
+To refuse it:        runtime deny 01a1dc46-ae79-75d6-9dd9-070e7dc3e400 7
 ```
 
 `runtime approve` lets the call run once. `runtime deny <job id> <question>`

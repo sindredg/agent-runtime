@@ -471,18 +471,44 @@ def test_a_question_is_known_by_the_seq_of_its_step() -> None:
     assert (state.approval, state.approval_for, state.approval_question) == ("requested", "t1", 3)
 
 
-@pytest.mark.parametrize("named", [None, 1, 2, 4, "3", 3.0, True])
-def test_an_answer_that_names_another_question_or_none_answers_nothing(named: Any) -> None:
+@pytest.mark.parametrize("named", [None, 1, 2, 4, "3", 3.0])
+def test_an_answer_that_names_another_question_answers_nothing(named: Any) -> None:
     """Also one that names the right call: an answer is for a question, not a call."""
     asked = log(request(), response(call("t1"), call("t2")), approval_requested("t1"))
     for kind in (StepKind.APPROVAL_GIVEN, StepKind.APPROVAL_DENIED):
-        payload = {"tool_use_id": "t1"} | ({} if named is None else {"question": named})
+        payload = {"tool_use_id": "t1", "question": named}
         state = replay("go", [*asked, Step(JOB, 4, kind, payload, 1, datetime.now(UTC))])
         assert (state.approval, state.approval_for, state.approval_question) == (
             "requested",
             "t1",
             3,
         )
+
+
+def test_a_question_number_that_is_a_boolean_answers_nothing() -> None:
+    """JSON `true` is not question 1. A log never has its question at seq 1, so it is made so."""
+    now = datetime.now(UTC)
+    steps = [
+        Step(JOB, 1, StepKind.APPROVAL_REQUESTED, {"tool_use_id": "t1"}, 1, now),
+        Step(JOB, 2, StepKind.APPROVAL_GIVEN, {"tool_use_id": "t1", "question": True}, 1, now),
+    ]
+    assert replay("go", steps).approval == "requested"
+
+
+def test_an_answer_written_before_answers_named_their_question_counts_only_as_a_denial() -> None:
+    """Such an answer has no `question`. A denial can only keep a call from running,
+    so it still counts for the call it names. An approval does not: the job asks again."""
+    asked = log(request(), response(call("t1"), call("t2")), approval_requested("t1"))
+    now = datetime.now(UTC)
+
+    def after(kind: StepKind, tool_use_id: str) -> str | None:
+        answer = Step(JOB, 4, kind, {"tool_use_id": tool_use_id}, 1, now)
+        return replay("go", [*asked, answer]).approval
+
+    assert after(StepKind.APPROVAL_DENIED, "t1") == "denied"
+    assert after(StepKind.APPROVAL_GIVEN, "t1") == "requested"
+    # A denial of another call than the question's denies nothing.
+    assert after(StepKind.APPROVAL_DENIED, "t2") == "requested"
 
 
 def test_an_answer_to_the_first_question_does_not_answer_the_same_call_asked_again() -> None:
