@@ -1,4 +1,5 @@
-"""The API application: submit jobs, read them, follow their steps, approve a rerun.
+"""The API application: submit jobs, read them, follow their steps, cancel them,
+and approve or deny a tool call that waits for a person.
 
 There is no authentication. The service listens on localhost.
 """
@@ -26,6 +27,7 @@ from runtime.store.jobs import (
     approve_job,
     cancel_job,
     create_job,
+    deny_job,
     get_job,
 )
 from runtime.store.payload import InvalidPayload
@@ -126,28 +128,45 @@ def create_app(
             raise HTTPException(status_code=404, detail="job not found")
         return JobView.model_validate(job)
 
-    @app.post("/jobs/{job_id}/approve")
-    async def approve(job_id: UUID) -> JobView:
-        """Approve the rerun of a tool call that was interrupted.
-
-        A job in `needs_approval` stopped because nobody could tell whether
-        the call already happened. Approving means: run it again, knowing it
-        may have run before. The job goes back to `queued`. Any other status
-        is refused with 409.
-        """
+    async def answer(job_id: UUID, *, approved: bool) -> JobView:
+        """Record a person's answer for a job in `needs_approval`, and queue the job."""
         async with engine().begin() as conn:
             try:
-                job = await approve_job(conn, job_id)
+                job = await (approve_job if approved else deny_job)(conn, job_id)
             except InvalidTransition:
                 found = await get_job(conn, job_id)
                 if found is None:
                     raise HTTPException(status_code=404, detail="job not found") from None
                 raise HTTPException(
                     status_code=409,
-                    detail=f"job is {found.status.value};"
-                    " only a job that needs approval can be approved",
+                    detail=f"job is {found.status.value}; only a job that needs approval"
+                    f" can be {'approved' if approved else 'denied'}",
                 ) from None
         return JobView.model_validate(job)
+
+    @app.post("/jobs/{job_id}/approve")
+    async def approve(job_id: UUID) -> JobView:
+        """Approve the tool call a job in `needs_approval` waits for.
+
+        The job's last `approval_requested` step names the call and says why
+        a person is asked. Either the tool needs approval before it runs
+        (ADR 0011): nothing of the call has run. Or the call was interrupted
+        and nobody can tell whether it happened (ADR 0005): approving means
+        to run it again, knowing it may have run before. The approval covers
+        one run. The job goes back to `queued`. Any other status is refused
+        with 409.
+        """
+        return await answer(job_id, approved=True)
+
+    @app.post("/jobs/{job_id}/deny")
+    async def deny(job_id: UUID) -> JobView:
+        """Refuse the tool call a job in `needs_approval` waits for (ADR 0011).
+
+        The call does not run. The job goes back to `queued`; its next
+        worker stores an error result for the call that says it was denied,
+        and the job goes on. Any other status is refused with 409.
+        """
+        return await answer(job_id, approved=False)
 
     @app.post("/jobs/{job_id}/cancel")
     async def cancel(job_id: UUID, response: Response) -> JobView:
@@ -198,9 +217,10 @@ def create_app(
         continues with `Last-Event-ID` or `?after=`. The stream ends when the
         job has a final status and every step was sent.
 
-        A job that stops in `needs_approval` is not over. The stream sends
-        one `status` event that says so and stays open: the job goes on when
-        a person approves it. Without the event a client would wait and
+        A job that stops in `needs_approval` is not over. Each time it
+        stops there the stream sends one `status` event that says so and
+        stays open: the job goes on when
+        a person approves or denies the call. Without the event a client would wait and
         could not tell why.
         """
         start = last_event_id if last_event_id is not None else after
@@ -232,9 +252,12 @@ def create_app(
                 if status in FINAL_STATUSES:
                     yield _event("end", json.dumps({"status": status.value}))
                     return
-                # Said once each time the job stops there, after its steps.
+                # Said once each time the job stops there, after its steps. A
+                # job can stop there again between two polls, when it was
+                # answered and its next call asks too. New steps show that:
+                # a job that waits gets none.
                 waiting = status is JobStatus.NEEDS_APPROVAL
-                if waiting and not told_waiting:
+                if waiting and (steps or not told_waiting):
                     yield _event("status", json.dumps({"status": status.value}))
                 told_waiting = waiting
                 if steps:

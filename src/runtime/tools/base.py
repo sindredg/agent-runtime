@@ -85,6 +85,9 @@ class Tool:
     # only for a call that was interrupted, and only if the tool is not
     # idempotent. Without it a person is asked.
     check: Callable[[ToolCall], CheckAnswer] | None = None
+    # True when no call of the tool runs before a person approved it (ADR
+    # 0011). A job's spec can ask for the same; it cannot take this away.
+    needs_approval: bool = False
 
     def definition(self) -> dict[str, Any]:
         return tool_definition(self.name, self.description, self.input_schema)
@@ -102,6 +105,9 @@ class ToolRegistry:
 
     def get(self, name: str) -> AnyTool | None:
         return self._tools.get(name)
+
+    def __contains__(self, name: object) -> bool:
+        return name in self._tools
 
     def definitions(self) -> tuple[dict[str, Any], ...]:
         return tuple(tool.definition() for tool in self._tools.values())

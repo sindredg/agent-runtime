@@ -1,8 +1,9 @@
 """The job spec: what a job is asked to do. Stored in `jobs.spec`."""
 
 from pathlib import PurePosixPath
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator
 
 from runtime.scope import MAX_TARGETS, Target
 from runtime.tools.paths import check_relative
@@ -15,6 +16,9 @@ MAX_NAME_BYTES = 255
 MAX_PATH_BYTES = 1024
 # Characters in `prompt` and in `system`.
 MAX_TEXT_LENGTH = 1_000_000
+# Tools a spec can name in `needs_approval`, and characters in one name.
+MAX_GATED_TOOLS = 100
+MAX_TOOL_NAME_LENGTH = 200
 
 
 def _size(text: str) -> int:
@@ -37,6 +41,13 @@ class JobSpec(BaseModel):
     # What the job's tools may reach on the network (ADR 0009). Left out, they
     # reach nothing. The job cannot change it.
     scope: tuple[Target, ...] | None = Field(default=None, min_length=1, max_length=MAX_TARGETS)
+    # Names of tools whose calls wait for a person's approval in this job, on
+    # top of the tools that always do (ADR 0011). A list of names can only
+    # add: there is no way to write that a tool needs none.
+    needs_approval: (
+        tuple[Annotated[StrictStr, Field(min_length=1, max_length=MAX_TOOL_NAME_LENGTH)], ...]
+        | None
+    ) = Field(default=None, max_length=MAX_GATED_TOOLS)
 
     @field_validator("files")
     @classmethod

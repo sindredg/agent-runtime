@@ -25,7 +25,7 @@ from runtime.api.app import create_app
 from runtime.config import ApiConfig
 from runtime.store import held
 from runtime.store.engine import create_engine
-from runtime.store.jobs import Job, claim_job, create_job, get_job
+from runtime.store.jobs import Job, cancel_job, claim_job, create_job, get_job
 from runtime.store.status import JobStatus
 from runtime.store.steps import StepKind, append_step, read_steps
 
@@ -116,7 +116,7 @@ async def serving(database_url: str, **options: Any) -> AsyncIterator[Api]:
         host="127.0.0.1",
         port=0,
     )
-    app = create_app(config, poll_interval=0.02, **options)
+    app = create_app(config, **{"poll_interval": 0.02, **options})
     server = uvicorn.Server(
         uvicorn.Config(app, host="127.0.0.1", port=0, log_config=None, timeout_graceful_shutdown=2)
     )
@@ -226,6 +226,10 @@ def test_submit_applies_the_configured_defaults(database_url: str) -> None:
         {"prompt": "go", "scope": [{"host": "169.254.169.254"}]},
         {"prompt": "go", "scope": [{"host": "0.0.0.0/0"}]},
         {"prompt": "go", "scope": "10.0.0.5"},
+        # The list of tools that need approval can only add.
+        {"prompt": "go", "needs_approval": {"run_shell": False}},
+        {"prompt": "go", "needs_approval": False},
+        {"prompt": "go", "needs_approval": [""]},
     ],
 )
 def test_submit_refuses_with_422_and_stores_nothing(
@@ -280,11 +284,17 @@ def test_read_job_returns_the_current_state(database_url: str) -> None:
 
 def test_unknown_job_is_404_on_every_job_route_and_a_bad_id_is_422(database_url: str) -> None:
     async def body(api: Api) -> dict[str, int]:
-        return {
+        read = {
             path: (await api.client.get(path)).status_code
             for kind in ("", "/steps", "/events")
             for path in (f"/jobs/{uuid4()}{kind}", f"/jobs/not-a-uuid{kind}")
         }
+        changed = {
+            path: (await api.client.post(path)).status_code
+            for kind in ("/approve", "/deny", "/cancel")
+            for path in (f"/jobs/{uuid4()}{kind}", f"/jobs/not-a-uuid{kind}")
+        }
+        return read | changed
 
     for path, status in api_test(database_url, body).items():
         assert status == (422 if "not-a-uuid" in path else 404), path
@@ -557,10 +567,65 @@ def test_event_stream_says_that_a_job_waits_for_approval_and_goes_on_when_it_is_
     assert events[4][2] == {"status": "succeeded"}
 
 
-def test_approve_queues_the_job_and_records_the_approval_as_a_step(database_url: str) -> None:
+def test_event_stream_says_it_again_when_the_job_waits_again_between_two_polls(
+    database_url: str,
+) -> None:
+    """A job whose next call asks too can be back in `needs_approval` before the
+    stream looks again. The stream never sees another status in between."""
+
+    async def body(api: Api) -> list[tuple[int | None, str, Any]]:
+        job = await parked_for_approval(api)
+        events = []
+        async with asyncio.timeout(20):
+            async for event in api.follow(job.id):
+                events.append(event)
+                statuses = [e for e in events if e[1] == "status"]
+                if event[1] == "status" and len(statuses) == 1:
+                    # All of it inside one wait of the stream: answered, run on
+                    # by a worker, and parked for the next question.
+                    assert (await api.client.post(f"/jobs/{job.id}/deny")).status_code == 200
+                    async with api.engine.begin() as conn:
+                        claimed = await claim_job(conn, worker_id="w2")
+                    assert claimed is not None
+                    await held.append_step(
+                        api.engine,
+                        job_id=job.id,
+                        lease_epoch=claimed.lease_epoch,
+                        seq=4,
+                        kind=StepKind.APPROVAL_REQUESTED,
+                        payload={"tool_use_id": "toolu_2", "operation_id": f"{job.id}:toolu_2"},
+                    )
+                    await api.finish(claimed, JobStatus.NEEDS_APPROVAL)
+                elif event[1] == "status":
+                    async with api.engine.begin() as conn:
+                        await cancel_job(conn, job.id)
+        return events
+
+    events = api_test(database_url, body, poll_interval=1.0)
+    assert [(event_id, name) for event_id, name, _ in events] == [
+        (1, "step"),
+        (2, "step"),
+        (None, "status"),
+        (3, "step"),
+        (4, "step"),
+        # The second stop, said after the steps that led to it.
+        (None, "status"),
+        (None, "end"),
+    ]
+    assert [events[i][2]["kind"] for i in (3, 4)] == ["approval_denied", "approval_requested"]
+    assert events[6][2] == {"status": "cancelled"}
+
+
+ANSWERS = [("approve", StepKind.APPROVAL_GIVEN), ("deny", StepKind.APPROVAL_DENIED)]
+
+
+@pytest.mark.parametrize(("answer", "kind"), ANSWERS)
+def test_an_answer_queues_the_job_and_is_recorded_as_a_step(
+    database_url: str, answer: str, kind: StepKind
+) -> None:
     async def body(api: Api) -> tuple[Job, httpx2.Response, Job | None, list[Any]]:
         job = await parked_for_approval(api)
-        response = await api.client.post(f"/jobs/{job.id}/approve")
+        response = await api.client.post(f"/jobs/{job.id}/{answer}")
         async with api.engine.begin() as conn:
             return job, response, await get_job(conn, job.id), await read_steps(conn, job.id)
 
@@ -578,18 +643,19 @@ def test_approve_queues_the_job_and_records_the_approval_as_a_step(database_url:
     assert [(step.seq, step.kind) for step in steps] == [
         (1, StepKind.TOOL_INTENT),
         (2, StepKind.APPROVAL_REQUESTED),
-        (3, StepKind.APPROVAL_GIVEN),
+        (3, kind),
     ]
-    # The approval names the call it is for.
+    # The answer names the call it is for.
     assert steps[2].payload == {"tool_use_id": "toolu_1", "operation_id": f"{parked.id}:toolu_1"}
 
 
+@pytest.mark.parametrize("answer", ["approve", "deny"])
 @pytest.mark.parametrize(
     "status",
     [status for status in JobStatus if status is not JobStatus.NEEDS_APPROVAL],
 )
-def test_approve_refuses_a_job_that_is_not_waiting_for_approval(
-    database_url: str, status: JobStatus
+def test_an_answer_is_refused_for_a_job_that_is_not_waiting_for_one(
+    database_url: str, status: JobStatus, answer: str
 ) -> None:
     async def body(api: Api) -> tuple[httpx2.Response, Job | None, list[Any], list[Any]]:
         job = await api.new_job()
@@ -597,13 +663,14 @@ def test_approve_refuses_a_job_that_is_not_waiting_for_approval(
             await api.finish(job, status)
         async with api.engine.begin() as conn:
             before = await read_steps(conn, job.id)
-        response = await api.client.post(f"/jobs/{job.id}/approve")
+        response = await api.client.post(f"/jobs/{job.id}/{answer}")
         async with api.engine.begin() as conn:
             return response, await get_job(conn, job.id), before, await read_steps(conn, job.id)
 
     response, job, before, steps = api_test(database_url, body)
     assert response.status_code == 409
     assert status.value in response.json()["detail"]
+    assert "only a job that needs approval" in response.json()["detail"]
     assert job is not None
     assert job.status is status
     # No step was added. A failed job has the one its failure wrote.
@@ -611,11 +678,14 @@ def test_approve_refuses_a_job_that_is_not_waiting_for_approval(
     assert len(steps) == (1 if status is JobStatus.FAILED else 0)
 
 
-def test_approve_of_an_unknown_job_is_404_and_of_a_bad_id_422(database_url: str) -> None:
+@pytest.mark.parametrize("answer", ["approve", "deny"])
+def test_an_answer_for_an_unknown_job_is_404_and_for_a_bad_id_422(
+    database_url: str, answer: str
+) -> None:
     async def body(api: Api) -> tuple[httpx2.Response, httpx2.Response]:
         return (
-            await api.client.post(f"/jobs/{uuid4()}/approve"),
-            await api.client.post("/jobs/not-an-id/approve"),
+            await api.client.post(f"/jobs/{uuid4()}/{answer}"),
+            await api.client.post(f"/jobs/not-an-id/{answer}"),
         )
 
     unknown, bad = api_test(database_url, body)
@@ -623,21 +693,36 @@ def test_approve_of_an_unknown_job_is_404_and_of_a_bad_id_422(database_url: str)
     assert bad.status_code == 422
 
 
-def test_two_approvals_at_once_approve_once(database_url: str) -> None:
-    """One question, one answer: the second approval finds the job already queued."""
+def test_answers_sent_at_once_answer_once(database_url: str) -> None:
+    """One question, one answer: every other one finds the job already queued."""
 
-    async def body(api: Api) -> tuple[list[int], list[Any]]:
+    async def body(api: Api) -> tuple[list[tuple[str, int]], list[Any]]:
         job = await parked_for_approval(api)
+        answers = ["approve", "deny"] * 4
         responses = await asyncio.gather(
-            *(api.client.post(f"/jobs/{job.id}/approve") for _ in range(5))
+            *(api.client.post(f"/jobs/{job.id}/{answer}") for answer in answers)
         )
         async with api.engine.begin() as conn:
-            return [r.status_code for r in responses], await read_steps(conn, job.id)
+            steps = await read_steps(conn, job.id)
+        return [(a, r.status_code) for a, r in zip(answers, responses, strict=True)], steps
 
-    codes, steps = api_test(database_url, body)
-    assert sorted(codes) == [200, 409, 409, 409, 409]
-    assert [step.kind for step in steps].count(StepKind.APPROVAL_GIVEN) == 1
+    answered, steps = api_test(database_url, body)
+    assert sorted(code for _, code in answered) == [200, *[409] * 7]
     assert [step.seq for step in steps] == [1, 2, 3]
+    # The step is the answer that got the 200, and no other.
+    winner = next(answer for answer, code in answered if code == 200)
+    assert steps[2].kind is dict(ANSWERS)[winner]
+
+
+def test_a_list_of_tools_that_need_approval_is_stored_with_the_job(database_url: str) -> None:
+    async def body(api: Api) -> httpx2.Response:
+        return await api.client.post(
+            "/jobs", json={"prompt": "go", "needs_approval": ["run_shell", "create_issue"]}
+        )
+
+    response = api_test(database_url, body)
+    assert response.status_code == 201
+    assert response.json()["spec"]["needs_approval"] == ["run_shell", "create_issue"]
 
 
 def test_a_scope_is_stored_with_the_job_in_its_plain_form(database_url: str) -> None:

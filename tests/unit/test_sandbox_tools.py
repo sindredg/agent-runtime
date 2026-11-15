@@ -1,6 +1,7 @@
 """Sandboxed tools: the command built from the model's input, and the result it gets back."""
 
 import asyncio
+import dataclasses
 import uuid
 from collections.abc import Sequence
 from pathlib import Path
@@ -14,10 +15,12 @@ from runtime.sandbox.docker import SandboxError
 from runtime.sandbox.runner import NotStarted, Run, SandboxSettings
 from runtime.scope import Resolved
 from runtime.store.payload import check_json
+from runtime.tools import default_tools
 from runtime.tools.base import ToolCall, ToolResult
 from runtime.tools.list_dir import list_dir_tool
 from runtime.tools.run_shell import run_shell_tool
 from runtime.tools.sandboxed import SandboxTool, describe
+from runtime.worker.approval import gate_reason
 
 LIMIT = 64 * 1024
 JOB = uuid.UUID("01a1d655-88bd-7468-afc4-5ca3a1947906")
@@ -187,3 +190,31 @@ def test_the_result_never_passes_the_limit_and_can_always_be_stored(
     if not result.truncated:
         assert len(output) + extra == len(kept)
         assert result.content.startswith(kept.decode("utf-8", "replace").replace("\x00", "�"))
+
+
+# Approval before a call runs (ADR 0011)
+
+
+def test_a_sandboxed_tool_can_need_approval_like_any_other() -> None:
+    plain = run_shell_tool(FakeSandbox())
+    flagged = dataclasses.replace(plain, needs_approval=True)
+    assert gate_reason(flagged, flagged.name, ()) is not None
+    # The model is not told: the definition it gets is the same.
+    assert flagged.definition() == plain.definition()
+
+
+def test_no_tool_a_worker_offers_needs_approval_unless_a_job_asks(tmp_path: Path) -> None:
+    """The gate is there for a tool that sets the flag, and for a job that names a tool.
+
+    Pinned here so that a tool which starts to ask on every call does so on purpose.
+    """
+    tools = default_tools(
+        tracker_url="http://tracker.invalid", chaos_log_dir=tmp_path, sandbox=FakeSandbox()
+    )
+    names = [definition["name"] for definition in tools.definitions()]
+    assert sorted(names) == ["crash_worker", "create_issue", "list_dir", "read_file", "run_shell"]
+    for name in names:
+        tool = tools.get(name)
+        assert tool is not None
+        assert tool.needs_approval is False
+        assert gate_reason(tool, name, ()) is None

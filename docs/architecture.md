@@ -28,7 +28,7 @@ flowchart LR
 
 | Component | Code | What it does |
 |---|---|---|
-| `api` | `src/runtime/api/` | Accepts jobs, returns jobs and steps, streams steps as server-sent events, approves a rerun. Holds no state. No authentication, so it is published on localhost only. |
+| `api` | `src/runtime/api/` | Accepts jobs, returns jobs and steps, streams steps as server-sent events, cancels a job, records a person's approval or denial of a tool call. Holds no state. No authentication, so it is published on localhost only. |
 | `worker` | `src/runtime/worker/` | Claims one job at a time, runs the agent loop, renews its lease while it does. Any worker can continue any job. |
 | `postgres` | `migrations/`, `src/runtime/store/` | Jobs and the step log. Also the queue ([ADR 0002](adr/0002-postgres-as-the-job-queue.md)). |
 | `migrate` | `migrations/` | Runs `alembic upgrade head` and exits. `api` and `worker` start after it succeeds. |
@@ -37,7 +37,7 @@ flowchart LR
 | Provider client | `src/runtime/provider/` | The worker's one way to call a model: the official SDK behind a `Provider` interface. |
 | Tools | `src/runtime/tools/` | `list_dir` and `run_shell` run in a container per call. `read_file`, `create_issue`, and `crash_worker` for failure tests run inside the worker process. |
 | Sandbox | `src/runtime/sandbox/`, `images/sandbox/`, `images/guard/` | Starts one container per sandboxed tool call through the Docker Engine API on the unix socket, reads its output from the attach stream, and removes it ([ADR 0008](adr/0008-run-each-tool-call-in-its-own-container.md)). For a job with a scope it first starts a guard container that holds the call's firewall ([ADR 0009](adr/0009-enforce-the-target-scope-in-the-network-namespace.md)). The `sandbox-image` and `guard-image` services build the images, check that they start, and exit. |
-| CLI | `src/runtime/cli.py` | `runtime submit`, `status`, `logs`, `approve`. Talks to the API only. |
+| CLI | `src/runtime/cli.py` | `runtime submit`, `status`, `logs`, `approve`, `deny`, `cancel`. Talks to the API only. |
 
 ## How a job runs
 
@@ -125,10 +125,11 @@ that are `queued`, `waiting` or `running`.
 |---|---|---|
 | `model_request` | `model`, `max_tokens`, `messages` (a count), `input_bound`, `tokens_used` (before the call) | Before each model call |
 | `model_response` | `id`, `content`, `stop_reason`, `usage`. `problem` if the response cannot be used. If the content cannot be stored, it is replaced by an empty list and `content_dropped` is set. | After each model call, in one statement with the `tokens_used` update |
-| `tool_intent` | `tool_use_id`, `name`, `input`. For a sandboxed call `ends_within`; with a scope, `scope`: each target with the addresses it was resolved to and its ports | Before every run of a tool. A call that is run again gets a new one. |
-| `tool_result` | `tool_use_id`, `content`, `is_error`. `recovered` when the result came from the tool's check and the tool did not run again. `truncated` when the output was cut to fit 64 KiB. `dropped_packets` for a scoped call: what its guard dropped. | After a tool ran, or could not run |
-| `approval_requested` | `tool_use_id`, `name`, `input`, `operation_id`, `reason` | When nobody can tell whether an interrupted call happened |
+| `tool_intent` | `tool_use_id`, `name`, `input`. `needs_approval` when the run has a person's approval behind it. For a sandboxed call `ends_within`; with a scope, `scope`: each target with the addresses it was resolved to and its ports | Before every run of a tool. A call that is run again gets a new one. |
+| `tool_result` | `tool_use_id`, `content`, `is_error`. `recovered` when the result came from the tool's check and the tool did not run again. `truncated` when the output was cut to fit 64 KiB. `dropped_packets` for a scoped call: what its guard dropped. `denied` when a person refused the call. | After a tool ran, or could not run, or was denied |
+| `approval_requested` | `tool_use_id`, `name`, `input`, `operation_id`, `reason` | Before the intent of a call that needs approval, and when nobody can tell whether an interrupted call happened |
 | `approval_given` | `tool_use_id`, `operation_id` | By `POST /jobs/{id}/approve` |
+| `approval_denied` | `tool_use_id`, `operation_id` | By `POST /jobs/{id}/deny` |
 | `error` | `message` | When the job fails, by its worker or by the claim at the takeover limit |
 
 `spec` and `payload` are `jsonb`. It cannot hold the NUL character, unpaired
@@ -143,7 +144,7 @@ such as `1e22`, is read back as an int.
 |---|---|---|
 | `queued` | `running`, `cancelled`, `failed` | To `running` by a claim, `cancelled` by a cancel, `failed` at its deadline |
 | `running` | `succeeded`, `failed`, `needs_approval`, `queued`, `waiting`, `cancelled` | All but `waiting`: `queued` when its worker is stopped, `cancelled` after a cancel request, by its worker or by a claim |
-| `needs_approval` | `queued`, `cancelled`, `failed` | Yes: to `queued` by an approval, `cancelled` by a cancel, `failed` at its deadline |
+| `needs_approval` | `queued`, `cancelled`, `failed` | Yes: to `queued` by an approval or a denial, `cancelled` by a cancel, `failed` at its deadline |
 | `waiting` | `running`, `cancelled`, `failed` | No, planned |
 | `succeeded`, `failed`, `cancelled` | nothing | Yes |
 
@@ -165,6 +166,7 @@ and the claim).
 | Failure | A worker fails its job with one fenced statement: the move to `failed` and the `error` step, which takes the next `seq` by itself. A worker that stops while it fails a job leaves both or neither. A job with an `error` step is therefore never `running`, and no worker takes it over. |
 | Dropping a job | On `LeaseLost`, or when the database cannot be reached, the worker drops the job: it writes nothing more, starts no tool and no model call, and leaves the status and the workspace alone. A model call in flight is cancelled as soon as a heartbeat is refused: its answer would be refused too, so the worker does not wait for it. What the provider did up to the cancel may still be billed. A call is not cancelled for the worker's own deadline alone: its answer is still stored if nobody took the job. The job stays as it is until its lease runs out and another worker takes it over. |
 | Halt | A requested cancel and the deadline halt a job, through one signal (`worker/halt.py`, [ADR 0010](adr/0010-one-halt-path-and-a-budget-bound.md)). `POST /jobs/{id}/cancel` is one statement: a job that no worker holds (one that waits, or a `running` one whose lease is over) is `cancelled`; a `running` one under a live lease gets `cancel_requested`, which its worker reads every second. A job that its worker would park in `needs_approval` while its cancel is requested is `cancelled` instead. Right after the claim the worker reads the time left before the deadline from the database clock and keeps a timer. On a halt the worker starts nothing more (it checks again right before a tool's intent), gives up a model call in flight, a tool's check and a name lookup, and kills a running sandboxed command, which removes its containers; a tool in the worker process runs on in its thread and its result is dropped. The job then ends with a fenced write: `cancelled`, or `failed` with an `error` step that says the deadline passed. A claim cancels a `running` job whose cancel was requested and fails a job past its deadline, instead of handing it out. Each worker fails, every second, the jobs past their deadline that no worker holds, each with an `error` step; it skips rows another worker has locked, and an index on the deadline of open jobs keeps finished jobs out of it. A worker that loses its lease also kills a running sandboxed command now: its result would be refused. |
+| Approval | A tool's definition can set `needs_approval`, and a job's spec can name further tools in `needs_approval` ([ADR 0011](adr/0011-ask-a-person-before-a-risky-tool-call.md), `worker/approval.py`). Either is enough, and a spec has no way to say that a tool needs none. A name in the spec that is not a tool of the worker that claims the job fails the job there, before that worker starts anything: a misspelt name would gate nothing. That also fails a job that a worker with fewer tools claims or takes over. For a call of such a tool the worker writes `approval_requested` and parks the job in `needs_approval`, with no `tool_intent`: nothing of the call has happened. `POST /jobs/{id}/approve` appends `approval_given` and queues the job; the next worker writes the intent and runs the call. `POST /jobs/{id}/deny` appends `approval_denied`; the next worker stores an error result marked `denied` and the job goes on, with no intent and no run. An answer counts only for the call its question named. The log binds every worker, also one whose copy of the tool does not ask (during a deploy that changes a tool's definition): a question that is open before any intent parks the job again, and the intent of an approved run is marked `needs_approval`. The intent uses the approval up: a call that is interrupted after it is asked about again, also when the tool is idempotent or its check says the call did not happen. A parked job is failed at its deadline by the workers' timer. No tool that ships sets the flag. |
 | Duplicate steps | A second step with the same (`job_id`, `seq`) is refused. In a fenced write the refusal undoes the token count with it. |
 | Resume | See [What happens when a worker goes away](#what-happens-when-a-worker-goes-away). |
 | Graceful stop | On SIGTERM the worker claims nothing more. At the next step boundary it releases the job: `running` to `queued`, fenced, so the next claim is not a takeover. A model call in flight is cancelled at once. A running tool is waited for and its result stored. The compose stack gives the worker 45 seconds before Docker kills it, longer than the sandbox timeout of 30. |
@@ -205,14 +207,17 @@ Then it decides in this order (`worker/recovery.py`):
 | Case | What the worker does |
 |---|---|
 | The worker has no tool of that name | Runs the call again under a new intent. The run only yields the "unknown tool" error result. |
+| A person denied (`approval_denied` follows the intent) | Writes an error `tool_result` marked `denied`, which says the call may or may not have run. The tool does not run again. |
 | A person approved (`approval_given` follows the intent) | Runs the call again under a new intent. |
-| The tool is idempotent | Runs the call again under a new intent. |
+| The tool is idempotent | Runs the call again under a new intent. For a tool that needs approval: asks a person. |
 | The check answers done | Writes the `tool_result` from the check, marked `recovered`. The tool does not run. |
-| The check answers not done | Runs the call again under a new intent. |
+| The check answers not done | Runs the call again under a new intent. For a tool that needs approval: asks a person. |
 | The check answers unknown, fails, or there is none | Writes `approval_requested` and moves the job to `needs_approval`. Nothing else runs. |
 
-An approval covers one run. If the approved rerun is interrupted too, a person
-is asked again.
+An approval covers one run. If the approved run is interrupted, a person is
+asked again. For a tool that needs approval that holds in every case where
+the call would run again: the approval it had was for the run that was
+interrupted.
 
 | Tool | Idempotent | Check |
 |---|---|---|
@@ -244,11 +249,12 @@ These exist for the tests in `tests/chaos` and do nothing unless switched on.
 
 | Route | Returns |
 |---|---|
-| `POST /jobs` | 201 and the job. Body: `prompt`, optional `system`, `model`, `files`, `token_budget`, `timeout_seconds`. Unknown fields are refused with 422. |
+| `POST /jobs` | 201 and the job. Body: `prompt`, optional `system`, `model`, `files`, `scope`, `needs_approval`, `token_budget`, `timeout_seconds`. Unknown fields are refused with 422. |
 | `GET /jobs/{id}` | The job. 404 if there is none. |
 | `GET /jobs/{id}/steps?after=&limit=` | Steps with `seq` above `after`, in order, at most 1000. |
 | `GET /jobs/{id}/events` | Server-sent events: one `step` event per step with `id` set to its `seq`, then one `end` event with the final status. A job that stops in `needs_approval` gets one `status` event that says so, and the stream stays open. `Last-Event-ID` or `?after=` continues a broken stream. |
-| `POST /jobs/{id}/approve` | The job, now `queued`, after an `approval_given` step was appended in the same transaction. 409 unless the job is `needs_approval`. Of several approvals sent at once, one succeeds. |
+| `POST /jobs/{id}/approve` | The job, now `queued`, after an `approval_given` step was appended in the same transaction. 409 unless the job is `needs_approval`. |
+| `POST /jobs/{id}/deny` | The job, now `queued`, after an `approval_denied` step was appended in the same transaction. 409 unless the job is `needs_approval`. Of several approvals and denials sent at once, one succeeds. |
 | `POST /jobs/{id}/cancel` | 200 and the job, now `cancelled`, if no worker held it (`queued`, `waiting`, `needs_approval`, or `running` with its lease over), or if it was cancelled already. 202 and the job, still `running`, with `cancel_requested` set: its worker stops it. 409 for a job that succeeded or failed, 404 for none. |
 | `GET /healthz` | 200 while the process serves. It does not check Postgres. |
 
@@ -298,9 +304,9 @@ stack by accident. See `.env.example`.
 | Suite | Needs | Covers |
 |---|---|---|
 | `tests/unit` | nothing | Status transitions, replay, the decision about an interrupted call, the lease deadline with a fake clock, failpoints, scenario parsing, the fake provider and the fake tracker in process, the provider client's failure handling, the tools, the container settings, the output cut and the result text, the Docker client against a mock transport, the CLI against a stubbed API. |
-| `tests/integration` | `make up` | Migrations. The store on real Postgres: claims, takeovers, the limit, fenced writes with two connections. The worker against the fake provider: heartbeat, lost lease, resume at each interruption point, each row of the decision table, approval, graceful stop, each failpoint. The API over HTTP. The sandbox against the Docker daemon: output and exit status, the container's settings, the timeout, the cut, a job whose commands misbehave in four ways, a container that ends by itself when its worker is gone, and a takeover during a sandboxed call that removes the container and waits. The workspace sweep: what it removes and what it keeps. A job that loops until its token budget stops it. Cancel and the deadline: in the store, by the claim, by the timer for waiting jobs, and in the middle of a model call and of a sandboxed command, each within 5 s. Three jobs end to end through the stack. |
+| `tests/integration` | `make up` | Migrations. The store on real Postgres: claims, takeovers, the limit, fenced writes with two connections. The worker against the fake provider: heartbeat, lost lease, resume at each interruption point, each row of the decision table, approval, graceful stop, each failpoint. The approval gate, with a tool that keeps its own record of its runs: no run before the approval, a denied call never runs, a spec adds to the gate and cannot take from it, one approval per run, an answer for another call does not count, and a job nobody answers is failed at its deadline. The API over HTTP. The sandbox against the Docker daemon: output and exit status, the container's settings, the timeout, the cut, a job whose commands misbehave in four ways, a container that ends by itself when its worker is gone, and a takeover during a sandboxed call that removes the container and waits. The workspace sweep: what it removes and what it keeps. A job that loops until its token budget stops it. Cancel and the deadline: in the store, by the claim, by the timer for waiting jobs, and in the middle of a model call and of a sandboxed command, each within 5 s. Three jobs end to end through the stack. |
 | `tests/escape` | `make escape` (the sandbox image, no stack) | Escape attempts from a `run_shell` call: the network, the cloud metadata address, the Docker socket, the root file system, mounts, capabilities, privileges, root, processes, memory, a file on the host and another job's workspace. Each must be a failed tool result, and the host's file unchanged. |
-| `tests/chaos` | `make chaos` | Workers that are killed at random times, end themselves at failpoints, are paused past their lease, crash on every run, are killed during a sandboxed call, and get SIGTERM. Each test writes its result to `.chaos/results.jsonl` when it is over, with a `verdict`: `passed`, `failed`, or `void` when the machine's clock was set during the run. See the [results](../README.md#results). |
+| `tests/chaos` | `make chaos` | Workers that are killed at random times, end themselves at failpoints, are paused past their lease, crash on every run, are killed during a sandboxed call, and get SIGTERM. Jobs that ask before a tool call while workers are killed, with approvals and denials, checked against the tracker's time for each issue. Each test writes its result to `.chaos/results.jsonl` when it is over, with a `verdict`: `passed`, `failed`, or `void` when the machine's clock was set during the run. See the [results](../README.md#results). |
 | `tests/contract` | `make up`, a Claude API key | The fake provider against the Claude API: the same tool call exchange through the runtime's client, the raw JSON of both responses, and the refusal of an unknown model. Everything the fake returns has to be in what the API returns. The fake returns less: the API's `tool_use` block has a `caller` field, for example. Run by hand; see the [README](../README.md#development) for the last run. |
 
 The integration and chaos suites never mock Postgres. A test that checks what
@@ -372,9 +378,18 @@ Accepted, with the reason in the decision records:
   is still refused.
 - Five takeovers fail a job, also when the workers were lost for reasons that
   have nothing to do with the job. The limit is a constant.
-- A job that waits in `needs_approval` waits until a person approves or
-  cancels it, or until its deadline. Approve offers a rerun only: entering
-  the result by hand and skipping the call are not built.
+- A job that waits in `needs_approval` waits until a person approves, denies
+  or cancels it, or until its deadline. Entering a call's result by hand is
+  not built.
+- The approval gate is per tool, not per call: with `run_shell` named, a
+  command that lists a directory asks as loudly as one that deletes it. No
+  tool that ships needs approval by its definition, so a job that does not
+  name a tool is not asked about.
+- The log records that a call was approved or denied, not by whom: the API
+  has no authentication.
+- An answer goes to whatever question the job waits on when it arrives. One
+  that is sent late or twice can land on the job's next question
+  ([issue 42](https://github.com/sindredg/agent-runtime/issues/42)).
 
 Not built or not closed:
 
@@ -382,12 +397,6 @@ Not built or not closed:
 - `read_file`, `create_issue` and `crash_worker` run in the worker process,
   with no general timeout. A tool that outlasts the stop grace period is
   killed with its worker, and the job is taken over when its lease runs out.
-- A tool container whose worker is killed keeps running until its command
-  ends, and is not removed. Nothing bounds it from inside the container yet.
-  A worker that takes the job over decides about the interrupted call at
-  once, without waiting for that container: `run_shell` asks a person, and
-  `list_dir` runs again.
-- Tool containers have no network at all. A target scope is not built.
 - The workspace has no disk quota. A command can fill the disk that holds
   the Docker volumes, Postgres among them, for the length of its timeout,
   and the next call can go on
@@ -418,6 +427,6 @@ Not built or not closed:
 - The API has no authentication, and it does not cap the size of a request
   body. Only the fields are limited: `prompt` and `system` to 1,000,000
   characters each, `files` to 1 MiB. Anyone who can reach the API can approve
-  a rerun.
+  or deny a tool call, and cancel a job.
 - `read_file` checks paths and symlinks. A hard link inside a workspace to a
   file outside it would be read. Nothing built so far can create one.

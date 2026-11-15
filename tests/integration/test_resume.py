@@ -85,6 +85,8 @@ class Acts:
     idempotent: bool = False
     check_answer: CheckAnswer | Exception | None = None
     hang_at: int | None = None
+    # True: the tool's definition says its calls need approval.
+    gated: bool = False
     runs: list[tuple[str, str]] = field(default_factory=list)
     checks: list[str] = field(default_factory=list)
     hanging: threading.Event = field(default_factory=threading.Event)
@@ -107,7 +109,15 @@ class Acts:
     def registry(self) -> ToolRegistry:
         schema = {"type": "object", "properties": {"path": {"type": "string"}}}
         check = None if self.check_answer is None else self.check
-        tool = Tool("act", "Do it.", schema, self.run, idempotent=self.idempotent, check=check)
+        tool = Tool(
+            "act",
+            "Do it.",
+            schema,
+            self.run,
+            idempotent=self.idempotent,
+            check=check,
+            needs_approval=self.gated,
+        )
         return ToolRegistry([tool])
 
 
