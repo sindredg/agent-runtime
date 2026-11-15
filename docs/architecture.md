@@ -243,7 +243,7 @@ These exist for the tests in `tests/chaos` and do nothing unless switched on.
 | `FAILPOINT_TOOL` | Limits the three tool failpoints to calls of one tool. |
 | `CHAOS_TOOLS=1` | Offers the `crash_worker` tool, which appends a line to `CHAOS_LOG_DIR/crash_worker.log` and then ends the process. |
 | `delay_seconds` in a scenario turn | The fake provider waits that long inside the stream, after `message_start` and before the first content block. |
-| `docker-compose.chaos.yml` | Three workers, a 2 second lease, the switches above, and a restart policy for workers that ended themselves. |
+| `docker-compose.chaos.yml` | Three workers, a 2 second lease, the switches above, and a restart policy for workers that ended themselves. The tests that stop a worker at a failpoint run their workers on a 6 second lease renewed every 2 seconds: the first worker has to reach the failpoint, and a 2 second lease can run out before it does on a loaded machine. |
 
 ## API
 
