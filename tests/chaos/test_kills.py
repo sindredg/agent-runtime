@@ -24,6 +24,7 @@ from runtime.failpoints import NAMES
 
 from .conftest import (
     FAILPOINT_LEASE,
+    FINAL,
     FIRED,
     SHORT_LEASE,
     WORKERS,
@@ -128,6 +129,19 @@ def test_a_job_survives_its_worker_stopping_at_the_failpoint(
     finally:
         chaos.workers_up()
     print(f"\n{run.summary()}")
+    # Before the checks: a failed run is recorded too, with its verdict.
+    record(
+        f"G1+G2 failpoint {failpoint}",
+        {
+            "runs": 1,
+            "scenario": SCENARIO,
+            "lease_seconds": FAILPOINT_LEASE,
+            "takeovers": run.job["takeovers"],
+            "issues": sum(len(ids) for ids in run.issues.values()),
+            "approvals": sum(run.approvals.values()),
+            "outcome": AFTER_TAKEOVER.get(failpoint, "the job is resumed from the log"),
+        },
+    )
 
     # The failpoint was reached, once: the worker that takes over passes it.
     fired = logs.count(FIRED)
@@ -151,18 +165,6 @@ def test_a_job_survives_its_worker_stopping_at_the_failpoint(
         assert [s["lease_epoch"] for s in create] == [1]
         assert results[0]["payload"]["recovered"] is True
         assert results[0]["lease_epoch"] == 2
-    record(
-        f"G1+G2 failpoint {failpoint}",
-        {
-            "runs": 1,
-            "scenario": SCENARIO,
-            "lease_seconds": FAILPOINT_LEASE,
-            "takeovers": run.job["takeovers"],
-            "issues": sum(len(ids) for ids in run.issues.values()),
-            "approvals": 0,
-            "outcome": AFTER_TAKEOVER.get(failpoint, "the job is resumed from the log"),
-        },
-    )
 
 
 def test_a_call_nobody_can_vouch_for_waits_for_approval_and_then_runs_again(chaos: Chaos) -> None:
@@ -187,8 +189,13 @@ def test_a_call_nobody_can_vouch_for_waits_for_approval_and_then_runs_again(chao
             time.sleep(0.02)
         docker("docker", "pause", tracker)
         frozen = True
+        # A final status too: a job whose first worker lost its lease before the
+        # failpoint never waits. The check of the failpoint below says why.
         parked = chaos.wait_for(
-            job_id, lambda job: job["status"] == "needs_approval", timeout=60, what="needs_approval"
+            job_id,
+            lambda job: job["status"] in ("needs_approval", *FINAL),
+            timeout=60,
+            what="needs_approval",
         )
         docker("docker", "unpause", tracker)
         frozen = False
@@ -201,8 +208,20 @@ def test_a_call_nobody_can_vouch_for_waits_for_approval_and_then_runs_again(chao
         chaos.workers_up()
     print(f"\n{run.summary()}")
 
+    record(
+        "G2 approved rerun",
+        {
+            "runs": 1,
+            "scenario": SCENARIO,
+            "lease_seconds": FAILPOINT_LEASE,
+            "issues": sum(len(ids) for ids in run.issues.values()),
+            "approvals": sum(run.approvals.values()),
+        },
+    )
+
     fired = logs.count(FIRED)
     assert fired == 1, failpoint_missed(fired, run.job, logs)
+    assert parked["status"] == "needs_approval", parked
     assert parked["lease_owner"] is None
     assert len(asked) == 1
     assert "could not tell" in asked[0]["payload"]["reason"]
@@ -218,13 +237,3 @@ def test_a_call_nobody_can_vouch_for_waits_for_approval_and_then_runs_again(chao
         "approval_given",
         "tool_intent",
     ]
-    record(
-        "G2 approved rerun",
-        {
-            "runs": 1,
-            "scenario": SCENARIO,
-            "lease_seconds": FAILPOINT_LEASE,
-            "issues": 2,
-            "approvals": 1,
-        },
-    )
