@@ -271,13 +271,37 @@ def test_a_late_removal_does_not_hold_the_call_past_its_bound(short: SandboxSett
     docker = FakeDocker(late=frozenset({"remove"}))
     sandbox = Sandbox(docker, short)  # type: ignore[arg-type]
 
+    async def run_and_look() -> tuple[Run, float, list[bool]]:
+        began = time.monotonic()
+        run = await sandbox.run(JOB, 1, ["true"])
+        took = time.monotonic() - began
+        # A removal that was cancelled at the bound is done after one more turn of the loop.
+        await asyncio.sleep(0.05)
+        return run, took, [removal.done() for removal in sandbox._removals]
+
+    _, outcome = timed(run_and_look)
+
+    assert not isinstance(outcome, BaseException), outcome
+    run, took, removals_done = outcome
+    # The removal had the rest of the bound, the request's 10 s included.
+    assert call_within(short) - 0.05 <= took < call_within(short) + 0.3
+    # The command ran and its result is kept.
+    assert run.exit_code == 0
+    assert ("remove", docker.calls[0][1]) in docker.calls
+    # The removal goes on without the call: still running, not cancelled.
+    assert removals_done == [False]
+
+
+def test_the_commands_timeout_counts_from_the_start_request(short: SandboxSettings) -> None:
+    """A slow set-up does not eat into the command's time."""
+    sandbox = Sandbox(FakeDocker(create_takes=0.15, late=frozenset({"wait"})), short)  # type: ignore[arg-type]
+
     took, outcome = timed_run(sandbox)
 
-    assert took < call_within(short) + 0.3
-    # The command ran and its result is kept; the removal goes on without the call.
     assert isinstance(outcome, Run), outcome
-    assert outcome.exit_code == 0
-    assert ("remove", docker.calls[0][1]) in docker.calls
+    assert outcome.timed_out
+    # 0.15 s to create, then the full 0.2 s timeout.
+    assert took >= 0.15 + 0.2
 
 
 def test_a_wait_that_never_answers_ends_at_the_commands_timeout_within_the_bound(
@@ -293,10 +317,11 @@ def test_a_wait_that_never_answers_ends_at_the_commands_timeout_within_the_bound
     assert outcome.timed_out
 
 
-def test_a_scoped_call_cut_off_after_the_start_says_the_command_may_have_run(
+def test_a_scoped_call_whose_removal_is_late_keeps_its_result_and_loses_only_the_count(
     short: SandboxSettings,
 ) -> None:
-    """The command's container is removed before the guard's count is read, inside the bound."""
+    """The command's container is removed before the guard's count is read, inside the
+    bound. The bound runs out there, after the command ended: its output is in hand."""
     scoped = dataclasses.replace(short, guard_image="guard:test", network="sandbox-net")
     docker = FakeDocker(late=frozenset({"remove"}))
     sandbox = Sandbox(docker, scoped)  # type: ignore[arg-type]
@@ -304,9 +329,10 @@ def test_a_scoped_call_cut_off_after_the_start_says_the_command_may_have_run(
     took, outcome = timed_run(sandbox, Resolved(allowed=(), hosts=()))
 
     assert took < call_within(scoped) + 0.3
-    assert "start" in [call for call, _ in docker.calls]
-    assert isinstance(outcome, SandboxError), outcome
-    assert not isinstance(outcome, NotStarted)
+    started = [name for call, name in docker.calls if call == "start"]
+    assert [name.split("-")[2] for name in started] == ["guard", "sandbox"]
+    assert isinstance(outcome, Run), outcome
+    assert (outcome.exit_code, outcome.dropped) == (0, None)
 
 
 @pytest.mark.parametrize("value", ["1\n", "2\n", "3\n"])

@@ -129,8 +129,9 @@ def call_within(settings: SandboxSettings) -> float:
     """Seconds after it began by which `Sandbox.run` returns, whatever Docker does.
 
     `ends_within`, plus one request's time for removing the containers. A
-    worker's stop grace period has to be at least this long, or a stop can
-    cut off a call and leave it for a person.
+    worker's stop grace period has to be longer, by the time the steps
+    around the call take (`runtime.config.STOP_MARGIN_SECONDS`), or a stop
+    can cut off a call and leave it for a person.
     """
     return ends_within(settings) + REQUEST_TIMEOUT
 
@@ -458,10 +459,11 @@ class Sandbox:
         Docker is not asked to start it once `start_within` has passed.
 
         The whole call, removal included, returns within `call_within`. A
-        call that Docker holds up past it fails. A removal that is not done
-        by then goes on without the call: the containers end by themselves
-        (`ends_within`), and what is left of them is for the removal at a
-        takeover.
+        call that Docker holds up past it fails, unless its command has
+        already ended: then its result is kept, without a scoped call's
+        count. A removal that is not done by then goes on without the call,
+        while the worker runs. A container that started ends by itself
+        (`ends_within`). One whose removal fails stays on the host, stopped.
         """
         settings = self.settings
         if scope is not None and settings.guard_image is None:
@@ -476,10 +478,9 @@ class Sandbox:
         guard = f"agent-runtime-guard-{uuid4().hex}" if scope is not None else None
         token = uuid4().hex
         output = Output(settings.output_limit)
-        deadline = asyncio.timeout(settings.timeout)
         exit_code: int | None = None
         dropped: int | None = None
-        started = False
+        started = finished = False
         try:
             async with asyncio.timeout_at(end) as bound, contextlib.AsyncExitStack() as guarded:
                 guard_stream = None
@@ -499,7 +500,8 @@ class Sandbox:
                             " to set up the container"
                         )
                     try:
-                        async with deadline:
+                        # The timeout counts from the start request.
+                        async with asyncio.timeout(settings.timeout) as deadline:
                             # From here on the command may run, whatever Docker answers.
                             started = True
                             await self._start(name)
@@ -509,6 +511,9 @@ class Sandbox:
                     except TimeoutError:
                         if not deadline.expired():
                             raise
+                    # The command has ended or was given up at its timeout: its
+                    # output and exit status are in hand.
+                    finished = True
                 # The command's container goes first, so nothing is sent after
                 # the count is read. If it could not be removed, the count
                 # would not be the whole story, so there is none.
@@ -521,25 +526,30 @@ class Sandbox:
         except TimeoutError as error:
             if not bound.expired():
                 raise
-            message = f"Docker did not finish the call within {within:g} s"
-            if not started:
-                raise NotStarted(message) from error
-            raise SandboxError(message) from error
+            if not finished:
+                message = f"Docker did not finish the call within {within:g} s"
+                raise (SandboxError if started else NotStarted)(message) from error
+            # Only what follows the command was cut off: for a scoped call,
+            # its count of dropped packets is lost.
+            log.warning(
+                "the call's bound passed after its command ended",
+                extra={"container": name, "job_id": str(job_id)},
+            )
         except SandboxError as error:
             if not started:
                 raise NotStarted(str(error)) from error
             raise
         finally:
-            # Kills a command that still runs, then its guard. Shielded, so
-            # that a second cancel does not stop the removal half way, and
-            # waited for only until the call's bound.
+            # Kills a command that still runs, then its guard. Waited for until
+            # the call's bound at most. asyncio.wait never cancels what it
+            # waits for: a removal still going then goes on, also when this
+            # call is cancelled a second time.
             removals = [self._remove_later(name)]
             if guard is not None:
                 removals.append(self._remove_later(guard))
-            try:
-                async with asyncio.timeout_at(end):
-                    await asyncio.shield(asyncio.gather(*removals))
-            except TimeoutError:
+            left = max(end - asyncio.get_running_loop().time(), 0.0)
+            _, pending = await asyncio.wait(removals, timeout=left)
+            if pending:
                 log.warning(
                     "tool containers not removed within the call's bound; the removal goes on",
                     extra={"container": name, "job_id": str(job_id)},

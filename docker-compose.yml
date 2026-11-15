@@ -94,8 +94,8 @@ services:
     # On SIGTERM the worker waits for a running tool, stores its result and
     # gives the job back. After this long Docker kills it, and the job is
     # taken over when its lease runs out. The worker gets the same number as
-    # STOP_GRACE_SECONDS and refuses to start if a sandboxed call does not
-    # fit in it.
+    # STOP_GRACE_SECONDS and refuses to start if a sandboxed call and 5 s for
+    # the steps around it do not fit in it.
     stop_grace_period: ${STOP_GRACE_SECONDS:-75}s
     # The group that owns the Docker socket, so the worker can start a
     # container for each sandboxed tool call. Whoever controls the worker
