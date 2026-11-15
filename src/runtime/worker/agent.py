@@ -450,9 +450,13 @@ async def _next_tool_call(
             try:
                 if tool.sandbox.settings.guard_image is None:
                     raise ScopeRefused("this worker has no guard image, so it cannot enforce one")
-                _, looked_up = await _race(
-                    resolve(scope, tool.sandbox.settings.deny), lease=lease, halt=halt
+                done, looked_up = await _race(
+                    resolve(scope, tool.sandbox.settings.deny), lease=lease, halt=halt, stop=stop
                 )
+                if not done:
+                    # Told to stop during the lookup. Nothing of the call has
+                    # happened, so the job is handed back without it.
+                    return True
                 assert looked_up is not None  # noqa: S101 - _race returns the result
                 resolved = looked_up
             except ScopeRefused as refused:
@@ -468,7 +472,10 @@ async def _next_tool_call(
                 return True
             call = dataclasses.replace(call, scope=resolved)
             intent["scope"] = resolved.record()
-    # The last moment to give up a call: after the intent the tool runs.
+    # The last moment to give up a call: after the intent the tool runs. A
+    # worker told to stop starts no call; the job goes back with it open.
+    if stop.is_set():
+        return True
     halt.check()
     await writer.append(StepKind.TOOL_INTENT, intent)
     failpoints.hit("after_tool_intent", takeovers=job.takeovers, tool=name)

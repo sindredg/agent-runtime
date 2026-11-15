@@ -30,6 +30,14 @@ CHAOS_DIR = REPO_ROOT / ".chaos"
 WORKERS = 3
 # The lease of the chaos stack and of the default stack, in seconds.
 SHORT_LEASE, DEFAULT_LEASE = 2.0, 30.0
+# The lease of the tests that stop a worker at a failpoint, renewed every 2 s.
+# The first worker has to reach the failpoint, and a 2 s lease can run out on a
+# loaded machine before it does. These tests do not need a takeover within
+# seconds of a kill; the random kills do, and keep the short lease.
+FAILPOINT_LEASE = 6.0
+# What a worker logs when it stops at a failpoint, and when it loses a lease.
+FIRED = "failpoint reached, stopping the worker"
+LEASE_TROUBLE = ("lease renewal failed", "lease lost", "job dropped: the lease is gone")
 FINAL = ("succeeded", "failed", "cancelled")
 # Seconds the wall clock may drift from the monotonic clock during one test
 # before the run is void. A clock that is only being disciplined stays far below.
@@ -262,6 +270,38 @@ class Chaos:
             .json()
         )
         return Run(self.job(job_id), self.steps(job_id), requests, issues, approvals or {}, note)
+
+
+def lease_trouble(logs: str, job_id: str) -> list[str]:
+    """The workers' log lines about losing this job's lease: time, message, error type."""
+    found = []
+    for line in logs.splitlines():
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(entry, dict) or entry.get("job_id") != job_id:
+            continue
+        if entry.get("message") not in LEASE_TROUBLE:
+            continue
+        error = str(entry.get("exception", "")).strip().splitlines()
+        found.append(" ".join(filter(None, [entry.get("time"), entry["message"], *error[-1:]])))
+    return found
+
+
+def failpoint_missed(fired: int, job: dict[str, Any], logs: str) -> str:
+    """Why a run did not stop its worker at the failpoint exactly once.
+
+    The failpoint fires only while the job has no takeover. A run in which
+    the first worker lost its lease before it got there is a failure, and
+    this says so: the takeovers, and the lease lines of the workers' logs.
+    """
+    lines = lease_trouble(logs, str(job["id"]))
+    return (
+        f"the failpoint stopped a worker {fired} times, not once."
+        f" The job had {job['takeovers']} takeovers; the failpoint fires only before the first."
+        f" Lease lines in the workers' logs: {'; '.join(lines) if lines else 'none'}"
+    )
 
 
 def commit() -> str:

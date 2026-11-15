@@ -1,9 +1,12 @@
-"""The runner against a stand-in for Docker: what a takeover removes, when a start is given up."""
+"""The runner against a stand-in for Docker: what a takeover removes, when a call is given up."""
 
 import asyncio
+import dataclasses
 import ipaddress
+import threading
+import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -11,18 +14,23 @@ from typing import Any
 import pytest
 
 from runtime.sandbox import runner
-from runtime.sandbox.docker import DockerError, SandboxError
+from runtime.sandbox.docker import REQUEST_TIMEOUT, DockerError, SandboxError
 from runtime.sandbox.runner import (
     EPOCH_LABEL,
     JOB_LABEL,
     LABEL,
     NotStarted,
+    Run,
     Sandbox,
     SandboxSettings,
+    call_within,
     check_host,
     deny_list,
+    ends_within,
 )
-from runtime.scope import FIXED_DENY
+from runtime.scope import FIXED_DENY, Resolved
+from runtime.tools.base import ToolCall, ToolResult
+from runtime.tools.run_shell import run_shell_tool
 
 JOB = uuid.UUID("01a1d655-88bd-7468-afc4-5ca3a1947906")
 
@@ -36,12 +44,21 @@ class FakeDocker:
         create_takes: float = 0,
         start_takes: float = 0,
         refuse_removal: frozenset[str] = frozenset(),
+        late: frozenset[str] = frozenset(),
     ) -> None:
         self.found = found or []
         self.create_takes = create_takes
         self.start_takes = start_takes
         self.refuse_removal = refuse_removal
+        # Requests answered only after an hour.
+        self.late = late
         self.calls: list[tuple[str, Any]] = []
+        # A guard's token, by container name: its stream says it is ready.
+        self.ready: dict[str, str] = {}
+
+    async def _answer(self, request: str) -> None:
+        if request in self.late:
+            await asyncio.sleep(3600)
 
     async def containers(self, labels: dict[str, str]) -> list[dict[str, Any]]:
         self.calls.append(("containers", labels))
@@ -49,28 +66,42 @@ class FakeDocker:
 
     async def create(self, name: str, config: dict[str, Any]) -> None:
         self.calls.append(("create", name))
+        for entry in config.get("Env", []):
+            if entry.startswith("READY="):
+                self.ready[name] = entry.removeprefix("READY=")
+        await self._answer("create")
         await asyncio.sleep(self.create_takes)
 
     @asynccontextmanager
     async def attach(self, name: str) -> AsyncIterator[AsyncIterator[bytes]]:
         self.calls.append(("attach", name))
+        await self._answer("attach")
+        token = self.ready.get(name)
 
-        async def nothing() -> AsyncIterator[bytes]:
-            return
-            yield b""
+        async def stream() -> AsyncIterator[bytes]:
+            # A guard says it is ready, in one stdout frame. A command says nothing.
+            if token is not None:
+                text = f"ready {token}\n".encode()
+                yield bytes([1, 0, 0, 0]) + len(text).to_bytes(4, "big") + text
 
-        yield nothing()
+        yield stream()
+
+    async def kill(self, name: str, signal: str) -> None:
+        self.calls.append(("kill", name))
 
     async def start(self, name: str) -> None:
         self.calls.append(("start", name))
+        await self._answer("start")
         await asyncio.sleep(self.start_takes)
 
     async def wait(self, name: str) -> int:
         self.calls.append(("wait", name))
+        await self._answer("wait")
         return 0
 
     async def remove(self, name: str) -> None:
         self.calls.append(("remove", name))
+        await self._answer("remove")
         if name in self.refuse_removal:
             raise DockerError(409, "removal of container is already in progress")
 
@@ -158,6 +189,150 @@ def test_a_start_request_is_bounded_as_a_whole(monkeypatch: pytest.MonkeyPatch) 
     # Asked to start, so it may have run.
     assert not isinstance(raised.value, NotStarted)
     assert [call for call, _ in docker.calls][-1] == "remove"
+
+
+EVERY_REQUEST = frozenset({"create", "attach", "start", "wait", "remove"})
+
+
+@pytest.fixture
+def short(monkeypatch: pytest.MonkeyPatch) -> SandboxSettings:
+    """Settings whose whole-call bound is under a second: 0.2 + 0.1 + 0.2 + 0.1 + 0.1."""
+    monkeypatch.setattr(runner, "REQUEST_TIMEOUT", 0.1)
+    monkeypatch.setattr(runner, "KILL_MARGIN", 0.1)
+    return settings(start_within=0.2, timeout=0.2)
+
+
+def timed[T](call: Callable[[], Awaitable[T]]) -> tuple[float, T | BaseException]:
+    """Seconds `call` took, and what it returned or raised. One still going after 5 s fails.
+
+    The call runs on an event loop of its own, in a thread the test can give
+    up on. A call without a bound would wait for the daemon's hour, and
+    cancelling it would not help: its removal is shielded.
+    """
+    outcome: list[T | BaseException] = []
+
+    def run() -> None:
+        async def body() -> T:
+            return await call()
+
+        try:
+            outcome.append(asyncio.run(body()))
+        except Exception as error:
+            outcome.append(error)
+
+    began = time.monotonic()
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    thread.join(timeout=5)
+    took = time.monotonic() - began
+    if not outcome:
+        pytest.fail(f"the call was still going after {took:.1f} s")
+    return took, outcome[0]
+
+
+def timed_run(sandbox: Sandbox, scope: Resolved | None = None) -> tuple[float, Run | BaseException]:
+    return timed(lambda: sandbox.run(JOB, 1, ["true"], scope))
+
+
+def test_a_whole_call_is_bounded_by_the_containers_bound_plus_one_request() -> None:
+    assert call_within(settings()) == ends_within(settings()) + REQUEST_TIMEOUT
+    # The defaults: 15 + 10 + 30 + 2 + 10.
+    assert call_within(settings()) == 67
+
+
+def test_a_daemon_that_answers_every_request_late_ends_the_call_within_its_bound(
+    short: SandboxSettings,
+) -> None:
+    sandbox = Sandbox(FakeDocker(late=EVERY_REQUEST), short)  # type: ignore[arg-type]
+
+    took, outcome = timed_run(sandbox)
+
+    assert took < call_within(short) + 0.3
+    # The create never came back, so Docker was never asked to start it.
+    assert isinstance(outcome, NotStarted), outcome
+    assert f"within {call_within(short):g} s" in str(outcome)
+
+
+def test_a_late_daemon_becomes_a_failed_result_that_says_the_command_did_not_run(
+    short: SandboxSettings,
+) -> None:
+    tool = run_shell_tool(Sandbox(FakeDocker(late=EVERY_REQUEST), short))  # type: ignore[arg-type]
+    call = ToolCall(Path("/workspaces") / str(JOB), {"command": "true"}, f"{JOB}:toolu_1", 1)
+
+    took, result = timed(lambda: tool.run(call))
+
+    assert took < call_within(short) + 0.3
+    assert isinstance(result, ToolResult), result
+    assert result.is_error
+    assert result.content.startswith("the sandbox could not start the command")
+
+
+def test_a_late_removal_does_not_hold_the_call_past_its_bound(short: SandboxSettings) -> None:
+    docker = FakeDocker(late=frozenset({"remove"}))
+    sandbox = Sandbox(docker, short)  # type: ignore[arg-type]
+
+    async def run_and_look() -> tuple[Run, float, list[bool]]:
+        began = time.monotonic()
+        run = await sandbox.run(JOB, 1, ["true"])
+        took = time.monotonic() - began
+        # A removal that was cancelled at the bound is done after one more turn of the loop.
+        await asyncio.sleep(0.05)
+        return run, took, [removal.done() for removal in sandbox._removals]
+
+    _, outcome = timed(run_and_look)
+
+    assert not isinstance(outcome, BaseException), outcome
+    run, took, removals_done = outcome
+    # The removal had the rest of the bound, the request's 10 s included.
+    assert call_within(short) - 0.05 <= took < call_within(short) + 0.3
+    # The command ran and its result is kept.
+    assert run.exit_code == 0
+    assert ("remove", docker.calls[0][1]) in docker.calls
+    # The removal goes on without the call: still running, not cancelled.
+    assert removals_done == [False]
+
+
+def test_the_commands_timeout_counts_from_the_start_request(short: SandboxSettings) -> None:
+    """A slow set-up does not eat into the command's time."""
+    sandbox = Sandbox(FakeDocker(create_takes=0.15, late=frozenset({"wait"})), short)  # type: ignore[arg-type]
+
+    took, outcome = timed_run(sandbox)
+
+    assert isinstance(outcome, Run), outcome
+    assert outcome.timed_out
+    # 0.15 s to create, then the full 0.2 s timeout.
+    assert took >= 0.15 + 0.2
+
+
+def test_a_wait_that_never_answers_ends_at_the_commands_timeout_within_the_bound(
+    short: SandboxSettings,
+) -> None:
+    sandbox = Sandbox(FakeDocker(late=frozenset({"wait", "remove"})), short)  # type: ignore[arg-type]
+
+    took, outcome = timed_run(sandbox)
+
+    assert took < call_within(short) + 0.3
+    # Started, then given up at the command's own timeout: a run without an exit status.
+    assert isinstance(outcome, Run), outcome
+    assert outcome.timed_out
+
+
+def test_a_scoped_call_whose_removal_is_late_keeps_its_result_and_loses_only_the_count(
+    short: SandboxSettings,
+) -> None:
+    """The command's container is removed before the guard's count is read, inside the
+    bound. The bound runs out there, after the command ended: its output is in hand."""
+    scoped = dataclasses.replace(short, guard_image="guard:test", network="sandbox-net")
+    docker = FakeDocker(late=frozenset({"remove"}))
+    sandbox = Sandbox(docker, scoped)  # type: ignore[arg-type]
+
+    took, outcome = timed_run(sandbox, Resolved(allowed=(), hosts=()))
+
+    assert took < call_within(scoped) + 0.3
+    started = [name for call, name in docker.calls if call == "start"]
+    assert [name.split("-")[2] for name in started] == ["guard", "sandbox"]
+    assert isinstance(outcome, Run), outcome
+    assert (outcome.exit_code, outcome.dropped) == (0, None)
 
 
 @pytest.mark.parametrize("value", ["1\n", "2\n", "3\n"])
