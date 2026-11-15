@@ -231,7 +231,7 @@ def test_a_denied_call_never_runs_and_the_job_goes_on(stack: Stack) -> None:
         K.MODEL_RESPONSE,
     ]
     a, b = op(job, "toolu_a"), op(job, "toolu_b")
-    assert steps[3].payload == {"tool_use_id": "toolu_a", "operation_id": a}
+    assert steps[3].payload == {"tool_use_id": "toolu_a", "operation_id": a, "question": 3}
     assert steps[4].payload == {
         "tool_use_id": "toolu_a",
         "content": DENIED,

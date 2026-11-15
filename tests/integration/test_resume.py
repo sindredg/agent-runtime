@@ -624,7 +624,7 @@ def test_an_approved_call_is_run_again_under_its_own_intent(stack: Stack) -> Non
     a, b = op(job, "toolu_a"), op(job, "toolu_b")
     # Two runs of the first call, for two intents: the abandoned one and the approved one.
     assert acts.runs == [(a, "a"), (a, "a"), (b, "b")]
-    assert steps[4].payload == {"tool_use_id": "toolu_a", "operation_id": a}
+    assert steps[4].payload == {"tool_use_id": "toolu_a", "operation_id": a, "question": 4}
 
 
 def test_an_approved_rerun_that_is_interrupted_too_needs_a_new_approval(stack: Stack) -> None:
