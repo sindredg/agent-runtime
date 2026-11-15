@@ -7,7 +7,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from runtime.failpoints import NAMES as FAILPOINT_NAMES
-from runtime.sandbox.runner import SandboxSettings
+from runtime.sandbox.runner import SandboxSettings, call_within
+
+# Seconds a stop needs besides a sandboxed call: the scope's lookup ends at a
+# stop, but the intent before the call, the result after it and the release
+# of the job are written in that time.
+STOP_MARGIN_SECONDS = 5.0
 
 
 class ConfigError(Exception):
@@ -167,6 +172,9 @@ class WorkerConfig:
     sandbox: SandboxConfig | None
     # How often the worker removes the workspaces of final and unknown jobs.
     sweep_interval: float
+    # Seconds the worker gets after SIGTERM before it is killed: compose's
+    # `stop_grace_period`, which sets this too. A sandboxed call has to fit.
+    stop_grace_seconds: float
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> WorkerConfig:
@@ -187,6 +195,20 @@ class WorkerConfig:
         chaos_log_dir = None
         if env.get("CHAOS_TOOLS") == "1":
             chaos_log_dir = Path(_required(env, "CHAOS_LOG_DIR"))
+        stop_grace_seconds = _positive_float(env, "STOP_GRACE_SECONDS", 75.0)
+        sandbox = SandboxConfig.from_env(env)
+        if sandbox is not None:
+            within = call_within(sandbox.settings)
+            if within + STOP_MARGIN_SECONDS > stop_grace_seconds:
+                # A stop would kill the worker in the middle of a call, or
+                # before its result is stored, and an interrupted run_shell
+                # call needs a person.
+                raise ConfigError(
+                    f"a sandboxed call can take {within:g} s (SANDBOX_TIMEOUT_SECONDS"
+                    f" {sandbox.settings.timeout:g} plus the start and Docker requests), and"
+                    f" the steps around it {STOP_MARGIN_SECONDS:g} s more: more than"
+                    f" STOP_GRACE_SECONDS ({stop_grace_seconds:g})"
+                )
         return cls(
             database_url=_required(env, "DATABASE_URL"),
             provider=ProviderConfig.from_env(env),
@@ -200,8 +222,9 @@ class WorkerConfig:
             failpoint=failpoint,
             failpoint_tool=env.get("FAILPOINT_TOOL") or None,
             chaos_log_dir=chaos_log_dir,
-            sandbox=SandboxConfig.from_env(env),
+            sandbox=sandbox,
             sweep_interval=_positive_float(env, "SWEEP_INTERVAL_SECONDS", 300.0),
+            stop_grace_seconds=stop_grace_seconds,
         )
 
 
