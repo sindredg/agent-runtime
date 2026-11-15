@@ -46,6 +46,13 @@ def _job_id(text: str) -> str:
         raise argparse.ArgumentTypeError(f"{text!r} is not a job id") from error
 
 
+def _question(text: str) -> int:
+    """A question is the number (`seq`) of a job's approval_requested step."""
+    if not (text.isascii() and text.isdigit()) or not 1 <= int(text) <= 2**31 - 1:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a question number")
+    return int(text)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="runtime", description="Submit and inspect agent jobs.")
     parser.add_argument(
@@ -77,26 +84,31 @@ def build_parser() -> argparse.ArgumentParser:
 
     approve = commands.add_parser(
         "approve",
-        help="let the tool call run that a job in needs_approval waits for",
+        help="let the tool call of a job's question run",
         description=(
-            "A job stops in needs_approval for one of two reasons, which its"
-            " approval_requested step names. The tool needs approval before each run:"
+            "A job stops in needs_approval for one of two reasons, which its question (its"
+            " approval_requested step) names. The tool needs approval before each run:"
             " nothing of the call has run, and approving runs it once. Or a worker went away"
             " during the call and nobody can tell whether it happened: approving runs it"
-            " again, so look at the system the tool changes first."
+            " again, so look at the system the tool changes first. The answer names the"
+            " question by its number. If the job waits on another question by then, the"
+            " answer is refused and nothing changes."
         ),
     )
     approve.add_argument("job_id", type=_job_id)
+    approve.add_argument("question", type=_question, help="the number of the question")
 
     deny = commands.add_parser(
         "deny",
-        help="refuse the tool call that a job in needs_approval waits for",
+        help="refuse the tool call of a job's question",
         description=(
             "The call does not run. The job goes on, and the model is told that the call"
-            " was denied. A job nobody answers is failed at its deadline."
+            " was denied. A job nobody answers is failed at its deadline. The answer names"
+            " the question by its number, as for approve."
         ),
     )
     deny.add_argument("job_id", type=_job_id)
+    deny.add_argument("question", type=_question, help="the number of the question")
 
     cancel = commands.add_parser(
         "cancel",
@@ -209,7 +221,7 @@ def _lines(response: httpx2.Response) -> Iterator[str]:
 
 def _follow(client: httpx2.Client, job_id: str, out: TextIO) -> tuple[str, Any]:
     """Print steps from the event stream as they arrive. Returns the status it
-    stopped at, and the payload of the last `approval_requested` step it printed.
+    stopped at, and the last `approval_requested` step it printed.
 
     The status is the job's final one, or `needs_approval`: such a job goes
     on only when a person answers, so following it would wait without end.
@@ -245,7 +257,7 @@ def _follow(client: httpx2.Client, job_id: str, out: TextIO) -> tuple[str, Any]:
                             print(format_step(step), file=out, flush=True)
                             after = step["seq"]
                             if step["kind"] == "approval_requested":
-                                asked = step["payload"]
+                                asked = step
                         elif event == "end":
                             status: str = json.loads(data)["status"]
                             return status, asked
@@ -275,10 +287,20 @@ def _submit(client: httpx2.Client, args: argparse.Namespace, out: TextIO) -> int
     return _finish(*_follow(client, job["id"], out), client, job["id"], out)
 
 
+def _open_question(client: httpx2.Client, job_id: str) -> dict[str, Any] | None:
+    """The job's last `approval_requested` step: the question it waits on, if it waits."""
+    asked = None
+    for step in _steps(client, job_id):
+        if step["kind"] == "approval_requested":
+            asked = step
+    return asked
+
+
 def _finish(status: str, asked: Any, client: httpx2.Client, job_id: str, out: TextIO) -> int:
     """Print the line for the status the job stopped at and turn it into an exit code.
 
-    `asked` is the question the job waits on, as the stream showed it.
+    `asked` is the question the job waits on, as the stream showed it. If
+    the stream did not show one, it is read from the job's steps.
     """
     job = _job(client, job_id)
     line = f"{status}  tokens_used={job['tokens_used']}"
@@ -286,16 +308,22 @@ def _finish(status: str, asked: Any, client: httpx2.Client, job_id: str, out: Te
         line += f"  error={_preview(job['error'])}"
     print(line, file=out)
     if status == "needs_approval":
+        if not isinstance(asked, dict):
+            asked = _open_question(client, job_id)
         print("The job waits for a person to decide about a tool call.", file=out)
-        if isinstance(asked, dict):
-            # In full: this is what the person decides about. The input is
-            # printed exactly, as JSON: that is one line of ASCII, with
-            # everything a terminal would act on escaped.
-            print(f"  tool:   {_one_line(str(asked.get('name')))}", file=out)
-            print(f"  input:  {json.dumps(asked.get('input'))}", file=out)
-            print(f"  reason: {_one_line(str(asked.get('reason')))}", file=out)
-        print(f"To let the call run: runtime approve {_one_line(job_id)}", file=out)
-        print(f"To refuse it:        runtime deny {_one_line(job_id)}", file=out)
+        if asked is None:
+            print("Its question is not in the log yet: run `runtime status` again.", file=out)
+            return EXIT_NEEDS_APPROVAL
+        payload, number = asked["payload"], int(asked["seq"])
+        # In full: this is what the person decides about. The input is
+        # printed exactly, as JSON: that is one line of ASCII, with
+        # everything a terminal would act on escaped.
+        print(f"  question: {number}", file=out)
+        print(f"  tool:     {_one_line(str(payload.get('name')))}", file=out)
+        print(f"  input:    {json.dumps(payload.get('input'))}", file=out)
+        print(f"  reason:   {_one_line(str(payload.get('reason')))}", file=out)
+        print(f"To let the call run: runtime approve {_one_line(job_id)} {number}", file=out)
+        print(f"To refuse it:        runtime deny {_one_line(job_id)} {number}", file=out)
         return EXIT_NEEDS_APPROVAL
     return 0 if status == "succeeded" else 1
 
@@ -309,6 +337,11 @@ def _status(client: httpx2.Client, args: argparse.Namespace, out: TextIO) -> int
         if job[field] is not None:
             # The error is not cut: this is where it is read in full.
             print(f"{field + ':':<14}{_one_line(str(job[field]))}", file=out)
+    if job["status"] == "needs_approval":
+        asked = _open_question(client, args.job_id)
+        if asked is not None:
+            name = _one_line(str(asked["payload"].get("name")))
+            print(f"{'question:':<14}{int(asked['seq'])} ({name})", file=out)
     return 0
 
 
@@ -322,13 +355,15 @@ def _logs(client: httpx2.Client, args: argparse.Namespace, out: TextIO) -> int:
 
 
 def _approve(client: httpx2.Client, args: argparse.Namespace, out: TextIO) -> int:
-    job = _check(client.post(f"/jobs/{args.job_id}/approve")).json()
+    answer = {"question": args.question}
+    job = _check(client.post(f"/jobs/{args.job_id}/approve", json=answer)).json()
     print(_one_line(str(job["status"])), file=out)
     return 0
 
 
 def _deny(client: httpx2.Client, args: argparse.Namespace, out: TextIO) -> int:
-    job = _check(client.post(f"/jobs/{args.job_id}/deny")).json()
+    answer = {"question": args.question}
+    job = _check(client.post(f"/jobs/{args.job_id}/deny", json=answer)).json()
     print(_one_line(str(job["status"])), file=out)
     return 0
 

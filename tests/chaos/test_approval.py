@@ -118,7 +118,7 @@ def run_gated(chaos: Chaos, job_id: str, answer: str, rng: random.Random) -> tup
     deadline = time.monotonic() + 120
     while (job := chaos.job(job_id))["status"] not in FINAL:
         waits = job["status"] == "needs_approval"
-        if waits and chaos.api.post(f"/jobs/{job_id}/{answer}").status_code == 200:
+        if waits and chaos.answer(job_id, answer) == 200:
             answers += 1
             if answers == 1:
                 # Once, after the first answer: in the claim, between the

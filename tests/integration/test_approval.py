@@ -21,11 +21,13 @@ from runtime.store.jobs import (
     DEADLINE_ERROR,
     InvalidTransition,
     Job,
+    OtherQuestion,
     approve_job,
     claim_job,
     deny_job,
     fail_overdue,
     get_job,
+    open_question,
 )
 from runtime.store.status import JobStatus
 from runtime.store.steps import Step, StepKind, read_steps
@@ -86,13 +88,23 @@ class Person:
         self.acts.hang_at = None
         self.acts.release.set()
 
-    async def approve(self) -> None:
+    async def asked(self) -> int:
+        """The number of the question the job waits on: its last `approval_requested` step."""
         async with self.engine.begin() as conn:
-            await approve_job(conn, self.job_id)
+            found = await open_question(conn, self.job_id)
+        assert found is not None
+        return found[0]
 
-    async def deny(self) -> None:
+    async def approve(self, question: int | None = None) -> None:
+        """Approve `question`, or the question the job waits on now."""
+        question = question if question is not None else await self.asked()
         async with self.engine.begin() as conn:
-            await deny_job(conn, self.job_id)
+            await approve_job(conn, self.job_id, question)
+
+    async def deny(self, question: int | None = None) -> None:
+        question = question if question is not None else await self.asked()
+        async with self.engine.begin() as conn:
+            await deny_job(conn, self.job_id, question)
 
     async def read(self) -> tuple[Job, list[Step]]:
         async with self.engine.begin() as conn:
@@ -173,8 +185,9 @@ def test_a_call_that_needs_approval_does_not_run_before_a_person_approved_it(
         (K.MODEL_RESPONSE, 3),
     ]
     a, b = op(job, "toolu_a"), op(job, "toolu_b")
-    assert steps[3].payload == {"tool_use_id": "toolu_a", "operation_id": a}
-    assert steps[7].payload == {"tool_use_id": "toolu_b", "operation_id": b}
+    # Each answer names its question by the question's `seq`.
+    assert steps[3].payload == {"tool_use_id": "toolu_a", "operation_id": a, "question": 3}
+    assert steps[7].payload == {"tool_use_id": "toolu_b", "operation_id": b, "question": 7}
     # One run each, by the tool's own record.
     assert acts.runs == [(a, "a"), (b, "b")]
     # A claim after an approval is an ordinary claim, not a takeover.
@@ -379,6 +392,108 @@ def test_a_denied_rerun_of_an_interrupted_call_does_not_run_and_the_job_goes_on(
     assert acts.runs == [(op(job, "toolu_a"), "a"), (op(job, "toolu_b"), "b")]
 
 
+# An answer names its question (ADR 0012)
+
+
+def test_an_approval_sent_again_after_the_job_asked_about_the_next_call_is_refused(
+    stack: Stack,
+) -> None:
+    """A retry of an approval whose response was lost, or a second person who
+    approves the same question a moment later. The job has run the first call
+    and asks about the second: the late answer must not let that one run."""
+    acts = Acts(gated=True)
+
+    async def body(person: Person) -> tuple[Job, list[Step], Job, list[Step], OtherQuestion]:
+        await person.submit()
+        assert await person.work() is S.NEEDS_APPROVAL
+        first = await person.asked()
+        await person.approve(first)
+        assert await person.work() is S.NEEDS_APPROVAL
+        before = await person.read()
+        with pytest.raises(OtherQuestion) as refused:
+            await person.approve(first)
+        after = await person.read()
+        # Nothing was written and nothing can be claimed: it still waits.
+        async with person.engine.begin() as conn:
+            assert await claim_job(conn, worker_id="late") is None
+        return *before, *after, refused.value
+
+    before_job, before_steps, job, steps, refused = with_person(stack, acts, body)
+    assert (job.status, job.lease_epoch) == (S.NEEDS_APPROVAL, before_job.lease_epoch)
+    assert steps == before_steps
+    second = steps[-1]
+    assert (second.kind, second.payload["tool_use_id"]) == (K.APPROVAL_REQUESTED, "toolu_b")
+    assert (refused.question, refused.waiting_on) == (3, second.seq)
+    # The first call ran once. The second call's tool has not run.
+    assert acts.runs == [(op(job, "toolu_a"), "a")]
+
+
+def test_an_approval_sent_again_after_the_same_call_was_asked_about_again_is_refused(
+    stack: Stack,
+) -> None:
+    """The approved run is interrupted, and the call is asked about again: same
+    call, same operation id, a new question. An answer to the first question
+    must not approve a second run of a call that may already have run."""
+    acts = Acts(gated=True)
+
+    async def body(person: Person) -> tuple[Job, list[Step], OtherQuestion, int]:
+        await person.submit()
+        assert await person.work() is S.NEEDS_APPROVAL
+        first = await person.asked()
+        await person.approve(first)
+        await person.abandon_in_the_tool()
+        assert await person.work(takeover=True) is S.NEEDS_APPROVAL
+        again = await person.asked()
+        with pytest.raises(OtherQuestion) as refused:
+            await person.approve(first)
+        return *(await person.read()), refused.value, again
+
+    job, steps, refused, again = with_person(stack, acts, body)
+    assert job.status is S.NEEDS_APPROVAL
+    questions = [step for step in steps if step.kind is K.APPROVAL_REQUESTED]
+    assert [step.seq for step in questions] == [3, again]
+    # The same call both times: the operation id cannot tell the questions apart.
+    assert {step.payload["operation_id"] for step in questions} == {op(job, "toolu_a")}
+    assert (refused.question, refused.waiting_on) == (3, again)
+    assert kinds(steps)[-1] is K.APPROVAL_REQUESTED
+    # The interrupted run, and no second one.
+    assert acts.runs == [(op(job, "toolu_a"), "a")]
+
+
+def test_an_answer_that_names_no_question_does_not_count(stack: Stack) -> None:
+    """As an answer written before answers named their question would be. The job
+    is not taken to be answered: it waits on its question again."""
+    acts = Acts(gated=True)
+
+    async def body(person: Person) -> tuple[JobStatus | None, list[Step]]:
+        await person.submit()
+        assert await person.work() is S.NEEDS_APPROVAL
+        async with person.engine.begin() as conn:
+            await conn.execute(
+                text("UPDATE jobs SET status = 'queued' WHERE id = :id"), {"id": person.job_id}
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO steps (job_id, seq, kind, payload, lease_epoch)"
+                    " VALUES (:id, 4, 'approval_given', CAST(:payload AS jsonb), 1)"
+                ),
+                {"id": person.job_id, "payload": '{"tool_use_id": "toolu_a"}'},
+            )
+        status = await person.work()
+        return status, (await person.read())[1]
+
+    status, steps = with_person(stack, acts, body)
+    assert status is S.NEEDS_APPROVAL
+    # No intent, no run, and no second question: the first is still open.
+    assert kinds(steps) == [
+        K.MODEL_REQUEST,
+        K.MODEL_RESPONSE,
+        K.APPROVAL_REQUESTED,
+        K.APPROVAL_GIVEN,
+    ]
+    assert acts.runs == []
+
+
 # Workers that stop around the question
 
 
@@ -424,7 +539,7 @@ def test_an_answer_about_another_call_does_not_let_this_one_run(stack: Stack) ->
                 {"id": "msg_0", "content": TURNS[0], "stop_reason": "tool_use", "usage": usage},
             ),
             (K.APPROVAL_REQUESTED, {"tool_use_id": "toolu_b", "name": "act"}),
-            (K.APPROVAL_GIVEN, {"tool_use_id": "toolu_b"}),
+            (K.APPROVAL_GIVEN, {"tool_use_id": "toolu_b", "question": 3}),
         ]
         for seq, (kind, payload) in enumerate(log, start=1):
             await held.append_step(
@@ -545,10 +660,11 @@ def test_a_job_nobody_answers_is_failed_at_its_deadline_and_the_call_never_runs(
             ended = await fail_overdue(conn)
         # Too late for an answer, and nothing is left to claim.
         refused = []
+        asked = await person.asked()
         for answer in (approve_job, deny_job):
             async with person.engine.begin() as conn:
                 try:
-                    await answer(conn, person.job_id)
+                    await answer(conn, person.job_id, asked)
                 except InvalidTransition as error:
                     refused.append(error)
         async with person.engine.begin() as conn:

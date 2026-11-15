@@ -35,6 +35,9 @@ class Replay:
     approval: str | None = None
     # The `tool_use_id` of the call the question is about.
     approval_for: str | None = None
+    # The `seq` of the question's `approval_requested` step. An answer
+    # names it and counts for that question only (ADR 0012).
+    approval_question: int | None = None
     # Why the last assistant message cannot be used, as its `model_response`
     # step recorded it. None when it is fine.
     problem: str | None = None
@@ -93,13 +96,13 @@ class Replay:
             self.used_ids.update(block["id"] for block in self.pending)
             self.stop_reason = payload["stop_reason"]
             self.interrupted, self.interrupted_at = None, None
-            self.approval, self.approval_for = None, None
+            self._forget_question()
         elif step.kind is StepKind.TOOL_INTENT:
             # Every run of a tool has its own intent, and an approval covers
             # one run. The intent uses it up: if this run is interrupted
             # too, a person is asked again.
             self.interrupted, self.interrupted_at = payload, step.created_at
-            self.approval, self.approval_for = None, None
+            self._forget_question()
         elif step.kind is StepKind.TOOL_RESULT:
             tool_use_id = payload["tool_use_id"]
             if self.messages[-1]["role"] != "user" or len(self.messages) == 1:
@@ -114,17 +117,32 @@ class Replay:
             )
             self.pending = [block for block in self.pending if block["id"] != tool_use_id]
             self.interrupted, self.interrupted_at = None, None
-            self.approval, self.approval_for = None, None
+            self._forget_question()
         elif step.kind is StepKind.APPROVAL_REQUESTED:
             self.approval, self.approval_for = "requested", payload.get("tool_use_id")
-        elif (
-            step.kind in (StepKind.APPROVAL_GIVEN, StepKind.APPROVAL_DENIED)
-            # An answer names the call it is for. One that names another
-            # call than the question did answers nothing.
-            and payload.get("tool_use_id", self.approval_for) == self.approval_for
+            self.approval_question = step.seq
+        elif step.kind in (StepKind.APPROVAL_GIVEN, StepKind.APPROVAL_DENIED) and self._answers(
+            payload.get("question")
         ):
             given = step.kind is StepKind.APPROVAL_GIVEN
             self.approval = "given" if given else "denied"
+
+    def _forget_question(self) -> None:
+        self.approval, self.approval_for, self.approval_question = None, None, None
+
+    def _answers(self, question: Any) -> bool:
+        """True if an answer that names `question` answers the open question.
+
+        The first answer counts. An answer that names another question, or
+        none, as one written before answers named their question, answers
+        nothing: the job waits on its question again.
+        """
+        return (
+            self.approval == "requested"
+            and isinstance(question, int)
+            and not isinstance(question, bool)
+            and question == self.approval_question
+        )
 
 
 def replay(prompt: str, steps: Iterable[Step]) -> Replay:
