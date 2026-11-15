@@ -261,3 +261,33 @@ def test_a_sandbox_without_guards_denies_no_networks() -> None:
 
     assert config.sandbox is not None
     assert config.sandbox.denied_networks == ()
+
+
+def test_the_defaults_fit_a_sandboxed_call_into_the_stop_grace_period() -> None:
+    # 15 + 10 + 30 + 2 + 10 = 67 of 75.
+    config = WorkerConfig.from_env(SANDBOX_ENV)
+    assert config.stop_grace_seconds == 75
+    assert config.sandbox is not None
+
+
+def test_a_sandbox_timeout_whose_call_does_not_fit_the_stop_grace_period_is_refused() -> None:
+    # 15 + 10 + 40 + 2 + 10 = 77.
+    env = {**SANDBOX_ENV, "SANDBOX_TIMEOUT_SECONDS": "40"}
+    with pytest.raises(ConfigError, match=r"77 s .*STOP_GRACE_SECONDS \(75\)"):
+        WorkerConfig.from_env(env)
+
+
+def test_a_longer_stop_grace_period_lets_a_longer_timeout_in() -> None:
+    env = {**SANDBOX_ENV, "SANDBOX_TIMEOUT_SECONDS": "40", "STOP_GRACE_SECONDS": "77"}
+    assert WorkerConfig.from_env(env).stop_grace_seconds == 77
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "nan", "inf", "soon"])
+def test_the_stop_grace_period_must_be_a_positive_number(value: str) -> None:
+    with pytest.raises(ConfigError, match="STOP_GRACE_SECONDS"):
+        WorkerConfig.from_env({**SANDBOX_ENV, "STOP_GRACE_SECONDS": value})
+
+
+def test_a_worker_without_the_sandbox_has_no_call_to_fit() -> None:
+    config = WorkerConfig.from_env({**WORKER_ENV, "STOP_GRACE_SECONDS": "1"})
+    assert config.sandbox is None

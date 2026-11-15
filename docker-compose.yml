@@ -89,8 +89,10 @@ services:
     command: [python, -m, runtime.worker]
     # On SIGTERM the worker waits for a running tool, stores its result and
     # gives the job back. After this long Docker kills it, and the job is
-    # taken over when its lease runs out. Longer than the tool timeout.
-    stop_grace_period: 45s
+    # taken over when its lease runs out. The worker gets the same number as
+    # STOP_GRACE_SECONDS and refuses to start if a sandboxed call does not
+    # fit in it.
+    stop_grace_period: ${STOP_GRACE_SECONDS:-75}s
     # The group that owns the Docker socket, so the worker can start a
     # container for each sandboxed tool call. Whoever controls the worker
     # controls the host (ADR 0008). `make` sets the variable.
@@ -124,6 +126,8 @@ services:
       SANDBOX_DENY_NETWORKS: agent-runtime_default
       # Seconds a sandboxed command may run before it is killed.
       SANDBOX_TIMEOUT_SECONDS: ${SANDBOX_TIMEOUT_SECONDS:-30}
+      # The stop_grace_period above, in seconds.
+      STOP_GRACE_SECONDS: ${STOP_GRACE_SECONDS:-75}
     volumes:
       - workspaces:/workspaces
       - /var/run/docker.sock:/var/run/docker.sock

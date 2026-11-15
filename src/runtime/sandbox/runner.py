@@ -125,6 +125,16 @@ def ends_within(settings: SandboxSettings) -> float:
     return settings.start_within + REQUEST_TIMEOUT + settings.timeout + KILL_MARGIN
 
 
+def call_within(settings: SandboxSettings) -> float:
+    """Seconds after it began by which `Sandbox.run` returns, whatever Docker does.
+
+    `ends_within`, plus one request's time for removing the containers. A
+    worker's stop grace period has to be at least this long, or a stop can
+    cut off a call and leave it for a person.
+    """
+    return ends_within(settings) + REQUEST_TIMEOUT
+
+
 # The longest `ends_within` any valid settings give.
 LONGEST_BOUND = 2 * MAX_SECONDS + REQUEST_TIMEOUT + KILL_MARGIN
 
@@ -446,11 +456,20 @@ class Sandbox:
         The containers are removed afterwards, also when the call fails or
         is cancelled. A command still running at the timeout is killed.
         Docker is not asked to start it once `start_within` has passed.
+
+        The whole call, removal included, returns within `call_within`. A
+        call that Docker holds up past it fails. A removal that is not done
+        by then goes on without the call: the containers end by themselves
+        (`ends_within`), and what is left of them is for the removal at a
+        takeover.
         """
         settings = self.settings
         if scope is not None and settings.guard_image is None:
             raise NotStarted("this sandbox has no guard image, so it cannot enforce a scope")
-        start_by = asyncio.get_running_loop().time() + settings.start_within
+        now = asyncio.get_running_loop().time()
+        start_by = now + settings.start_within
+        within = call_within(settings)
+        end = now + within
         # Chosen here, not by Docker: a container whose create was cut off
         # before Docker's answer arrived can still be removed by its name.
         name = f"agent-runtime-sandbox-{uuid4().hex}"
@@ -462,7 +481,7 @@ class Sandbox:
         dropped: int | None = None
         started = False
         try:
-            async with contextlib.AsyncExitStack() as guarded:
+            async with asyncio.timeout_at(end) as bound, contextlib.AsyncExitStack() as guarded:
                 guard_stream = None
                 if guard is not None and scope is not None:
                     await self.docker.create(
@@ -499,15 +518,30 @@ class Sandbox:
                     and await self._remove_later(name)
                 ):
                     dropped = await self._dropped(guard, guard_stream)
+        except TimeoutError as error:
+            if not bound.expired():
+                raise
+            message = f"Docker did not finish the call within {within:g} s"
+            if not started:
+                raise NotStarted(message) from error
+            raise SandboxError(message) from error
         except SandboxError as error:
             if not started:
                 raise NotStarted(str(error)) from error
             raise
         finally:
             # Kills a command that still runs, then its guard. Shielded, so
-            # that a second cancel does not stop the removal half way.
+            # that a second cancel does not stop the removal half way, and
+            # waited for only until the call's bound.
             removals = [self._remove_later(name)]
             if guard is not None:
                 removals.append(self._remove_later(guard))
-            await asyncio.shield(asyncio.gather(*removals))
+            try:
+                async with asyncio.timeout_at(end):
+                    await asyncio.shield(asyncio.gather(*removals))
+            except TimeoutError:
+                log.warning(
+                    "tool containers not removed within the call's bound; the removal goes on",
+                    extra={"container": name, "job_id": str(job_id)},
+                )
         return Run(bytes(output.kept), output.total, exit_code, dropped)
