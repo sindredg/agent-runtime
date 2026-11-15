@@ -24,7 +24,18 @@ from typing import Any
 
 import pytest
 
-from .conftest import FINAL, SHORT_LEASE, WORKERS, WORKLOAD, Chaos, docker, record
+from .conftest import (
+    FAILPOINT_LEASE,
+    FINAL,
+    FIRED,
+    SHORT_LEASE,
+    WORKERS,
+    WORKLOAD,
+    Chaos,
+    docker,
+    failpoint_missed,
+    record,
+)
 
 RUNS = int(os.environ.get("CHAOS_RUNS", "20"))
 SEED = os.environ.get("CHAOS_SEED", "20261113")
@@ -197,15 +208,16 @@ def test_an_approval_covers_one_run_when_the_worker_stops_at_the_failpoint(
     chaos: Chaos, failpoint: str
 ) -> None:
     approvals_needed, outcome = AT_FAILPOINT[failpoint]
-    chaos.workers_up(failpoint=failpoint, failpoint_tool="create_issue")
+    chaos.workers_up(lease=FAILPOINT_LEASE, failpoint=failpoint, failpoint_tool="create_issue")
     started = datetime.now(UTC)
     try:
         run = chaos.finish(
             chaos.submit(SCENARIO, needs_approval=GATED), note=f"gated, failpoint {failpoint}"
         )
-        fired = chaos.worker_logs(started).count("failpoint reached, stopping the worker")
+        logs = chaos.worker_logs(started)
     finally:
         chaos.workers_up()
+    fired = logs.count(FIRED)
     gated = Gated(chaos, run.job["id"])
     print(f"\n{gated.summary()}")
     record(
@@ -213,7 +225,7 @@ def test_an_approval_covers_one_run_when_the_worker_stops_at_the_failpoint(
         {
             "runs": 1,
             "scenario": SCENARIO,
-            "lease_seconds": SHORT_LEASE,
+            "lease_seconds": FAILPOINT_LEASE,
             "takeovers": run.job["takeovers"],
             "approvals": sum(run.approvals.values()),
             "issues": sum(len(runs) for runs in gated.runs.values()),
@@ -221,7 +233,7 @@ def test_an_approval_covers_one_run_when_the_worker_stops_at_the_failpoint(
         },
     )
 
-    assert fired == 1
+    assert fired == 1, failpoint_missed(fired, run.job, logs)
     assert run.job["status"] == "succeeded"
     assert run.job["takeovers"] == 1
     assert gated.problems() == []

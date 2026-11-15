@@ -22,7 +22,18 @@ import pytest
 
 from runtime.failpoints import NAMES
 
-from .conftest import SHORT_LEASE, WORKERS, WORKLOAD, Chaos, Run, docker, record
+from .conftest import (
+    FAILPOINT_LEASE,
+    FIRED,
+    SHORT_LEASE,
+    WORKERS,
+    WORKLOAD,
+    Chaos,
+    Run,
+    docker,
+    failpoint_missed,
+    record,
+)
 
 RUNS = int(os.environ.get("CHAOS_RUNS", "20"))
 SEED = os.environ.get("CHAOS_SEED", "20261113")
@@ -109,17 +120,18 @@ AFTER_TAKEOVER = {
 def test_a_job_survives_its_worker_stopping_at_the_failpoint(
     chaos: Chaos, uninterrupted: list[dict[str, Any]], failpoint: str
 ) -> None:
-    chaos.workers_up(failpoint=failpoint, failpoint_tool="create_issue")
+    chaos.workers_up(lease=FAILPOINT_LEASE, failpoint=failpoint, failpoint_tool="create_issue")
     started = datetime.now(UTC)
     try:
         run = chaos.finish(chaos.submit(SCENARIO), note=f"failpoint {failpoint}")
-        fired = chaos.worker_logs(started).count("failpoint reached, stopping the worker")
+        logs = chaos.worker_logs(started)
     finally:
         chaos.workers_up()
     print(f"\n{run.summary()}")
 
     # The failpoint was reached, once: the worker that takes over passes it.
-    assert fired == 1
+    fired = logs.count(FIRED)
+    assert fired == 1, failpoint_missed(fired, run.job, logs)
     assert run.job["takeovers"] == 1
     assert verdict(run, uninterrupted) == []
     assert run.approvals == {}
@@ -144,7 +156,7 @@ def test_a_job_survives_its_worker_stopping_at_the_failpoint(
         {
             "runs": 1,
             "scenario": SCENARIO,
-            "lease_seconds": SHORT_LEASE,
+            "lease_seconds": FAILPOINT_LEASE,
             "takeovers": run.job["takeovers"],
             "issues": sum(len(ids) for ids in run.issues.values()),
             "approvals": 0,
@@ -161,7 +173,10 @@ def test_a_call_nobody_can_vouch_for_waits_for_approval_and_then_runs_again(chao
     person. The runner unfreezes the tracker and approves. The call runs
     again: two issues for one operation id, one of them an approved rerun.
     """
-    chaos.workers_up(failpoint="after_tool_ran", failpoint_tool="create_issue")
+    chaos.workers_up(
+        lease=FAILPOINT_LEASE, failpoint="after_tool_ran", failpoint_tool="create_issue"
+    )
+    started = datetime.now(UTC)
     tracker = docker("docker", "compose", "ps", "--quiet", "fake-tracker").strip()
     frozen = False
     try:
@@ -179,12 +194,15 @@ def test_a_call_nobody_can_vouch_for_waits_for_approval_and_then_runs_again(chao
         frozen = False
         asked = [s for s in chaos.steps(job_id) if s["kind"] == "approval_requested"]
         run = chaos.finish(job_id, note="approved rerun")
+        logs = chaos.worker_logs(started)
     finally:
         if frozen:
             docker("docker", "unpause", tracker, check=False)
         chaos.workers_up()
     print(f"\n{run.summary()}")
 
+    fired = logs.count(FIRED)
+    assert fired == 1, failpoint_missed(fired, run.job, logs)
     assert parked["lease_owner"] is None
     assert len(asked) == 1
     assert "could not tell" in asked[0]["payload"]["reason"]
@@ -205,7 +223,7 @@ def test_a_call_nobody_can_vouch_for_waits_for_approval_and_then_runs_again(chao
         {
             "runs": 1,
             "scenario": SCENARIO,
-            "lease_seconds": SHORT_LEASE,
+            "lease_seconds": FAILPOINT_LEASE,
             "issues": 2,
             "approvals": 1,
         },
