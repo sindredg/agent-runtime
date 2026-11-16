@@ -19,6 +19,7 @@ api_app = create_app()
     ids=["api", "fake-provider", "fake-tracker"],
 )
 def test_healthz_returns_ok(app: FastAPI) -> None:
-    response = TestClient(app).get("/healthz")
+    # The API answers only an allowed Host, which the test client's default is not.
+    response = TestClient(app, base_url="http://localhost").get("/healthz")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
