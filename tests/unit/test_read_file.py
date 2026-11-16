@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -174,7 +175,7 @@ def test_a_link_swapped_in_after_the_check_is_refused(
     result = read(workspace, "hello.txt")
 
     assert result.is_error
-    assert "outside" not in result.content
+    assert result.content == "path not allowed: 'hello.txt' leads out of the workspace"
 
 
 def test_a_fifo_swapped_in_after_the_check_does_not_block(
@@ -194,3 +195,32 @@ def test_a_fifo_swapped_in_after_the_check_does_not_block(
 
     assert result.is_error
     assert result.content == "no such file: hello.txt"
+
+
+def test_a_device_swapped_in_after_the_check_is_not_opened(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Opening /dev/ptmx for reading would allocate a pseudo-terminal.
+    checked = paths.resolve_in_workspace
+    opened: list[str] = []
+    real_open = os.open
+
+    def check_then_swap(root: Path, path: str) -> Path:
+        target = checked(root, path)
+        target.unlink()
+        target.symlink_to("/dev/null")
+        return target
+
+    def watched_open(path: Any, flags: int, *args: Any, **kwargs: Any) -> int:
+        fd = real_open(path, flags, *args, **kwargs)
+        if not flags & os.O_PATH:
+            opened.append(os.readlink(f"/proc/self/fd/{fd}"))
+        return fd
+
+    monkeypatch.setattr(read_file_module, "resolve_in_workspace", check_then_swap)
+    monkeypatch.setattr(os, "open", watched_open)
+
+    result = read(workspace, "hello.txt")
+
+    assert result.is_error
+    assert opened == []

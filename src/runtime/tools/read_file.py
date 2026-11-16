@@ -31,8 +31,9 @@ def _read_file(call: ToolCall) -> ToolResult:
     except PathNotAllowed as error:
         return ToolResult(f"path not allowed: {error}", is_error=True)
     try:
-        # Non-blocking: a FIFO swapped in for the file does not hang the worker.
-        fd = os.open(target, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+        # O_PATH opens nothing for reading: a device or FIFO swapped in for
+        # the file has no effect, and the open does not block.
+        fd = os.open(target, os.O_PATH | os.O_CLOEXEC)
     except OSError:
         return ToolResult(f"no such file: {path}", is_error=True)
     try:
@@ -44,10 +45,18 @@ def _read_file(call: ToolCall) -> ToolResult:
         status = os.fstat(fd)
         if not stat.S_ISREG(status.st_mode):
             return ToolResult(f"no such file: {path}", is_error=True)
-        # One byte more than the limit tells a file at the limit from one over it.
-        data = _read_up_to(fd, MAX_BYTES + 1)
+        # The same file, now for reading: /proc/self/fd/N is the opened file,
+        # not a name that can be swapped again.
+        readable = os.open(
+            f"/proc/self/fd/{fd}", os.O_RDONLY | os.O_NOCTTY | os.O_NONBLOCK | os.O_CLOEXEC
+        )
     finally:
         os.close(fd)
+    try:
+        # One byte more than the limit tells a file at the limit from one over it.
+        data = _read_up_to(readable, MAX_BYTES + 1)
+    finally:
+        os.close(readable)
     if len(data) > MAX_BYTES:
         return ToolResult(
             f"{path} is {status.st_size} bytes; the limit is {MAX_BYTES}", is_error=True
