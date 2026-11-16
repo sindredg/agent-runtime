@@ -235,28 +235,35 @@ async def _wait_unless_stopped(
 
 
 async def _wait_out(
-    left: float,
-    again: Callable[[], Awaitable[float]],
+    left_now: Callable[[], Awaitable[float]],
     stop: asyncio.Event,
     lease: Lease,
     halt: Halt,
+    job_id: UUID,
 ) -> bool:
-    """Wait until `again` says no time is left. False if `stop` was set first.
+    """Wait until `left_now` says no time is left. False if `stop` was set first.
 
-    `left` is the first answer. The wait runs on the worker's own clock and
-    `again` reads the clock that counts, which can run faster meanwhile, so
-    it is asked again after each wait.
+    The wait runs on the worker's own clock and `left_now` reads the clock
+    that counts, which can run faster meanwhile, so it is asked again after
+    each wait. Each ask is raced too: a database that does not answer does
+    not hide a halt.
     """
-    while left > 0:
-        if not await _wait_unless_stopped(left, stop, lease, halt):
-            return False
-        # Raced too: a database that does not answer does not hide a halt.
-        asked, answer = await _race(again(), lease=lease, halt=halt, stop=stop)
+    waited = False
+    while True:
+        asked, left = await _race(left_now(), lease=lease, halt=halt, stop=stop)
         if not asked:
             return False
-        assert answer is not None  # noqa: S101 - _race returns the result when it completed
-        left = answer
-    return True
+        assert left is not None  # noqa: S101 - _race returns the result when it completed
+        if left <= 0:
+            return True
+        if not waited:
+            log.info(
+                "waiting for an interrupted call's container to end",
+                extra={"job_id": job_id, "seconds": round(left, 1)},
+            )
+            waited = True
+        if not await _wait_unless_stopped(left, stop, lease, halt):
+            return False
 
 
 def _bound(tool: AnyTool | None, intent: dict[str, Any]) -> float | None:
@@ -318,14 +325,7 @@ async def _outlast_container(
     async def left_now() -> float:
         return await _stored(seconds_until(writer.engine, ends))
 
-    left = await left_now()
-    if left <= 0:
-        return True
-    log.info(
-        "waiting for an interrupted call's container to end",
-        extra={"job_id": job.id, "seconds": round(left, 1)},
-    )
-    return await _wait_out(left, left_now, stop, lease, halt)
+    return await _wait_out(left_now, stop, lease, halt, job.id)
 
 
 async def _next_tool_call(
