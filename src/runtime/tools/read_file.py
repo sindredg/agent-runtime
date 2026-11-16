@@ -47,9 +47,12 @@ def _read_file(call: ToolCall) -> ToolResult:
             return ToolResult(f"no such file: {path}", is_error=True)
         # The same file, now for reading: /proc/self/fd/N is the opened file,
         # not a name that can be swapped again.
-        readable = os.open(
-            f"/proc/self/fd/{fd}", os.O_RDONLY | os.O_NOCTTY | os.O_NONBLOCK | os.O_CLOEXEC
-        )
+        try:
+            readable = os.open(
+                f"/proc/self/fd/{fd}", os.O_RDONLY | os.O_NOCTTY | os.O_NONBLOCK | os.O_CLOEXEC
+            )
+        except OSError as error:
+            return ToolResult(f"cannot read {path}: {error.strerror}", is_error=True)
     finally:
         os.close(fd)
     try:

@@ -224,3 +224,11 @@ def test_a_device_swapped_in_after_the_check_is_not_opened(
 
     assert result.is_error
     assert opened == []
+
+
+def test_a_file_that_cannot_be_read_is_an_error_result(workspace: Path) -> None:
+    (workspace / "hello.txt").chmod(0)
+    result = read(workspace, "hello.txt")
+    (workspace / "hello.txt").chmod(0o600)
+    assert result.is_error
+    assert result.content == "cannot read hello.txt: Permission denied"
