@@ -6,6 +6,25 @@ approval answers. It holds no state. The code is `src/runtime/api/app.py`.
 It has no authentication. The stack publishes it on `127.0.0.1` only: do not
 publish its port on another interface.
 
+A browser reaches localhost for any page it shows, so the API answers only
+requests that name it by an allowed name (`API_ALLOWED_HOSTS`):
+
+```mermaid
+flowchart LR
+    R[request] --> H{Host one of<br/>the allowed names?}
+    H -->|no| X[400]
+    H -->|yes| C{a change, with an Origin<br/>that is not the API's own?}
+    C -->|yes| Y[403]
+    C -->|no| OK[the route]
+```
+
+- A page that points its own name at 127.0.0.1 (DNS rebinding) sends that
+  name in `Host`, and is refused.
+- A form sent from another site's page, also one on another port of
+  localhost, carries that site in `Origin`. Reads are left to the browser:
+  the API sends no CORS header.
+- IPv6 addresses are not accepted as names, so `[::1]` is refused.
+
 ## Routes
 
 | Route | Returns |
@@ -25,6 +44,8 @@ FastAPI also serves `/docs`, `/redoc` and `/openapi.json`.
 
 | Status | When |
 |---|---|
+| 400 | A `Host` that is not one of the allowed names |
+| 403 | A change sent with an `Origin` that is not the API's own address |
 | 404 | The job does not exist |
 | 409 | An answer the job does not wait on, or a cancel of a job that succeeded or failed |
 | 422 | A job id that is not a UUID, a parameter out of range, an unknown field, a missing question number |

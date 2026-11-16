@@ -124,6 +124,8 @@ refused, but the tool ran. An idempotency key on the other side closes this.
 ## API
 
 - No authentication. Anyone who can reach the API can submit, approve, deny
-  and cancel.
+  and cancel. That includes every local user and process of the host.
+- The Host and Origin check stops a browser page of another site. It does not
+  stop a program on the host, which can send any header.
 - The size of a request body is not capped. Only the fields are limited.
 - `not_before` and the `waiting` status exist, and nothing sets them yet.

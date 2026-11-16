@@ -1,6 +1,7 @@
 """Settings read from environment variables."""
 
 import os
+import re
 import socket
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -228,6 +229,23 @@ class WorkerConfig:
         )
 
 
+DEFAULT_ALLOWED_HOSTS = ("localhost", "127.0.0.1")
+_HOST_NAME = re.compile(r"[a-z0-9]([a-z0-9.-]*[a-z0-9])?")
+
+
+def allowed_hosts(env: Mapping[str, str]) -> tuple[str, ...]:
+    """API_ALLOWED_HOSTS: comma-separated names, without ports. No wildcards."""
+    value = env.get("API_ALLOWED_HOSTS")
+    if value is None:
+        return DEFAULT_ALLOWED_HOSTS
+    names = tuple(name.strip().lower() for name in value.split(",") if name.strip())
+    if not names or not all(_HOST_NAME.fullmatch(name) for name in names):
+        raise ConfigError(
+            "API_ALLOWED_HOSTS must be host names or IPv4 addresses, without ports or wildcards"
+        )
+    return names
+
+
 @dataclass(frozen=True, slots=True)
 class ApiConfig:
     database_url: str
@@ -237,6 +255,8 @@ class ApiConfig:
     # The API has no authentication. It listens on localhost unless told otherwise.
     host: str
     port: int
+    # The names a request may address the API by, in its Host and Origin.
+    allowed_hosts: tuple[str, ...] = DEFAULT_ALLOWED_HOSTS
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> ApiConfig:
@@ -247,4 +267,5 @@ class ApiConfig:
             default_timeout_seconds=_positive_int(env, "DEFAULT_TIMEOUT_SECONDS", 3600),
             host=env.get("API_HOST") or "127.0.0.1",
             port=_positive_int(env, "API_PORT", 8000),
+            allowed_hosts=allowed_hosts(env),
         )
