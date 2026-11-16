@@ -2,6 +2,20 @@
 
 Status: accepted, 2026-11-15
 
+```mermaid
+sequenceDiagram
+    participant P as client
+    participant A as api
+    participant D as postgres
+    Note over D: question 7 is open
+    P->>A: approve {"question": 7}
+    A->>D: approval_given for 7, job to queued
+    Note over D: the call runs, the job asks question 9
+    P->>A: the same approval again: {"question": 7}
+    A-->>P: 409: the job waits on question 9
+    Note over D: nothing is written
+```
+
 ## Context
 
 `POST /jobs/{id}/approve` and `/deny` recorded the answer against whatever

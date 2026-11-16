@@ -2,6 +2,18 @@
 
 Status: accepted, 2026-11-14
 
+```mermaid
+flowchart LR
+    subgraph NS[one network namespace per call]
+        G[guard container:<br/>NET_ADMIN, sets the firewall]
+        T[tool container:<br/>no capabilities, joins the namespace]
+    end
+    T --> R{the guard's rules}
+    R -->|the job's targets| OK[reached]
+    R -->|the deny list| X[dropped and counted]
+    R -->|everything else| X2[dropped and counted]
+```
+
 ## Context
 
 A security agent's tools need the network: a scan or a request has to reach

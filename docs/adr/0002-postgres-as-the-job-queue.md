@@ -2,6 +2,14 @@
 
 Status: accepted, 2026-11-13
 
+```mermaid
+flowchart LR
+    Q[queued] --> C{claim with<br/>SKIP LOCKED}
+    W[waiting, and<br/>not_before has passed] --> C
+    R[running, and<br/>the lease has expired] --> C
+    C --> H[running under the claiming worker:<br/>lease_owner and lease_expires_at set,<br/>lease_epoch + 1]
+```
+
 ## Context
 
 Workers have to find jobs to run: new jobs, jobs that are backing off, and

@@ -2,6 +2,26 @@
 
 Status: accepted, 2026-11-14
 
+```mermaid
+sequenceDiagram
+    participant W1 as worker
+    participant D as postgres
+    participant P as person
+    participant W2 as next worker
+    W1->>D: approval_requested, before any tool_intent
+    W1->>D: job to needs_approval
+    alt approve
+        P->>D: approval_given, job to queued
+        W2->>D: tool_intent
+        W2->>W2: runs the call
+    else deny
+        P->>D: approval_denied, job to queued
+        W2->>D: error result that says it was denied
+    else no answer
+        Note over D: the job is failed at its deadline
+    end
+```
+
 ## Context
 
 The runtime asks a person in one case: a tool call was interrupted and

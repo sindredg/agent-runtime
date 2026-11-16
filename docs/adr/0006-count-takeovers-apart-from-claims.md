@@ -2,6 +2,15 @@
 
 Status: accepted, 2026-11-13
 
+```mermaid
+flowchart TD
+    C{A claim finds} -->|a queued job| Q[lease_epoch + 1<br/>takeovers unchanged]
+    C -->|a running job with an expired lease,<br/>takeovers below 5| T[lease_epoch + 1<br/>takeovers + 1]
+    C -->|a running job with an expired lease,<br/>takeovers already 5| F[failed, with the reason]
+    S[SIGTERM] --> REL[The worker releases the job:<br/>running to queued, lease cleared]
+    REL --> Q
+```
+
 ## Context
 
 A job can take its worker down every time it runs, for example through a tool
