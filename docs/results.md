@@ -47,8 +47,9 @@ log. See [Testing](testing.md#records-a-test-trusts).
 
 | Tests | Lease | Scenario |
 |---|---|---|
-| Kills, failpoints | 2 s, renewed every 0.5 s | `ci-triage-slow`: each answer 0.5 s late |
-| Crash loop | 2 s, renewed every 0.5 s | `crash-loop` |
+| Random kills | 2 s, renewed every 0.5 s | `ci-triage-slow`: each answer 0.5 s late |
+| Failpoints | 6 s, renewed every 2 s | `ci-triage-slow` |
+| Crash loop | 6 s, renewed every 2 s | `crash-loop` |
 | Pause, stop | The default 30 s, renewed every 10 s | `ci-triage-stall`: two answers 10 s late |
 
 The results of the other guarantees name their own commit and command.
