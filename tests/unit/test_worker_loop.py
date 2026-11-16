@@ -59,7 +59,8 @@ def run_work(stop_after: float | None = None, until: Callable[[], bool] | None =
 
     async def watch(stop: asyncio.Event) -> None:
         assert until is not None
-        while not until():
+        # The condition is read from log records: there is no event to wait on.
+        while not until():  # noqa: ASYNC110
             await asyncio.sleep(0.01)
         stop.set()
 
