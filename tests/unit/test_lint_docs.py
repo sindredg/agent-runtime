@@ -9,7 +9,8 @@ import pytest
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "lint_docs.py"
 
 DIAGRAM = "```mermaid\nflowchart LR\n    A --> B\n```\n"
-GOOD = f"# Page\n\nA short paragraph.\n\n{DIAGRAM}\n## Part\n\n| A | B |\n|---|---|\n| One. Two. | x |\n"
+TABLE = "| A | B |\n|---|---|\n| One. Two. | x |\n"
+GOOD = f"# Page\n\nA short paragraph.\n\n{DIAGRAM}\n## Part\n\n{TABLE}"
 # 81 characters a line: five lines are more than four lines of 80.
 LONG = "\n".join(["word " * 16 + "w"] * 5)
 
