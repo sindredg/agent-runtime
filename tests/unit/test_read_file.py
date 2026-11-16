@@ -5,7 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from runtime.tools import default_tools
+from runtime.tools import default_tools, paths
+from runtime.tools import read_file as read_file_module
 from runtime.tools.base import ToolCall, ToolResult
 from runtime.tools.paths import PathNotAllowed, check_relative, resolve_in_workspace
 from runtime.tools.read_file import MAX_BYTES, READ_FILE
@@ -153,3 +154,43 @@ def test_default_tools_offer_read_file_with_a_schema() -> None:
     assert definition["input_schema"]["required"] == ["path"]
     assert default_tools().get("read_file") is READ_FILE
     assert default_tools().get("run_shell") is None
+
+
+def test_a_link_swapped_in_after_the_check_is_refused(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A command that still runs can turn the file into a link between the
+    # check of the path and the open.
+    checked = paths.resolve_in_workspace
+
+    def check_then_swap(root: Path, path: str) -> Path:
+        target = checked(root, path)
+        target.unlink()
+        target.symlink_to(root.parent / "secret.txt")
+        return target
+
+    monkeypatch.setattr(read_file_module, "resolve_in_workspace", check_then_swap)
+
+    result = read(workspace, "hello.txt")
+
+    assert result.is_error
+    assert "outside" not in result.content
+
+
+def test_a_fifo_swapped_in_after_the_check_does_not_block(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checked = paths.resolve_in_workspace
+
+    def check_then_swap(root: Path, path: str) -> Path:
+        target = checked(root, path)
+        target.unlink()
+        os.mkfifo(target)
+        return target
+
+    monkeypatch.setattr(read_file_module, "resolve_in_workspace", check_then_swap)
+
+    result = read(workspace, "hello.txt")
+
+    assert result.is_error
+    assert result.content == "no such file: hello.txt"

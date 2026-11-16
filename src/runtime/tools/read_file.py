@@ -1,11 +1,24 @@
 """read_file: read one text file from the job's workspace."""
 
+import os
+import stat
+from pathlib import Path
+
 from runtime.tools.base import Tool, ToolCall, ToolResult
 from runtime.tools.paths import PathNotAllowed, resolve_in_workspace
 
 # A larger file is refused, not cut: the model is told the size and can
 # decide what to do.
 MAX_BYTES = 64 * 1024
+
+
+def _read_up_to(fd: int, limit: int) -> bytes:
+    chunks: list[bytes] = []
+    left = limit
+    while left > 0 and (chunk := os.read(fd, left)):
+        chunks.append(chunk)
+        left -= len(chunk)
+    return b"".join(chunks)
 
 
 def _read_file(call: ToolCall) -> ToolResult:
@@ -17,14 +30,28 @@ def _read_file(call: ToolCall) -> ToolResult:
         target = resolve_in_workspace(workspace, path)
     except PathNotAllowed as error:
         return ToolResult(f"path not allowed: {error}", is_error=True)
-    if not target.is_file():
+    try:
+        # Non-blocking: a FIFO swapped in for the file does not hang the worker.
+        fd = os.open(target, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+    except OSError:
         return ToolResult(f"no such file: {path}", is_error=True)
-    with target.open("rb") as file:
+    try:
+        # A command that still runs can swap a link in after the check above.
+        # What was opened is checked, not the name.
+        opened = Path(os.readlink(f"/proc/self/fd/{fd}"))
+        if not opened.is_relative_to(workspace.resolve(strict=True)):
+            return ToolResult(f"path not allowed: {path!r} leads out of the workspace", True)
+        status = os.fstat(fd)
+        if not stat.S_ISREG(status.st_mode):
+            return ToolResult(f"no such file: {path}", is_error=True)
         # One byte more than the limit tells a file at the limit from one over it.
-        data = file.read(MAX_BYTES + 1)
+        data = _read_up_to(fd, MAX_BYTES + 1)
+    finally:
+        os.close(fd)
     if len(data) > MAX_BYTES:
-        size = target.stat().st_size
-        return ToolResult(f"{path} is {size} bytes; the limit is {MAX_BYTES}", is_error=True)
+        return ToolResult(
+            f"{path} is {status.st_size} bytes; the limit is {MAX_BYTES}", is_error=True
+        )
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError:
