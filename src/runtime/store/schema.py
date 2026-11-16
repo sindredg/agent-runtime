@@ -4,7 +4,7 @@ The migrations in `migrations/` define the database. These definitions mirror
 them. An integration test runs `alembic check`, which fails when tables,
 columns, types, nullability, server defaults, or index columns differ. It does
 not compare CHECK constraints, which live only in the migrations, or the WHERE
-clause of the partial index.
+clauses of the partial indexes.
 """
 
 from sqlalchemy import (
