@@ -1,6 +1,7 @@
 """The worker's outer loop: it keeps going through failures and stops when told."""
 
 import asyncio
+from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -50,14 +51,25 @@ SETTINGS = AgentSettings(
 )
 
 
-def run_work(stop_after: float) -> None:
-    """Run the work loop against a database that is not there, then stop it."""
+def run_work(stop_after: float | None = None, until: Callable[[], bool] | None = None) -> None:
+    """Run the work loop against a database that is not there, then stop it.
+
+    It is stopped after `stop_after` seconds, or once `until` is true.
+    """
+
+    async def watch(stop: asyncio.Event) -> None:
+        assert until is not None
+        while not until():
+            await asyncio.sleep(0.01)
+        stop.set()
 
     async def scenario() -> None:
         # Port 9 is closed: a claim that reaches the network fails to connect.
         engine = create_engine("postgresql://u:p@127.0.0.1:9/none")
         stop = asyncio.Event()
-        asyncio.get_running_loop().call_later(stop_after, stop.set)
+        if stop_after is not None:
+            asyncio.get_running_loop().call_later(stop_after, stop.set)
+        watcher = asyncio.create_task(watch(stop)) if until is not None else None
         try:
             async with asyncio.timeout(10):
                 await work(
@@ -70,16 +82,22 @@ def run_work(stop_after: float) -> None:
                     stop=stop,
                 )
         finally:
+            if watcher is not None:
+                watcher.cancel()
             await engine.dispose()
 
     asyncio.run(scenario())
 
 
 def test_a_claim_that_fails_is_logged_and_tried_again(caplog: pytest.LogCaptureFixture) -> None:
-    run_work(stop_after=0.2)
-    failures = [r for r in caplog.records if r.getMessage() == "claim failed"]
+    def failures() -> int:
+        return sum(r.getMessage() == "claim failed" for r in caplog.records)
+
+    # Stopped at the second failure, not after a fixed time: the first claim
+    # also sets up the connection pool, which is slow on a loaded machine.
+    run_work(until=lambda: failures() >= 2)
     # More than one: the loop went on after the first failure, and it ended when told.
-    assert len(failures) > 1
+    assert failures() >= 2
 
 
 def test_a_job_that_cannot_be_finished_does_not_stop_the_loop(
