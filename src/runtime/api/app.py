@@ -1,11 +1,13 @@
 """The API application: submit jobs, read them, follow their steps, cancel them,
 and approve or deny a tool call that waits for a person.
 
-There is no authentication. The service listens on localhost.
+There is no authentication. The service listens on localhost and answers
+only requests addressed to it by an allowed name (`hosts.py`).
 """
 
 import asyncio
 import json
+import os
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -18,8 +20,9 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from runtime.api.hosts import AllowedHosts
 from runtime.api.models import MAX_SEQ, Answer, JobSubmission, JobView, StepList, StepView
-from runtime.config import ApiConfig
+from runtime.config import ApiConfig, allowed_hosts
 from runtime.store.engine import create_engine
 from runtime.store.jobs import (
     InvalidTransition,
@@ -71,6 +74,10 @@ def create_app(
             await app.state.engine.dispose()
 
     app = FastAPI(title="agent-runtime", lifespan=lifespan)
+    app.add_middleware(
+        AllowedHosts,
+        hosts=config.allowed_hosts if config is not None else allowed_hosts(os.environ),
+    )
 
     def engine() -> AsyncEngine:
         found: AsyncEngine = app.state.engine

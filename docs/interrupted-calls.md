@@ -70,8 +70,10 @@ sequenceDiagram
     participant K as Docker
     participant D as postgres
     W2->>K: remove the job's containers of earlier lease epochs
-    W2->>D: how long until the intent plus ends_within?
-    Note over W2: waits that long
+    loop until no time is left, by the database clock
+        W2->>D: how long until the intent plus ends_within?
+        Note over W2: waits that long on its own clock
+    end
     Note over W2: decides as above
 ```
 
@@ -81,6 +83,8 @@ sequenceDiagram
   is logged, and the wait still applies.
 - The wait is needed because a container on another host cannot be removed
   from here.
+- The worker's own clock can run slower than the database clock. It asks
+  again after each wait, so it never decides before the bound.
 - A stop or a lost lease ends the wait, and nothing is decided. A cancel or
   the deadline ends it too, and the job ends `cancelled` or `failed`.
 

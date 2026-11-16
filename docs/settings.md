@@ -72,6 +72,7 @@ flowchart LR
 | `DEFAULT_TOKEN_BUDGET` | api | 1000000 | For a submission without `token_budget` |
 | `DEFAULT_TIMEOUT_SECONDS` | api | 3600 | For a submission without `timeout_seconds` |
 | `API_HOST`, `API_PORT` | api | `127.0.0.1`, `8000` | Where the API listens |
+| `API_ALLOWED_HOSTS` | api | `localhost,127.0.0.1` | The names a request may use in `Host`. No ports, no wildcards, no IPv6. |
 | `RUNTIME_API_URL` | CLI | `http://127.0.0.1:8000` | Where the CLI finds the API |
 | `FAKE_SCENARIO_DIR` | fake-provider | scenarios in the package | Directory of scenario files |
 

@@ -59,9 +59,6 @@ refused, but the tool ran. An idempotency key on the other side closes this.
 - The wait before a decision about an interrupted sandboxed call assumes the
   worker was not paused before the start request, and that Docker does not
   act on a request late. A container that starts later can still be running.
-- That wait reads the database clock once, then sleeps on the worker's
-  clock. It can end a few milliseconds early by the database clock
-  ([issue 49](https://github.com/sindredg/agent-runtime/issues/49)).
 - A takeover during a sandboxed call costs up to `ends_within` (57 s with the
   defaults) before the job goes on.
 
@@ -128,6 +125,8 @@ refused, but the tool ran. An idempotency key on the other side closes this.
 ## API
 
 - No authentication. Anyone who can reach the API can submit, approve, deny
-  and cancel.
+  and cancel. That includes every local user and process of the host.
+- The Host and Origin check stops a browser page of another site. It does not
+  stop a program on the host, which can send any header.
 - The size of a request body is not capped. Only the fields are limited.
 - `not_before` and the `waiting` status exist, and nothing sets them yet.
