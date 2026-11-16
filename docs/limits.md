@@ -86,7 +86,11 @@ refused, but the tool ran. An idempotency key on the other side closes this.
 - A name lookup that hangs is given up after 5 s, but its thread runs on
   until the system resolver gives up.
 - `read_file` checks paths and symlinks, not hard links. Nothing built so far
-  can create a hard link out of a workspace.
+  can create a hard link out of a workspace. It checks the file it opened,
+  so a link swapped in after the path check is refused too.
+- Before a workspace is removed, its directories get mode 700. A link swapped
+  in during that walk is followed. Its target is the worker's own, and gets
+  the same mode.
 
 ## Halt and budget
 

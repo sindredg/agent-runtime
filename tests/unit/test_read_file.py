@@ -2,10 +2,12 @@
 
 import os
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from runtime.tools import default_tools
+from runtime.tools import default_tools, paths
+from runtime.tools import read_file as read_file_module
 from runtime.tools.base import ToolCall, ToolResult
 from runtime.tools.paths import PathNotAllowed, check_relative, resolve_in_workspace
 from runtime.tools.read_file import MAX_BYTES, READ_FILE
@@ -153,3 +155,80 @@ def test_default_tools_offer_read_file_with_a_schema() -> None:
     assert definition["input_schema"]["required"] == ["path"]
     assert default_tools().get("read_file") is READ_FILE
     assert default_tools().get("run_shell") is None
+
+
+def test_a_link_swapped_in_after_the_check_is_refused(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A command that still runs can turn the file into a link between the
+    # check of the path and the open.
+    checked = paths.resolve_in_workspace
+
+    def check_then_swap(root: Path, path: str) -> Path:
+        target = checked(root, path)
+        target.unlink()
+        target.symlink_to(root.parent / "secret.txt")
+        return target
+
+    monkeypatch.setattr(read_file_module, "resolve_in_workspace", check_then_swap)
+
+    result = read(workspace, "hello.txt")
+
+    assert result.is_error
+    assert result.content == "path not allowed: 'hello.txt' leads out of the workspace"
+
+
+def test_a_fifo_swapped_in_after_the_check_does_not_block(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checked = paths.resolve_in_workspace
+
+    def check_then_swap(root: Path, path: str) -> Path:
+        target = checked(root, path)
+        target.unlink()
+        os.mkfifo(target)
+        return target
+
+    monkeypatch.setattr(read_file_module, "resolve_in_workspace", check_then_swap)
+
+    result = read(workspace, "hello.txt")
+
+    assert result.is_error
+    assert result.content == "no such file: hello.txt"
+
+
+def test_a_device_swapped_in_after_the_check_is_not_opened(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Opening /dev/ptmx for reading would allocate a pseudo-terminal.
+    checked = paths.resolve_in_workspace
+    opened: list[str] = []
+    real_open = os.open
+
+    def check_then_swap(root: Path, path: str) -> Path:
+        target = checked(root, path)
+        target.unlink()
+        target.symlink_to("/dev/null")
+        return target
+
+    def watched_open(path: Any, flags: int, *args: Any, **kwargs: Any) -> int:
+        fd = real_open(path, flags, *args, **kwargs)
+        if not flags & os.O_PATH:
+            opened.append(os.readlink(f"/proc/self/fd/{fd}"))
+        return fd
+
+    monkeypatch.setattr(read_file_module, "resolve_in_workspace", check_then_swap)
+    monkeypatch.setattr(os, "open", watched_open)
+
+    result = read(workspace, "hello.txt")
+
+    assert result.is_error
+    assert opened == []
+
+
+def test_a_file_that_cannot_be_read_is_an_error_result(workspace: Path) -> None:
+    (workspace / "hello.txt").chmod(0)
+    result = read(workspace, "hello.txt")
+    (workspace / "hello.txt").chmod(0o600)
+    assert result.is_error
+    assert result.content == "cannot read hello.txt: Permission denied"
