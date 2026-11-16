@@ -2,6 +2,19 @@
 
 Status: accepted, 2026-11-14
 
+```mermaid
+flowchart LR
+    S[the worker was told to stop] --> H((halt signal))
+    L[the lease is gone] --> H
+    C[the job was cancelled] --> H
+    D[the deadline passed] --> H
+    H --> M[a model call in flight is given up]
+    S --> R1[the job is released]
+    L --> R2[the job is dropped]
+    C --> R3[cancelled, by a fenced write]
+    D --> R4[failed with an error step, by a fenced write]
+```
+
 ## Context
 
 A job has a token budget, a deadline and a `cancel_requested` flag. They are

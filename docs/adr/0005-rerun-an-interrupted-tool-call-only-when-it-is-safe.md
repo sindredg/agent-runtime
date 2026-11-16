@@ -2,6 +2,18 @@
 
 Status: accepted, 2026-11-13
 
+```mermaid
+flowchart TD
+    I[tool_intent without tool_result] --> A{Is the tool<br/>idempotent?}
+    A -->|yes| R[Run it again under a new intent]
+    A -->|no| C{Does it have a check,<br/>and what does it answer?}
+    C -->|done| REC[tool_result from the check,<br/>marked recovered]
+    C -->|not done| R
+    C -->|unknown, or the check fails| ASK[Ask a person:<br/>approval_requested, needs_approval]
+    C -->|no check| ASK
+    ASK -->|approval_given| R
+```
+
 ## Context
 
 A worker writes a `tool_intent` step before it runs a tool and a `tool_result`

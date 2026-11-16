@@ -27,6 +27,13 @@ repos:
         entry: uv run --frozen python scripts/lint_json.py
         language: system
         types: [json]
+      - id: docs
+        name: docs limits
+        # Page length, paragraph and table cell length, a diagram per page,
+        # links inside the repository.
+        entry: uv run --frozen python scripts/lint_docs.py
+        language: system
+        types: [markdown]
       - id: yamllint
         name: yamllint
         entry: uv run --frozen yamllint --strict

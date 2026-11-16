@@ -2,6 +2,17 @@
 
 Status: accepted, 2026-11-14
 
+```mermaid
+flowchart LR
+    W[worker] -->|Docker socket| D[Docker]
+    D --> C1[container of call 1]
+    D --> C2[container of call 2]
+    C1 --> WS[/the job's directory<br/>of the workspace volume/]
+    C2 --> WS
+    C1 -.-x N((network, unless<br/>the job has a scope))
+    L[labels: job id, lease epoch] --- C1
+```
+
 ## Context
 
 Tools run as Python functions in the worker process. That is acceptable for

@@ -2,6 +2,14 @@
 
 Status: accepted, 2026-11-13
 
+```mermaid
+flowchart LR
+    W[worker] --> I[Provider interface] --> S[official SDK,<br/>retries off]
+    S -->|base URL| F[fake provider:<br/>scenario files,<br/>a log of every request]
+    S -.->|base URL| A[Claude API]
+    T[tests] -->|read what was really sent| F
+```
+
 ## Context
 
 The worker calls the Anthropic Messages API many times per job. Tests and

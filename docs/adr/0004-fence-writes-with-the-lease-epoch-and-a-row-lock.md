@@ -2,6 +2,21 @@
 
 Status: accepted, 2026-11-13
 
+```mermaid
+sequenceDiagram
+    participant W1 as worker 1 (epoch 1)
+    participant D as postgres
+    participant W2 as worker 2
+    W1->>D: one statement: lock the job row, require running under epoch 1, write
+    D-->>W1: 1 row, committed
+    Note over W1: paused past its lease
+    W2->>D: claim: epoch 2
+    Note over W1: wakes up
+    W1->>D: the same kind of statement, still epoch 1
+    D-->>W1: 0 rows: the lease is gone
+    Note over W1: drops the job
+```
+
 ## Context
 
 A worker holds a job through a lease. When the lease expires, another worker
