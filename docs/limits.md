@@ -59,9 +59,6 @@ refused, but the tool ran. An idempotency key on the other side closes this.
 - The wait before a decision about an interrupted sandboxed call assumes the
   worker was not paused before the start request, and that Docker does not
   act on a request late. A container that starts later can still be running.
-- That wait reads the database clock once, then sleeps on the worker's
-  clock. It can end a few milliseconds early by the database clock
-  ([issue 49](https://github.com/sindredg/agent-runtime/issues/49)).
 - A takeover during a sandboxed call costs up to `ends_within` (57 s with the
   defaults) before the job goes on.
 

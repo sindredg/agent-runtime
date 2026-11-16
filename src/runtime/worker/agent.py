@@ -22,7 +22,7 @@ import inspect
 import logging
 import math
 import time
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -234,6 +234,38 @@ async def _wait_unless_stopped(
     return done
 
 
+async def _wait_out(
+    left_now: Callable[[], Awaitable[float]],
+    stop: asyncio.Event,
+    lease: Lease,
+    halt: Halt,
+    job_id: UUID,
+) -> bool:
+    """Wait until `left_now` says no time is left. False if `stop` was set first.
+
+    The wait runs on the worker's own clock and `left_now` reads the clock
+    that counts, which can run faster meanwhile, so it is asked again after
+    each wait. Each ask is raced too: a database that does not answer does
+    not hide a halt.
+    """
+    waited = False
+    while True:
+        asked, left = await _race(left_now(), lease=lease, halt=halt, stop=stop)
+        if not asked:
+            return False
+        assert left is not None  # noqa: S101 - _race returns the result when it completed
+        if left <= 0:
+            return True
+        if not waited:
+            log.info(
+                "waiting for an interrupted call's container to end",
+                extra={"job_id": job_id, "seconds": round(left, 1)},
+            )
+            waited = True
+        if not await _wait_unless_stopped(left, stop, lease, halt):
+            return False
+
+
 def _bound(tool: AnyTool | None, intent: dict[str, Any]) -> float | None:
     """Seconds after its intent by which an interrupted call's container has ended.
 
@@ -270,7 +302,8 @@ async def _outlast_container(
     container did not (ADR 0008). Containers of earlier lease epochs on this
     host are removed. One on another host, or one whose start request was
     still on its way, cannot be, so the worker also waits until the call's
-    bound has passed since its intent, by the database clock.
+    bound has passed since its intent, by the database clock. That clock
+    is read again after the wait: the decision is never before the bound.
     """
     bound = _bound(tool, intent)
     if bound is None or written is None:
@@ -287,14 +320,12 @@ async def _outlast_container(
                 "containers of an earlier lease removed",
                 extra={"job_id": job.id, "removed": removed},
             )
-    left = await _stored(seconds_until(writer.engine, written + timedelta(seconds=bound)))
-    if left <= 0:
-        return True
-    log.info(
-        "waiting for an interrupted call's container to end",
-        extra={"job_id": job.id, "seconds": round(left, 1)},
-    )
-    return await _wait_unless_stopped(left, stop, lease, halt)
+    ends = written + timedelta(seconds=bound)
+
+    async def left_now() -> float:
+        return await _stored(seconds_until(writer.engine, ends))
+
+    return await _wait_out(left_now, stop, lease, halt, job.id)
 
 
 async def _next_tool_call(

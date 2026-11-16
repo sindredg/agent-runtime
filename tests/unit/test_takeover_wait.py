@@ -3,13 +3,17 @@
 import asyncio
 import time
 import uuid
-from datetime import timedelta
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
 from runtime.sandbox.runner import LONGEST_BOUND
 from runtime.store.held import LeaseLost
-from runtime.worker.agent import _bound, _wait_unless_stopped
+from runtime.worker import agent
+from runtime.worker.agent import _bound, _outlast_container, _wait_out, _wait_unless_stopped
 from runtime.worker.halt import Halt
 from runtime.worker.lease import Lease
 
@@ -30,6 +34,116 @@ def test_the_wait_runs_its_full_length() -> None:
 
     assert done is True
     assert took >= 0.2
+
+
+def answers(*values: float) -> tuple[Callable[[], Awaitable[float]], list[int]]:
+    """A stand-in for the database: one answer per ask, and the number of asks."""
+    asked = [0]
+
+    async def left_now() -> float:
+        asked[0] += 1
+        return values[asked[0] - 1]
+
+    return left_now, asked
+
+
+def test_a_wait_that_ends_early_by_the_clock_that_counts_waits_out_the_rest() -> None:
+    # The worker sleeps on its own clock. When the clock that counts ran
+    # faster meanwhile, it asks again and waits out what is left.
+    left_now, asked = answers(0.1, 0.15, -0.01)
+
+    async def go() -> tuple[bool, float]:
+        started = time.monotonic()
+        done = await _wait_out(left_now, asyncio.Event(), lease(), Halt(JOB), JOB)
+        return done, time.monotonic() - started
+
+    done, took = asyncio.run(go())
+
+    assert done is True
+    assert asked == [3]
+    assert took >= 0.25
+
+
+def test_nothing_is_waited_when_the_bound_has_passed() -> None:
+    left_now, asked = answers(0.0)
+    assert asyncio.run(_wait_out(left_now, asyncio.Event(), lease(), Halt(JOB), JOB)) is True
+    assert asked == [1]
+
+
+def test_a_stop_during_the_second_wait_ends_it_without_a_decision() -> None:
+    async def go() -> bool:
+        stop = asyncio.Event()
+        left_now, _ = answers(0.01, 30.0)
+        asyncio.get_running_loop().call_later(0.1, stop.set)
+        async with asyncio.timeout(5):
+            return await _wait_out(left_now, stop, lease(), Halt(JOB), JOB)
+
+    assert asyncio.run(go()) is False
+
+
+@pytest.mark.parametrize("first", [True, False], ids=["first ask", "second ask"])
+def test_a_stop_during_an_ask_ends_the_wait_without_a_decision(first: bool) -> None:
+    async def go() -> bool:
+        stop = asyncio.Event()
+        asked = 0
+
+        async def left_now() -> float:
+            nonlocal asked
+            asked += 1
+            if first or asked == 2:
+                asyncio.get_running_loop().call_later(0.05, stop.set)
+                await asyncio.Event().wait()  # a database that never answers
+            return 0.01
+
+        async with asyncio.timeout(5):
+            return await _wait_out(left_now, stop, lease(), Halt(JOB), JOB)
+
+    assert asyncio.run(go()) is False
+
+
+def outlast(monkeypatch: pytest.MonkeyPatch, answer: Callable[[int], float]) -> int:
+    """Run the takeover wait with the database's answers stubbed. Returns how often it asked."""
+    asked = 0
+
+    async def seconds_until(engine: Any, moment: datetime) -> float:
+        nonlocal asked
+        asked += 1
+        return answer(asked)
+
+    monkeypatch.setattr(agent, "seconds_until", seconds_until)
+
+    async def go() -> bool:
+        return await _outlast_container(
+            SimpleNamespace(engine=None),  # type: ignore[arg-type]
+            None,
+            SimpleNamespace(id=JOB),  # type: ignore[arg-type]
+            lease(),
+            {"ends_within": 1.0},
+            datetime.now(UTC),
+            asyncio.Event(),
+            Halt(JOB),
+        )
+
+    assert asyncio.run(go()) is True
+    return asked
+
+
+def test_the_takeover_wait_asks_the_database_again_until_no_time_is_left(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert outlast(monkeypatch, lambda asked: [0.05, 0.05, -0.01][asked - 1]) == 3
+
+
+def test_a_database_error_on_the_second_ask_is_a_store_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def answer(asked: int) -> float:
+        if asked == 2:
+            raise OSError("connection reset")
+        return 0.01
+
+    with pytest.raises(agent._StoreUnreachable):
+        outlast(monkeypatch, answer)
 
 
 def test_a_stop_ends_the_wait_without_a_decision() -> None:
