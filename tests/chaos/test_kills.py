@@ -68,6 +68,8 @@ def test_jobs_survive_a_kill_at_a_random_time(
 ) -> None:
     chaos.workers_up()
     failures: list[str] = []
+    # A run can have several problems; a failed run is counted once.
+    failed_runs = 0
     killed_mid_job = takeovers = approvals = 0
     print(f"\n{RUNS} runs, seed {SEED}, {WORKERS} workers, lease {SHORT_LEASE:g} s, {SCENARIO}")
     for index in range(RUNS):
@@ -89,6 +91,7 @@ def test_jobs_survive_a_kill_at_a_random_time(
         approvals += sum(run.approvals.values())
         problems = verdict(run, uninterrupted)
         print(f"{index:>3} {'FAIL' if problems else 'ok  '} {run.summary()}")
+        failed_runs += bool(problems)
         failures += [f"run {index} (seed {SEED}:{index}): {p} :: {run.summary()}" for p in problems]
 
     record(
@@ -101,7 +104,7 @@ def test_jobs_survive_a_kill_at_a_random_time(
             "kills_sent_to_the_holder": killed_mid_job,
             "takeovers": takeovers,
             "approvals": approvals,
-            "failed_runs": len(failures),
+            "failed_runs": failed_runs,
         },
     )
     assert not failures, "\n".join(failures)
