@@ -9,7 +9,7 @@ answer, and to wake it while another worker is in the middle of the job.
 
 import time
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -59,8 +59,13 @@ def test_a_worker_paused_past_its_lease_writes_nothing_when_it_wakes(default_lea
         # The second worker is in the middle of the job when the first wakes.
         at_unpause = chaos.job(job_id)
     finally:
+        # A paused container writes nothing, so any time inside the pause is
+        # a lower bound for what it logs after waking. A time taken after
+        # `docker unpause` returns is not: the woken worker can log within
+        # milliseconds, before the command returns. Five seconds also cover
+        # a gap between this clock and the Docker VM's.
+        woke_at = datetime.now(UTC) - timedelta(seconds=5)
         docker("docker", "unpause", stale)
-    woke_at = datetime.now(UTC)
     run = chaos.finish(job_id, timeout=60, note=f"paused {PAUSE_SECONDS:g}s")
     # Give the woken worker time to do whatever it is going to do.
     time.sleep(5)
@@ -76,17 +81,16 @@ def test_a_worker_paused_past_its_lease_writes_nothing_when_it_wakes(default_lea
     assert at_unpause["status"] == "running"
     assert at_unpause["lease_epoch"] == 2
 
-    # The job finished under the second worker.
-    assert run.job["status"] == "succeeded"
-    assert (run.job["takeovers"], run.job["lease_epoch"]) == (1, 2)
-
+    # What the stale worker wrote comes before the job's status, so that a
+    # write of its own is what a failing run shows.
     # The step log: the stale worker's only step is the request it wrote
     # before the pause. Everything after it carries the second worker's epoch.
+    stale_steps = [s for s in run.steps[1:] if s["lease_epoch"] != 2]
+    assert stale_steps == [], f"steps written with a lost lease: {stale_steps}"
     assert [(s["kind"], s["lease_epoch"]) for s in run.steps][:2] == [
         ("model_request", 1),
         ("model_request", 2),
     ]
-    assert {s["lease_epoch"] for s in run.steps[1:]} == {2}
 
     # The stale worker's own log: it found its lease gone and dropped the
     # job. It wrote no step and started no tool after waking.
@@ -100,6 +104,10 @@ def test_a_worker_paused_past_its_lease_writes_nothing_when_it_wakes(default_lea
     assert run.turns == [0, 0, 1, 2]
     # The tracker: one issue. The stale worker opened none.
     assert [len(ids) for ids in run.issues.values()] == [1]
+
+    # The job finished under the second worker.
+    assert run.job["status"] == "succeeded"
+    assert (run.job["takeovers"], run.job["lease_epoch"]) == (1, 2)
     record(
         "G3 paused worker",
         {
@@ -108,7 +116,7 @@ def test_a_worker_paused_past_its_lease_writes_nothing_when_it_wakes(default_lea
             "lease_seconds": DEFAULT_LEASE,
             "pause_seconds": PAUSE_SECONDS,
             "takeover_after_seconds": round(taken_after, 1),
-            "stale_steps_after_takeover": 0,
+            "stale_steps_after_takeover": len(stale_steps),
             "issues": 1,
         },
     )
