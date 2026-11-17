@@ -68,10 +68,10 @@ Tested. `tests/chaos/test_stale_worker.py`.
   and opened no issue.
 - The job succeeded with one takeover and one issue.
 
-With the mechanism off: with the epoch check removed from the fence, the
-job ended `failed` instead of `succeeded`. The test stopped at that check.
-Its checks of what the stale worker wrote have no failing run
-([issue 66](https://github.com/sindredg/agent-runtime/issues/66)).
+With the mechanism off, at `317a0b3` on 2026-11-17: with the epoch check
+removed from the fence, the woken worker wrote an `error` step with its old
+epoch after the takeover, and the job ended `failed`. The test now checks
+what the stale worker wrote first, and fails on that step.
 
 ## A job that crashes its worker does not loop forever
 
