@@ -126,14 +126,15 @@ integration tests fail.
 
 ## Bad tool output
 
-Tested for `run_shell`. Integration suite, `test_sandbox.py`. `list_dir`
-runs in a container through the same code and has no bad-output test of its
-own ([issue 67](https://github.com/sindredg/agent-runtime/issues/67)).
+Tested. Integration suite, `test_sandbox.py`.
 
 - One job runs commands that exit non-zero, print 100 MB, and print bytes
   that are not UTF-8. Another runs one past its timeout.
 - Each becomes a tool result of at most 64 KiB, the 100 MB one flagged
   `truncated`. Each job succeeds, and the model is sent every result.
+- `list_dir`, added at `81750b6`: a listing of 2,000 files and a name that is
+  not UTF-8 is cut to 64 KiB and flagged `truncated`. The bad name comes back
+  as U+FFFD, and the job succeeds.
 - `read_file` and `create_issue` run in the worker and have no general
   timeout.
 
@@ -144,3 +145,4 @@ With the mechanism off:
 | The cut of the stream | The worker kept all 100 MB, and the runner's test fails. The job's test passes: the result is still cut. |
 | The cut of the result | The stored result was 65,612 bytes. The job's test fails. |
 | The tool timeout | Both timeout tests fail. The command was not stopped. |
+| Both cuts, for the `list_dir` test, at `81750b6` | The test fails: the whole listing went to the model, the next call's bound passed the budget, and the job failed. |
