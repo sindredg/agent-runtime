@@ -12,6 +12,8 @@ import uuid
 
 import pytest
 
+from runtime.sandbox.runner import SandboxSettings
+
 from .conftest import Host
 
 # Seconds an attempt to connect may take before it counts as stopped.
@@ -102,3 +104,12 @@ def test_the_jobs_own_workspace_is_reachable(host: Host) -> None:
     assert result.is_error is False
     assert result.content == "mine\n[exit status 0]"
     assert (host.root / str(host.job) / "out.txt").read_text() == "written\n"
+
+
+def test_a_command_runs_as_the_uid_the_stack_uses(host: Host) -> None:
+    """The settings are the worker's defaults, so the uid is the one deployed."""
+    assert host.settings.user == SandboxSettings(image="any", volume="any").user
+
+    result = host.shell("id -u; id -g")
+
+    assert result.content == "10001\n10001\n[exit status 0]"
