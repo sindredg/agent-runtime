@@ -1,7 +1,7 @@
 # Architecture
 
 What is built, described from the code. Reasons are in the
-[decision records](adr/). Test results are in [Results](results.md).
+[decision records](adr/). Test results are in [Results](results/README.md).
 
 ## Components
 
@@ -129,7 +129,7 @@ Only a tool call with an intent and no result needs more: see
 | [Approval](approval.md) | Asking a person before a tool call runs |
 | [Settings](settings.md) | Environment variables |
 | [Testing](testing.md) | Suites, failure switches, commands |
-| [Results](results.md) | The evidence behind each guarantee |
-| [Runs against the Claude API](results-api.md) | Eight jobs with a real model |
+| [Results](results/README.md) | The evidence behind each guarantee |
+| [Runs against the Claude API](results/api.md) | Eight jobs with a real model |
 | [Known limits](limits.md) | What is accepted and what is not built |
 | [OWASP APTS](apts.md) | The APTS requirements of the runtime's layer, and what meets each |

@@ -2,8 +2,8 @@
 
 The evidence for the four durability guarantees, from the chaos run at
 `e656fd8`. Its conditions, and the runs with a mechanism switched off, are
-on the [Results](results.md) page. The mechanisms are in
-[Durability](durability.md).
+on the [Results](README.md) page. The mechanisms are in
+[Durability](../durability.md).
 
 ```mermaid
 pie showData title 200 kill runs, by what the kill hit
@@ -36,7 +36,7 @@ replayed, 10 of 20 short runs failed. The provider was asked turns 0, 1, 2,
 
 ## An unsafe tool call does not run twice without approval
 
-Tested, with [one accepted exception](limits.md#the-main-one-fencing-protects-the-database-not-the-outside-world)
+Tested, with [one accepted exception](../limits.md#the-main-one-fencing-protects-the-database-not-the-outside-world)
 for a worker paused at the wrong instant.
 
 - The same 206 runs: no operation id has more than one issue in the tracker,

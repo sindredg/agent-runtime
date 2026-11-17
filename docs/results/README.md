@@ -4,12 +4,15 @@ Each guarantee has a test with a pass line that was fixed before the run, and
 a run with the mechanism switched off to show that the test can fail.
 
 The table with one line per guarantee is in the
-[README](../README.md#results). The evidence is on two pages:
+[README](../../README.md#results). The evidence is on two pages:
 
-- [Durability](results-durability.md): surviving a lost worker, unsafe tool
+- [Durability](durability.md): surviving a lost worker, unsafe tool
   calls, stale workers, crash loops.
-- [Budget, scope and approval](results-controls.md): what a job may spend,
+- [Budget, scope and approval](controls.md): what a job may spend,
   reach and do.
+
+Jobs that ran with a real model, which are not the evidence for a guarantee:
+[Runs against the Claude API](api.md).
 
 This page has what the runs share: the run, how a kill run works, and what
 the results do not show.
@@ -79,21 +82,21 @@ sequenceDiagram
 ```
 
 What happened outside a job is read from records other than the job's step
-log. See [Testing](testing.md#records-a-test-trusts).
+log. See [Testing](../testing.md#records-a-test-trusts).
 
 ## What these results do not show
 
 - Nothing ran against a real model provider or a real issue tracker. The
   contract test against the Claude API was not part of this run. It is run
-  by hand ([Testing](testing.md#the-contract-test)), and eight jobs ran
-  against the API separately ([Runs against the Claude API](results-api.md)).
+  by hand ([Testing](../testing.md#the-contract-test)), and eight jobs ran
+  against the API separately ([Runs against the Claude API](api.md)).
 - The worker logs of the run hold lease renewals that timed out. Not all of
   them are explained
   ([issue 69](https://github.com/sindredg/agent-runtime/issues/69)).
 - Everything ran on one host with one clock. A lost network between a worker
   and the database is covered by an integration test that cuts the database
   sessions, not by a chaos run.
-- The limits the design accepts are in [Known limits](limits.md).
+- The limits the design accepts are in [Known limits](../limits.md).
 
 ## Runs that do not count
 
@@ -122,4 +125,4 @@ Earlier runs:
 
 The chaos tests compare the wall clock with the monotonic clock, and fail a
 test during which they drift apart by more than a second. A clock that is
-set forward is a [known limit](limits.md#durability).
+set forward is a [known limit](../limits.md#durability).

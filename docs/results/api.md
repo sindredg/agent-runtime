@@ -2,7 +2,7 @@
 
 Eight jobs ran with the worker on the Claude API instead of the fake
 provider. They show that the runtime works with a real model. They are not
-the evidence for a guarantee: that is in [Results](results.md).
+the evidence for a guarantee: that is in [Results](README.md).
 
 The last job of the table, drawn:
 
