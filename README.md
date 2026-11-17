@@ -73,7 +73,8 @@ clean` stops the stack and deletes its database.
 ## Results
 
 Each guarantee has a test with a pass line fixed before the run, and a run
-with the mechanism switched off to show that the test can fail.
+with the mechanism switched off to show that the test can fail. A check that
+such a run did not reach is named with its result.
 
 | Guarantee | Status | Evidence |
 |---|---|---|
@@ -81,10 +82,10 @@ with the mechanism switched off to show that the test can fail.
 | An unsafe tool call does not run twice without approval | Tested, one accepted exception | [No operation id with two issues](docs/results-durability.md#an-unsafe-tool-call-does-not-run-twice-without-approval) |
 | A stale worker cannot corrupt a job | Tested | [No write after the takeover](docs/results-durability.md#a-stale-worker-cannot-corrupt-a-job) |
 | A job that crashes its worker every time does not loop forever | Tested | [Failed after 5 takeovers](docs/results-durability.md#a-job-that-crashes-its-worker-does-not-loop-forever) |
-| Every job stays inside its token budget and deadline, and can be cancelled | Tested | [Budget, cancel and deadline](docs/results-controls.md#budget-deadline-and-cancel) |
-| A tool can reach only its job's scope, and nothing else of the host | Tested | [22 of 22 escape tests](docs/results-controls.md#scope-and-sandbox) |
+| Every job stays inside its token budget and deadline, and can be cancelled | Tested, with [accepted exceptions](docs/limits.md#halt-and-budget) | [Budget, cancel and deadline](docs/results-controls.md#budget-deadline-and-cancel) |
+| A tool can reach only its job's scope, and nothing else of the host | Tested, with [accepted exceptions](docs/limits.md#sandbox-and-scope) | [22 of 22 escape tests](docs/results-controls.md#scope-and-sandbox) |
 | A tool call that needs approval does not run before a person approved it | Tested | [134 issues for 134 approvals](docs/results-controls.md#approval-before-a-tool-call) |
-| Bad tool output does not break a job | Tested for `run_shell` and `list_dir` | [100 MB cut to 64 KiB, the job goes on](docs/results-controls.md#bad-tool-output) |
+| Bad tool output does not break a job | Tested for `run_shell` | [100 MB cut to 64 KiB, the job goes on](docs/results-controls.md#bad-tool-output) |
 | Provider rate limits slow jobs, they do not fail them | Not built | |
 | Throughput scales with workers | Not measured | |
 

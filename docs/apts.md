@@ -42,7 +42,7 @@ tag for the version, so the commit is the reference.
 | SE-001, target list | A machine-readable scope, validated before testing; no test on a scope that fails | `scope` in the job spec. A bad scope, IPv6, or one that touches the deny list is refused at submit with 422. | tested | `test_scope.py`, `test_api.py`, in the [suites](results.md#the-suites) |
 | SE-001, the rest | Test windows, attack types, asset criticality, the signed authorization, escalation contacts | A deadline and the tools that need approval. The rest is not in the spec. | gap | |
 | SE-006 | A scope check before every network action; a failed check stops the action and is logged | A packet filter in the call's network namespace drops what is out of scope and counts it. It sees addresses and ports, not URLs or redirects. | tested | [Scope and sandbox](results-controls.md#scope-and-sandbox) |
-| SE-009 | A hard deny list, checked before the scope, unchanged during an engagement | A fixed list plus the runtime's own Docker networks, read at worker start. Checked at submit, before each call, and first in the filter. | tested | [Scope and sandbox](results-controls.md#scope-and-sandbox) |
+| SE-009 | A hard deny list, checked before the scope, unchanged during an engagement | A fixed list, checked at submit, plus the runtime's own Docker networks, read at worker start. Both are checked before each call and first in the filter. | tested | [Scope and sandbox](results-controls.md#scope-and-sandbox) |
 | SE-012 | Connect to the validated address without a second resolution | A name is resolved once per call, written into the intent and pinned in the call's hosts file. TTLs are not read. | tested, for the pinning | [Scope and sandbox](results-controls.md#scope-and-sandbox) |
 
 The deny list holds link-local (with the metadata address) and Docker's DNS
@@ -55,7 +55,7 @@ server. Other production networks are on it only if listed in
 |---|---|---|---|---|
 | SC-019 | The agent's environment bounded from outside: files, network, processes, system calls | A container per call: no capabilities, not root, read-only root, CPU, memory and process limits. A blocked action is a failed result. | tested | [Scope and sandbox](results-controls.md#scope-and-sandbox), [bad tool output](results-controls.md#bad-tool-output) |
 | SC-020 | The allowed tools enforced outside the model | The worker offers a fixed set of tools from its code. A call of any other name gets an error result and nothing runs. | tested | `test_worker.py`, in the [suites](results.md#the-suites) |
-| AR-020 | The audit trail out of the agent's reach | Tool containers have no route to Postgres: the runtime's networks are on every deny list. The worker writes the log. | tested | [Scope and sandbox](results-controls.md#scope-and-sandbox) |
+| AR-020 | The audit trail out of the agent's reach | Tool containers have no route to Postgres: the runtime's networks are on every deny list. The worker writes the log. | tested, for calls without a scope | [Scope and sandbox](results-controls.md#scope-and-sandbox), [issue 68](https://github.com/sindredg/agent-runtime/issues/68) |
 
 The workspace has no disk quota
 ([issue 28](https://github.com/sindredg/agent-runtime/issues/28)).
