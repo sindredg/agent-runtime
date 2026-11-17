@@ -5,8 +5,10 @@ The job workspaces are directories under the test's temporary directory, and
 a named volume is bound onto them, as the stack's workspace volume is.
 
 ESCAPE_DOCKER_DEFAULTS=1 runs the same attempts in containers made with
-Docker's default settings and only the workspace mount. That run must fail:
-it is the proof that the suite can see an escape.
+Docker's default settings, only the workspace mount, and the command as root.
+That run must fail: it is the proof that the suite can see an escape.
+
+Commands run as the uid the stack uses, the default of SandboxSettings.
 """
 
 import asyncio
@@ -62,7 +64,11 @@ def default_config(
     *,
     guard: str | None = None,
 ) -> dict[str, Any]:
-    """A container as `docker run` makes it, with only the job's workspace mounted.
+    """A container as `docker run --user 0:0` makes it, with only the job's workspace mounted.
+
+    Root, because the sandbox image itself sets a user that is not root: a
+    default container from it would have no capabilities and could not
+    write to its root file system, and those attempts could not fail.
 
     For a scoped call it is put on the guard's network directly, as a plain
     `docker run --network` would, instead of joining the guard.
@@ -83,6 +89,7 @@ def default_config(
         "Image": settings.image,
         "Cmd": list(argv),
         "WorkingDir": WORKDIR,
+        "User": "0:0",
         "Labels": {LABEL: "1"},
         "AttachStdout": True,
         "AttachStderr": True,
@@ -156,8 +163,12 @@ def host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Host]:
     root = tmp_path / "workspaces"
     root.mkdir()
     job, other_job = uuid.uuid4(), uuid.uuid4()
-    (root / str(job)).mkdir()
-    (root / str(other_job)).mkdir()
+    # In the stack the worker runs as the sandbox's uid and owns the
+    # workspaces. Here this process owns them, so each job's directory is
+    # opened to every uid instead.
+    for workspace in (job, other_job):
+        (root / str(workspace)).mkdir()
+        (root / str(workspace)).chmod(0o777)
     other_secret = root / str(other_job) / f"secret-{uuid.uuid4().hex}.txt"
     other_secret.write_text("another job's file\n")
     canary_dir = tmp_path / "host"
@@ -177,7 +188,6 @@ def host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Host]:
     settings = SandboxSettings(
         image=IMAGE,
         volume=volume,
-        user=f"{os.getuid()}:{os.getgid()}",
         timeout=30.0,
         guard_image=GUARD_IMAGE,
         network=network,
