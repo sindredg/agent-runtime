@@ -130,5 +130,6 @@ Only a tool call with an intent and no result needs more: see
 | [Settings](settings.md) | Environment variables |
 | [Testing](testing.md) | Suites, failure switches, commands |
 | [Results](results.md) | The evidence behind each guarantee |
+| [Runs against the Claude API](results-api.md) | Eight jobs with a real model |
 | [Known limits](limits.md) | What is accepted and what is not built |
 | [OWASP APTS](apts.md) | The APTS requirements of the runtime's layer, and what meets each |

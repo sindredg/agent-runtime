@@ -84,7 +84,9 @@ log. See [Testing](testing.md#records-a-test-trusts).
 ## What these results do not show
 
 - Nothing ran against a real model provider or a real issue tracker. The
-  contract test against the Claude API was not part of this run.
+  contract test against the Claude API was not part of this run. It is run
+  by hand ([Testing](testing.md#the-contract-test)), and eight jobs ran
+  against the API separately ([Runs against the Claude API](results-api.md)).
 - The worker logs of the run hold lease renewals that timed out. Not all of
   them are explained
   ([issue 69](https://github.com/sindredg/agent-runtime/issues/69)).
