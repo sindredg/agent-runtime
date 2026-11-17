@@ -21,6 +21,8 @@ Tested. `tests/chaos/test_kills.py`, 200 runs.
 - 200 of 200 jobs succeeded, each with the same final conversation as a job
   nobody interrupted. The provider was never asked an earlier turn again.
 - 130 jobs were taken over in the middle, one of them twice: 131 takeovers.
+  The second takeover followed a lease renewal that timed out, not a kill
+  ([issue 69](https://github.com/sindredg/agent-runtime/issues/69)).
 - At 24 kill times no worker held the job, before the claim or after the
   end.
 - 46 kills reached the holder and no takeover followed. Their kill times are
@@ -29,7 +31,7 @@ Tested. `tests/chaos/test_kills.py`, 200 runs.
   6, each resumed with one takeover and one issue.
 
 With the mechanism off: with resume switched off, so that the log is not
-replayed, 16 of 20 short runs failed. The provider was asked turns 0, 1, 2,
+replayed, 10 of 20 short runs failed. The provider was asked turns 0, 1, 2,
 0, 1, 2, and the tracker held two issues for one operation id.
 
 ## An unsafe tool call does not run twice without approval
@@ -67,7 +69,9 @@ Tested. `tests/chaos/test_stale_worker.py`.
 - The job succeeded with one takeover and one issue.
 
 With the mechanism off: with the epoch check removed from the fence, the
-job ended `failed` instead of `succeeded`.
+job ended `failed` instead of `succeeded`. The test stopped at that check.
+Its checks of what the stale worker wrote have no failing run
+([issue 66](https://github.com/sindredg/agent-runtime/issues/66)).
 
 ## A job that crashes its worker does not loop forever
 
@@ -82,7 +86,7 @@ after 180 s and had been taken over 29 times.
 ## Also tested
 
 - **A graceful stop.** A worker stopped with `docker stop` (SIGTERM) handed
-  its job back in 2.9 s. The job finished on another worker with no
+  its job back and ended in 2.9 s. The job finished on another worker with no
   takeover counted.
 - **A kill during a sandboxed call.** The next worker removed the killed
   worker's container and asked a person only once the call's bound (37 s)
