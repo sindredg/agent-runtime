@@ -123,6 +123,8 @@ refused, but the tool ran. An idempotency key on the other side closes this.
 - A waiting job waits until a person answers or cancels, or until its
   deadline. Entering a call's result by hand is not built.
 - The log records that a call was approved or denied, not by whom.
+- A job that waits for a person tells nobody. Someone has to ask for the
+  job ([issue 75](https://github.com/sindredg/agent-runtime/issues/75)).
 
 ## API
 
@@ -132,5 +134,8 @@ refused, but the tool ran. An idempotency key on the other side closes this.
   stop a program on the host, which can send any header.
 - Postgres is published on `127.0.0.1` with a default password. A local
   process can write jobs and steps directly, past the fence and the gate.
+- There is no list of jobs and no status page. A job is found only by its
+  id ([issue 74](https://github.com/sindredg/agent-runtime/issues/74),
+  [issue 76](https://github.com/sindredg/agent-runtime/issues/76)).
 - The size of a request body is not capped. Only the fields are limited.
 - `not_before` and the `waiting` status exist, and nothing sets them yet.
