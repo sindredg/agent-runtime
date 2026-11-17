@@ -1,8 +1,9 @@
 # Results: budget, scope and approval
 
 The evidence for the guarantees about what a job may spend, reach and do.
-Every result here is from the run at `e656fd8`. Its conditions, and the runs
-with a mechanism switched off, are on the [Results](README.md) page.
+Every result here is from the run at `e656fd8`, except "Scope and sandbox".
+Its conditions, and the runs with a mechanism switched off, are on the
+[Results](README.md) page.
 
 ## Budget, deadline and cancel
 
@@ -44,9 +45,10 @@ failing run ([issue 65](https://github.com/sindredg/agent-runtime/issues/65)).
 
 ## Scope and sandbox
 
-Tested. `make escape`, 22 of 22 tests. Docker 29.1.3,
-`kernel.yama.ptrace_scope` 1, both read from the host and not recorded by
-the run.
+Tested. `make escape`, 23 of 23 tests, at `5d2f4fd` on 2026-11-17, on the
+machine of the `e656fd8` run. This section alone is from that later run: the
+suite changed (issues 63 and 64). Docker 29.1.3, `kernel.yama.ptrace_scope`
+1, both read from the host and not recorded by the run.
 
 Without a scope, 12 escape attempts, each as a `run_shell` call:
 
@@ -60,6 +62,8 @@ Without a scope, 12 escape attempts, each as a `run_shell` call:
   same search found a file of the job's own. Both stayed unchanged.
 - No metadata service runs on this machine. That attempt shows only that the
   address was unreachable.
+- Commands ran as uid and gid 10001, the stack's, read with `id` inside the
+  container.
 
 With a scope, against two targets on the guards' network:
 
@@ -85,19 +89,18 @@ With the mechanism off:
 
 | Switch | Outcome |
 |---|---|
-| `ESCAPE_DOCKER_DEFAULTS=1`: Docker's default settings, and a scoped command on the network directly | 13 of 22 tests failed: 12 attempts got through, and 1 control test |
-| `ESCAPE_NO_RULES=1`: a guard with no rules | All 7 scope tests failed, the other 15 passed |
+| `ESCAPE_DOCKER_DEFAULTS=1`: Docker's default settings, the command as root, and a scoped command on the network directly | 16 of 23 failed: 9 of 12 attempts, the uid test and 6 of 7 scope tests. The control passed. |
+| `ESCAPE_NO_RULES=1`: a guard with no rules | All 7 scope tests failed, the other 16 passed |
 
-What the switched-off runs do not show:
+Which attempts have a failing run:
 
-- Under Docker's defaults these attempts were still stopped: the write to
-  the root file system, the mount, capabilities, running as root, the Docker
-  socket, the metadata address and both file searches.
-- The image itself sets a user that is not root. The read-only root, the
-  dropped capabilities and the user setting have no failing run
-  ([issue 63](https://github.com/sindredg/agent-runtime/issues/63)).
-- The suite runs commands as the host's user, not the stack's 10001
-  ([issue 64](https://github.com/sindredg/agent-runtime/issues/64)).
+| Attempt | Got through under the defaults switch |
+|---|---|
+| DNS, TCP out, a network interface besides loopback | Yes |
+| A write to the root file system, capabilities, gaining privileges, running as root | Yes |
+| 200 forks, 512 MiB of memory | Yes |
+| A mount | No. Docker's default capabilities and seccomp profile refuse it, also to root. |
+| The Docker socket, the metadata address, both file searches | No. The switch mounts nothing but the workspace. |
 
 ## Approval before a tool call
 
