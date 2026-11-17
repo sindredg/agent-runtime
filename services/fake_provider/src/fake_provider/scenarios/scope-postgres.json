@@ -1,0 +1,7 @@
+{
+  "description": "One scoped command that connects to the stack's Postgres by name. The job's scope must list postgres:5432 for the name to resolve in the sandbox. Then the turn ends.",
+  "turns": [
+    {"content": [{"type": "tool_use", "name": "run_shell", "input": {"command": "timeout 3 bash -c 'exec 3<>/dev/tcp/postgres/5432' && echo connected || echo blocked"}}]},
+    {"content": [{"type": "text", "text": "The command came back. The job is done."}]}
+  ]
+}
