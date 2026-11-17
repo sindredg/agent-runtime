@@ -39,8 +39,8 @@ sequenceDiagram
 ```
 
 `python -m runtime.store.migrate` does both. The password never sits in a
-migration. The server quotes it, so any characters work in the role; the
-URL in `DATABASE_URL` needs them percent-encoded.
+migration. Compose puts the same value into the URL of the API and the
+worker without encoding it, so it has to be URL-safe.
 
 ## The start check
 

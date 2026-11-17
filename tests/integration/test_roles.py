@@ -277,6 +277,8 @@ def test_the_stacks_api_and_worker_connect_as_the_app_role(
         rows = await conn.fetch(
             "SELECT DISTINCT application_name, usename FROM pg_stat_activity"
             " WHERE application_name IN ('runtime-api', 'runtime-worker')"
+            # Tests start their own API and worker against other databases.
+            " AND datname = current_database()"
         )
         return {(row["application_name"], row["usename"]) for row in rows}
 
