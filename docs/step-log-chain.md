@@ -3,7 +3,8 @@
 Every step carries a SHA-256 hash over the step before it and its own row.
 The database makes the hash and refuses a change. A recomputation in Python
 finds a change made by a role that switched the refusal off. The reasons are
-in [ADR 0013](adr/0013-chain-the-step-log-and-split-the-database-roles.md).
+in [ADR 0013](adr/0013-chain-the-step-log-and-split-the-database-roles.md)
+and [ADR 0015](adr/0015-keep-the-chains-trigger-to-the-owner-and-the-steps-table.md).
 
 ```mermaid
 flowchart LR
