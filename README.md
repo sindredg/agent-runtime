@@ -85,7 +85,7 @@ such a run did not reach is named with its result.
 | Every job stays inside its token budget and deadline, and can be cancelled | Tested, with [accepted exceptions](docs/limits.md#halt-and-budget) | [Budget, cancel and deadline](docs/results/controls.md#budget-deadline-and-cancel) |
 | A tool can reach only its job's scope, and nothing else of the host | Tested, with [accepted exceptions](docs/limits.md#sandbox-and-scope) | [23 of 23 escape tests](docs/results/controls.md#scope-and-sandbox) |
 | A tool call that needs approval does not run before a person approved it | Tested | [134 issues for 134 approvals](docs/results/controls.md#approval-before-a-tool-call) |
-| Bad tool output does not break a job | Tested for `run_shell` | [100 MB cut to 64 KiB, the job goes on](docs/results/controls.md#bad-tool-output) |
+| Bad tool output does not break a job | Tested | [100 MB cut to 64 KiB, the job goes on](docs/results/controls.md#bad-tool-output) |
 | Provider rate limits slow jobs, they do not fail them | Not built | |
 | Throughput scales with workers | Not measured | |
 
