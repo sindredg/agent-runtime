@@ -121,10 +121,8 @@ An earlier version of the test ran on 2026-11-14 at commit `8f73f6e`. 3 of 4
 passed: the fourth expected text before the tool call, and the model wrote
 none.
 
-One job has run end to end against the API: `examples/hello.json`, once, on
-2026-11-17 at commit `a27b0f8`, with one worker and `claude-haiku-5-5`. It
-succeeded with one `read_file` call and 1,974 tokens. Neither response held
-a `thinking` block, so a job with one is still untested.
+Whole jobs have also run against the API:
+[Runs against the Claude API](results-api.md).
 
 ## Commands
 
