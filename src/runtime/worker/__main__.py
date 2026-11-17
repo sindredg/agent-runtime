@@ -13,6 +13,7 @@ from runtime.provider.messages import AnthropicProvider
 from runtime.sandbox.docker import Docker
 from runtime.sandbox.runner import Sandbox, check_host, deny_list
 from runtime.store.engine import create_engine
+from runtime.store.roles import wait_for_app_role
 from runtime.tools import default_tools
 from runtime.worker.agent import AgentSettings
 from runtime.worker.loop import keep_alive, keep_failing_overdue, work
@@ -38,7 +39,18 @@ async def run(config: WorkerConfig) -> None:
         # Before anything starts: on a host where a command could stop its
         # own timeout, the worker does not run at all.
         check_host()
-    engine = create_engine(config.database_url)
+    engine = create_engine(config.database_url, application_name="runtime-worker")
+    # Before the first claim: a worker connected as the owner could change
+    # or delete steps (ADR 0013).
+    try:
+        ready = await wait_for_app_role(engine, stop)
+    except BaseException:
+        await engine.dispose()
+        raise
+    if not ready:
+        # Stopped while the database could not be reached.
+        await engine.dispose()
+        return
     provider = AnthropicProvider(api_key=config.provider.api_key, base_url=config.provider.base_url)
     settings = AgentSettings(
         default_model=config.provider.model,

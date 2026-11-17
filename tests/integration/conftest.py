@@ -1,7 +1,9 @@
 """Fixtures for tests that need the Postgres server from the compose stack.
 
-DATABASE_URL names the stack's database. Tests that change the schema create
-their own database on the same server, so they never touch the stack's.
+DATABASE_URL names the stack's database, as the owner. Tests that change the
+schema create their own database on the same server, so they never touch the
+stack's. Store and worker code runs as the app role, as in the stack, so a
+right it lacks fails a test. APP_DATABASE_URL gives that role's login.
 """
 
 import asyncio
@@ -20,7 +22,7 @@ from uuid import UUID
 import asyncpg
 import httpx2
 import pytest
-from sqlalchemy import text
+from sqlalchemy import make_url, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
 from runtime.provider.messages import AnthropicProvider
@@ -32,8 +34,9 @@ from runtime.worker.agent import AgentSettings, run_job
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# The compose stack's development default, published on localhost.
+# The compose stack's development defaults, published on localhost.
 DEFAULT_DATABASE_URL = "postgresql://runtime:runtime-dev@127.0.0.1:5432/runtime"
+DEFAULT_APP_DATABASE_URL = "postgresql://runtime_app:runtime-app-dev@127.0.0.1:5432/runtime"
 
 DEADLINE = datetime.now(UTC) + timedelta(hours=1)
 
@@ -94,6 +97,36 @@ async def expire_lease(conn: AsyncConnection, job_id: UUID) -> None:
         ),
         {"id": job_id},
     )
+
+
+type Connection = asyncpg.Connection[asyncpg.Record]
+
+
+def on[T](database_url: str, body: Callable[[Connection], Awaitable[T]]) -> T:
+    """Run `body` with a connection to the database and close it afterwards."""
+
+    async def run() -> T:
+        conn = await asyncpg.connect(database_url, timeout=5)
+        try:
+            return await body(conn)
+        finally:
+            await conn.close()
+
+    return asyncio.run(run())
+
+
+def as_owner(database_url: str) -> str:
+    """The same database, as the owner that DATABASE_URL names."""
+    owner = make_url(os.environ.get("DATABASE_URL", DEFAULT_DATABASE_URL))
+    database = make_url(database_url).database
+    return owner.set(database=database).render_as_string(hide_password=False)
+
+
+def as_app(database_url: str) -> str:
+    """The same database, as the app role that the API and the worker use."""
+    app = make_url(os.environ.get("APP_DATABASE_URL", DEFAULT_APP_DATABASE_URL))
+    database = make_url(database_url).database
+    return app.set(database=database).render_as_string(hide_password=False)
 
 
 def alembic(database_url: str, *args: str) -> None:
@@ -162,14 +195,26 @@ def empty_database_url(stack_database_url: str) -> Iterator[str]:
 
 
 @pytest.fixture(scope="session")
-def migrated_database_url(stack_database_url: str) -> Iterator[str]:
-    """A database with every migration applied, shared by the test run.
+def app_database_url(stack_database_url: str) -> str:
+    """The database the compose stack migrated, as the app role."""
+    return as_app(stack_database_url)
+
+
+@pytest.fixture(scope="session")
+def migrated_owner_url(stack_database_url: str) -> Iterator[str]:
+    """A database with every migration applied, shared by the test run, as the owner.
 
     Tests that use it insert their own rows and do not change the schema.
     """
     with temporary_database(stack_database_url) as url:
         alembic(url, "upgrade", "head")
         yield url
+
+
+@pytest.fixture(scope="session")
+def migrated_database_url(migrated_owner_url: str) -> str:
+    """The shared migrated database, as the app role."""
+    return as_app(migrated_owner_url)
 
 
 @pytest.fixture(scope="session")
@@ -186,9 +231,12 @@ def _migrated_template(stack_database_url: str) -> Iterator[str]:
 
 @pytest.fixture
 def database_url(stack_database_url: str, _migrated_template: str) -> Iterator[str]:
-    """A migrated database for one test, for tests that need the tables to themselves."""
+    """A migrated database for one test, for tests that need the tables to themselves.
+
+    As the app role, as the stack's API and worker connect.
+    """
     with temporary_database(stack_database_url, template=_migrated_template) as url:
-        yield url
+        yield as_app(url)
 
 
 # The agent loop: one job against the database and the fake provider

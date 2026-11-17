@@ -30,7 +30,7 @@ flowchart LR
 | `api` | `src/runtime/api/` | Accepts jobs, serves jobs and steps, takes cancels and approval answers. Holds no state. |
 | `worker` | `src/runtime/worker/` | Claims one job at a time and runs the agent loop under a lease. Any worker can continue any job. |
 | `postgres` | `migrations/`, `src/runtime/store/` | Jobs, the step log and the queue. Runs under an init process. |
-| `migrate` | `migrations/` | Runs `alembic upgrade head` and exits. `api` and `worker` start after it. |
+| `migrate` | `migrations/`, `src/runtime/store/migrate.py` | Runs the migrations as the owner, sets the login of the [app role](database-roles.md), and exits. `api` and `worker` start after it. |
 | `fake-provider` | `services/fake_provider/` | Answers `POST /v1/messages` from scenario files and logs each request. |
 | `fake-tracker` | `services/fake_tracker/` | A stand-in issue tracker. Keeps each issue with its operation id. |
 | Provider client | `src/runtime/provider/` | The worker's one way to call a model: the official SDK behind a `Provider` interface. |
@@ -121,6 +121,7 @@ Only a tool call with an intent and no result needs more: see
 | [Running jobs](usage.md) | The examples, job files, the CLI |
 | [API](api.md) | Routes and the event stream |
 | [Jobs and steps](data-model.md) | Statuses, tables, step kinds |
+| [Database roles](database-roles.md) | The owner, the app role, and the start check |
 | [Durability](durability.md) | Claim, lease, fencing, takeover, graceful stop |
 | [Interrupted tool calls](interrupted-calls.md) | When a call runs again, and when a person is asked |
 | [Sandbox](sandbox.md) | The container of a tool call and its time bounds |

@@ -3,9 +3,7 @@
 Each test runs against a real Postgres server and its own new database.
 """
 
-import asyncio
 import subprocess
-from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 
 import asyncpg
@@ -13,9 +11,7 @@ import pytest
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 
-from .conftest import REPO_ROOT, alembic
-
-type Connection = asyncpg.Connection[asyncpg.Record]
+from .conftest import REPO_ROOT, Connection, alembic, on
 
 JOB_COLUMNS = {
     "id",
@@ -61,19 +57,6 @@ INSERT_JOB = "INSERT INTO jobs (spec, token_budget, deadline) VALUES ('{}', 1000
 INSERT_STEP = (
     "INSERT INTO steps (job_id, seq, kind, payload, lease_epoch) VALUES ($1, $2, $3, '{}', 1)"
 )
-
-
-def on[T](database_url: str, body: Callable[[Connection], Awaitable[T]]) -> T:
-    """Run `body` with a connection to the database and close it afterwards."""
-
-    async def run() -> T:
-        conn = await asyncpg.connect(database_url, timeout=5)
-        try:
-            return await body(conn)
-        finally:
-            await conn.close()
-
-    return asyncio.run(run())
 
 
 async def public_objects(conn: Connection) -> set[tuple[str, str]]:
@@ -138,17 +121,17 @@ def test_stack_database_is_at_head(stack_database_url: str) -> None:
     assert on(stack_database_url, current_revision) == head_revision()
 
 
-def test_table_definitions_match_the_migrations(migrated_database_url: str) -> None:
+def test_table_definitions_match_the_migrations(migrated_owner_url: str) -> None:
     """`alembic check` exits non-zero when runtime.store.schema and the database differ."""
-    alembic(migrated_database_url, "check")
+    alembic(migrated_owner_url, "check")
 
 
-def test_new_job_gets_defaults(migrated_database_url: str) -> None:
+def test_new_job_gets_defaults(migrated_owner_url: str) -> None:
     async def body(conn: Connection) -> asyncpg.Record | None:
         job_id = await conn.fetchval(INSERT_JOB, DEADLINE)
         return await conn.fetchrow("SELECT * FROM jobs WHERE id = $1", job_id)
 
-    job = on(migrated_database_url, body)
+    job = on(migrated_owner_url, body)
     assert job is not None
     assert job["id"].version == 7
     assert job["status"] == "queued"
@@ -163,7 +146,7 @@ def test_new_job_gets_defaults(migrated_database_url: str) -> None:
     assert job["created_at"] is not None
 
 
-def test_every_job_status_and_step_kind_is_accepted(migrated_database_url: str) -> None:
+def test_every_job_status_and_step_kind_is_accepted(migrated_owner_url: str) -> None:
     async def body(conn: Connection) -> None:
         job_id = await conn.fetchval(INSERT_JOB, DEADLINE)
         for status in JOB_STATUSES:
@@ -171,7 +154,7 @@ def test_every_job_status_and_step_kind_is_accepted(migrated_database_url: str) 
         for seq, kind in enumerate(STEP_KINDS, start=1):
             await conn.execute(INSERT_STEP, job_id, seq, kind)
 
-    on(migrated_database_url, body)
+    on(migrated_owner_url, body)
 
 
 @pytest.mark.parametrize(
@@ -190,16 +173,16 @@ def test_every_job_status_and_step_kind_is_accepted(migrated_database_url: str) 
         "spec = NULL",
     ],
 )
-def test_job_rejects(migrated_database_url: str, change: str) -> None:
+def test_job_rejects(migrated_owner_url: str, change: str) -> None:
     async def body(conn: Connection) -> None:
         job_id = await conn.fetchval(INSERT_JOB, DEADLINE)
         await conn.execute(f"UPDATE jobs SET {change} WHERE id = $1", job_id)  # noqa: S608
 
     with pytest.raises(asyncpg.IntegrityConstraintViolationError):
-        on(migrated_database_url, body)
+        on(migrated_owner_url, body)
 
 
-def test_lease_owner_and_expiry_are_accepted_together(migrated_database_url: str) -> None:
+def test_lease_owner_and_expiry_are_accepted_together(migrated_owner_url: str) -> None:
     async def body(conn: Connection) -> None:
         job_id = await conn.fetchval(INSERT_JOB, DEADLINE)
         await conn.execute(
@@ -207,54 +190,54 @@ def test_lease_owner_and_expiry_are_accepted_together(migrated_database_url: str
             job_id,
         )
 
-    on(migrated_database_url, body)
+    on(migrated_owner_url, body)
 
 
-def test_duplicate_step_seq_is_rejected(migrated_database_url: str) -> None:
+def test_duplicate_step_seq_is_rejected(migrated_owner_url: str) -> None:
     async def body(conn: Connection) -> None:
         job_id = await conn.fetchval(INSERT_JOB, DEADLINE)
         await conn.execute(INSERT_STEP, job_id, 1, "model_request")
         await conn.execute(INSERT_STEP, job_id, 1, "model_response")
 
     with pytest.raises(asyncpg.UniqueViolationError):
-        on(migrated_database_url, body)
+        on(migrated_owner_url, body)
 
 
-def test_same_seq_in_two_jobs_is_accepted(migrated_database_url: str) -> None:
+def test_same_seq_in_two_jobs_is_accepted(migrated_owner_url: str) -> None:
     async def body(conn: Connection) -> None:
         for _ in range(2):
             job_id = await conn.fetchval(INSERT_JOB, DEADLINE)
             await conn.execute(INSERT_STEP, job_id, 1, "model_request")
 
-    on(migrated_database_url, body)
+    on(migrated_owner_url, body)
 
 
-def test_step_for_unknown_job_is_rejected(migrated_database_url: str) -> None:
+def test_step_for_unknown_job_is_rejected(migrated_owner_url: str) -> None:
     async def body(conn: Connection) -> None:
         await conn.execute(INSERT_STEP, "00000000-0000-7000-8000-000000000000", 1, "model_request")
 
     with pytest.raises(asyncpg.ForeignKeyViolationError):
-        on(migrated_database_url, body)
+        on(migrated_owner_url, body)
 
 
-def test_job_with_steps_cannot_be_deleted(migrated_database_url: str) -> None:
+def test_job_with_steps_cannot_be_deleted(migrated_owner_url: str) -> None:
     async def body(conn: Connection) -> None:
         job_id = await conn.fetchval(INSERT_JOB, DEADLINE)
         await conn.execute(INSERT_STEP, job_id, 1, "model_request")
         await conn.execute("DELETE FROM jobs WHERE id = $1", job_id)
 
     with pytest.raises(asyncpg.ForeignKeyViolationError):
-        on(migrated_database_url, body)
+        on(migrated_owner_url, body)
 
 
 @pytest.mark.parametrize(("seq", "kind"), [(0, "model_request"), (1, "thought")])
-def test_step_rejects(migrated_database_url: str, seq: int, kind: str) -> None:
+def test_step_rejects(migrated_owner_url: str, seq: int, kind: str) -> None:
     async def body(conn: Connection) -> None:
         job_id = await conn.fetchval(INSERT_JOB, DEADLINE)
         await conn.execute(INSERT_STEP, job_id, seq, kind)
 
     with pytest.raises(asyncpg.CheckViolationError):
-        on(migrated_database_url, body)
+        on(migrated_owner_url, body)
 
 
 def test_the_denial_step_kind_arrives_with_its_migration_and_leaves_with_it(
