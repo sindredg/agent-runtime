@@ -150,7 +150,10 @@ def test_a_hash_the_writer_sends_is_overwritten(database_url: str) -> None:
 
 
 @pytest.mark.parametrize("seq", [3, 5])
-def test_a_step_that_does_not_follow_the_last_one_is_refused(database_url: str, seq: int) -> None:
+@pytest.mark.parametrize("role", ["app", "owner"])
+def test_a_step_that_does_not_follow_the_last_one_is_refused(
+    database_url: str, seq: int, role: str
+) -> None:
     async def body(conn: AsyncConnection) -> UUID:
         job = await new_job(conn)
         await add_step(conn, job.id, 1)
@@ -162,8 +165,9 @@ def test_a_step_that_does_not_follow_the_last_one_is_refused(database_url: str, 
     async def gap(conn: AsyncConnection) -> None:
         await add_step(conn, job_id, seq)
 
+    writer = as_owner(database_url) if role == "owner" else database_url
     with pytest.raises(Exception, match="does not follow its last step 1"):
-        in_transaction(database_url, gap)
+        in_transaction(writer, gap)
     assert head(database_url, job_id) == before
     assert verify(database_url, job_id) == []
 
@@ -271,6 +275,21 @@ TAMPERED: dict[str, tuple[list[str], list[Mismatch]]] = {
             Mismatch(3, "hash differs"),
             Mismatch(None, "head hash differs from the last step's"),
         ],
+    ),
+    "insert out of order": (
+        [
+            "INSERT INTO steps (job_id, seq, kind, payload, lease_epoch, hash)"
+            " VALUES ($job, 5, 'error', '{}', 1, '\\x00')",
+        ],
+        [
+            Mismatch(5, "follows step 3"),
+            Mismatch(5, "hash differs"),
+            Mismatch(None, "head is step 3, the log ends at 5"),
+        ],
+    ),
+    "write the head": (
+        ["UPDATE jobs SET head_seq = 2 WHERE id = $job"],
+        [Mismatch(None, "head is step 2, the log ends at 3")],
     ),
     "cut the tail": (
         ["DELETE FROM steps WHERE job_id = $job AND seq = 3"],
