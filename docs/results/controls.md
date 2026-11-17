@@ -80,12 +80,16 @@ flowchart LR
   listed them, each with its own count.
 - `nft flush ruleset` as root in the namespace, without capabilities, was
   refused, and the outside target stayed blocked.
+- In the stack, at `185c89b`: the worker refused a job whose scope named
+  `postgres:5432` before any call, and the job went on
+  (`tests/integration/test_scope_in_stack.py`).
 
 With the mechanism off:
 
 | Switch | Outcome |
 |---|---|
 | `ESCAPE_DOCKER_DEFAULTS=1`: Docker's default settings, and a scoped command on the network directly | 13 of 22 tests failed: 12 attempts got through, and 1 control test |
+| The runtime's networks left out of the worker's deny list, at `185c89b` | The scoped command connected to Postgres. Docker's network isolation did not stop it: the deny list is the only barrier. |
 | `ESCAPE_NO_RULES=1`: a guard with no rules | All 7 scope tests failed, the other 15 passed |
 
 What the switched-off runs do not show:

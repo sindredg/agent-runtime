@@ -55,7 +55,7 @@ server. Other production networks are on it only if listed in
 |---|---|---|---|---|
 | SC-019 | The agent's environment bounded from outside: files, network, processes, system calls | A container per call: no capabilities, not root, read-only root, CPU, memory and process limits. A blocked action is a failed result. | tested | [Scope and sandbox](results/controls.md#scope-and-sandbox), [bad tool output](results/controls.md#bad-tool-output) |
 | SC-020 | The allowed tools enforced outside the model | The worker offers a fixed set of tools from its code. A call of any other name gets an error result and nothing runs. | tested | `test_worker.py`, in the [suites](results/README.md#the-suites) |
-| AR-020 | The audit trail out of the agent's reach | Tool containers have no route to Postgres: the runtime's networks are on every deny list. The worker writes the log. | tested, for calls without a scope | [Scope and sandbox](results/controls.md#scope-and-sandbox), [issue 68](https://github.com/sindredg/agent-runtime/issues/68) |
+| AR-020 | The audit trail out of the agent's reach | Tool containers have no route to Postgres: the runtime's networks are on every deny list. The worker writes the log. | tested | [Scope and sandbox](results/controls.md#scope-and-sandbox) |
 
 The workspace has no disk quota
 ([issue 28](https://github.com/sindredg/agent-runtime/issues/28)).
