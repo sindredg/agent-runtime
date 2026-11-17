@@ -11,8 +11,56 @@ The table with one line per guarantee is in the
 - [Budget, scope and approval](results-controls.md): what a job may spend,
   reach and do.
 
-This page has what the runs share: how a run works, where it ran, and what
-it does not show.
+This page has what the runs share: the run, how a kill run works, and what
+the results do not show.
+
+## The run
+
+Every result is from one run of every suite at one commit, on a quiet
+machine, in this order:
+
+```mermaid
+flowchart LR
+    S1[make up,<br/>pre-commit,<br/>unit, integration] --> S2[make escape,<br/>then its two switches]
+    S2 --> S3[CHAOS_RUNS=200<br/>make chaos]
+    S3 --> S4[make up]
+    S4 --> S5[one run per<br/>switched-off mechanism]
+```
+
+| | |
+|---|---|
+| Commit | `e656fd8`, 2026-11-16, 21:27 to 22:40 UTC |
+| Runs and seed | 200 random kill times for G1 and G2, 200 for G10, seed `20261113`. Every other test: 1 run. |
+| Workers | 3 in the chaos stack, 1 in the normal stack |
+| Provider | The fake provider. The issue tracker is a fake too. |
+| Where | Docker Compose on one machine: Linux aarch64 under WSL2, 8 CPUs, Docker 29.1.3 |
+
+| Chaos tests | Lease | Scenario |
+|---|---|---|
+| Random kills, a gated job nobody answers, a kill during a sandboxed call | 2 s, renewed every 0.5 s | `ci-triage-slow`: each answer 0.5 s late. `sandbox-kill`. |
+| Failpoints, crash loop | 6 s, renewed every 2 s | `ci-triage-slow`, `crash-loop` |
+| Pause, stop | The default 30 s, renewed every 10 s | `ci-triage-stall`: two answers 10 s late |
+
+## The suites
+
+| Suite | Command | Result |
+|---|---|---|
+| Lint, format, types, docs limits | `uv run --frozen pre-commit run --all-files` | Passed |
+| Unit | `make test` | 836 passed |
+| Integration | `make integration` | 410 passed |
+| Escape | `make escape` | 22 passed |
+| Chaos | `CHAOS_RUNS=200 make chaos` | 16 passed in 37 min |
+
+## Runs with a mechanism switched off
+
+Each switch is a change to the source, made for one run and then restored.
+The outcome of each is on the guarantee's page. The output of these runs is
+kept on the machine that ran them, not in the repository.
+
+The chaos switches used the short run: 20 random kills. One more switch, the
+cut of a tool result, ran after the others on the same code. It showed that a
+property test seldom reaches that cut
+([issue 61](https://github.com/sindredg/agent-runtime/issues/61)).
 
 ## How a kill run works
 
@@ -33,51 +81,40 @@ sequenceDiagram
 What happened outside a job is read from records other than the job's step
 log. See [Testing](testing.md#records-a-test-trusts).
 
-## The chaos runs
-
-| | |
-|---|---|
-| Command | `CHAOS_RUNS=200 make chaos` |
-| Full run | Commit `256fe08`, 2026-11-13. Review fixes came after it. |
-| Short run on the fixes | Commit `665bf6a`, 2026-11-14: 11 of 11 tests, with 20 kill runs and 15 kills sent |
-| Runs and seed | 200 runs with a random kill time, seed `20261113`. Every other test: 1 run. |
-| Workers | 3 |
-| Provider | The fake provider |
-| Where | Docker Compose on one machine, Linux aarch64 under WSL2, 8 CPUs |
-
-| Tests | Lease | Scenario |
-|---|---|---|
-| Random kills | 2 s, renewed every 0.5 s | `ci-triage-slow`: each answer 0.5 s late |
-| Failpoints | 6 s, renewed every 2 s | `ci-triage-slow` |
-| Crash loop | 6 s, renewed every 2 s | `crash-loop` |
-| Pause, stop | The default 30 s, renewed every 10 s | `ci-triage-stall`: two answers 10 s late |
-
-The results of the other guarantees name their own commit and command.
-
 ## What these results do not show
 
-- Nothing ran against a real model provider or a real issue tracker.
+- Nothing ran against a real model provider or a real issue tracker. The
+  contract test against the Claude API was not part of this run.
 - Everything ran on one host with one clock. A lost network between a worker
   and the database is covered by an integration test that cuts the database
   sessions, not by a chaos run.
-- The runs with a mechanism switched off were read when they ran. Their
-  output was not kept.
 - The limits the design accepts are in [Known limits](limits.md).
 
 ## Runs that do not count
 
-- One earlier run of the pause test had two takeovers instead of one. The
-  machine's wall clock moved forward by 36.6 s during the test, which ended
-  the second worker's lease early.
-- In that run the paused worker still wrote nothing, and the job succeeded
-  with one issue. The pause test passed in the run above and in six runs
-  before it.
-- One short run at `665bf6a` was aborted: the machine was suspended for about
-  eight hours in the middle of it. The run was repeated and passed.
-- The first trial of the kill test, before any result was recorded, failed 6
-  of 6. It compared each job with a reference job of another scenario, whose
-  tool call ids differ. The test was corrected.
+- `8c22e4e`: a takeover waited up to 39 ms less than its bound, in integration
+  and in the sandbox-kill test
+  ([issue 49](https://github.com/sindredg/agent-runtime/issues/49)). The G10
+  kill test was void: the wall clock moved back 1.2 s.
+- `97e56d3`: a unit test that relied on a 0.2 s window failed under load from
+  another process ([issue 57](https://github.com/sindredg/agent-runtime/issues/57)).
+  The run was stopped.
+- `a97318a`: the crash-loop test counted a lost lease as a crash
+  ([issue 59](https://github.com/sindredg/agent-runtime/issues/59)). Another
+  process loaded the machine during integration.
+- `e656fd8`, twice: stopped from outside before the end, once when the shell
+  that started it ended, once for load from another process. No test had
+  failed.
 
-The chaos tests now compare the wall clock with the monotonic clock, and
-fail a test during which they drift apart by more than a second. A clock
-that is set forward is a [known limit](limits.md#durability).
+Earlier runs, before milestone 2:
+
+- One run of the pause test had two takeovers instead of one. The wall clock
+  moved forward by 36.6 s, which ended the second worker's lease early.
+- One short run at `665bf6a` was aborted: the machine was suspended for about
+  eight hours in the middle of it.
+- The first trial of the kill test failed 6 of 6. It compared each job with a
+  reference job of another scenario. The test was corrected.
+
+The chaos tests compare the wall clock with the monotonic clock, and fail a
+test during which they drift apart by more than a second. A clock that is
+set forward is a [known limit](limits.md#durability).

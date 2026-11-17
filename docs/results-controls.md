@@ -1,31 +1,30 @@
 # Results: budget, scope and approval
 
 The evidence for the guarantees about what a job may spend, reach and do.
-Each result names its commit and where it ran. The overview is on the
-[Results](results.md) page.
+Every result here is from the run at `e656fd8`. Its conditions, and the runs
+with a mechanism switched off, are on the [Results](results.md) page.
 
 ## Budget, deadline and cancel
 
-Tested.
+Tested. Integration suite, 410 of 410 tests.
 
-Budget, at `dfe2936` on 2026-11-14, `tests/integration/test_budget.py`,
-Linux aarch64 under WSL2:
-
-- A job that loops, set to read a 2 KB file thirty times, with a budget of
-  20,000 tokens.
-- It ended `failed` with "the token budget does not cover the next model
-  call" after 7 calls, at 13,636 tokens by the fake provider's own count.
-- That count equals the job's `tokens_used`.
+- `test_budget.py`: a job that loops, set to read a 2 KB file thirty times,
+  with a budget of 20,000 tokens.
+- It ends `failed` with "the token budget does not cover the next model
+  call", after at least 3 and fewer than 30 calls.
+- By the fake provider's own count, it spent at most the budget, and that
+  count equals the job's `tokens_used`.
 - For each call the provider's input stayed within the recorded bound, and
   the count, the bound and `max_tokens` together fit the budget.
 
-Cancel and deadline, at `cb15d5b` on 2026-11-14, `test_halt_worker.py`,
-`test_halt_store.py` and the halt tests of `test_sandbox.py`:
+Cancel and deadline, in `test_halt_worker.py`, `test_halt_store.py` and the
+halt tests of `test_sandbox.py`:
 
-- A cancel in the middle of a model call, and of a sandboxed `sleep 300`,
-  ended the job `cancelled`.
-- The deadline in the middle of each ended it `failed` with an `error` step.
-- Each within 5 s, and with the command's container removed.
+- A cancel in the middle of a model call, and of a sandboxed command, ends
+  the job `cancelled`, with the command's container removed.
+- The deadline in the middle of each ends it `failed` with an `error` step.
+- Each within 5 s, measured from the request or the deadline to the status
+  in the database.
 - A claim cancels a job whose cancel was requested and fails one past its
   deadline.
 - A job waiting for an approval is failed by the workers' timer within 5 s
@@ -35,15 +34,15 @@ With the mechanism off:
 
 | Removed | Outcome |
 |---|---|
-| The bound: `max_tokens` never cut, no check | The job ran all 31 calls and spent 282,118 tokens. The test fails. |
-| The cancel check | Both cancel tests fail |
-| The deadline timer | Both deadline tests fail. The job runs on. |
-| The claim's deadline check | Both claim tests fail |
+| The check that the next call fits | The call was made with no valid `max_tokens`, and the provider refused it. The job failed with that error, not the budget's. |
+| The cancel check | Both cancel tests fail. One job ended `succeeded` instead of `cancelled`. |
+| The deadline timer | Both deadline tests fail |
+| The claim's deadline check | Both claim tests fail. The job stayed `running`. |
 
 ## Scope and sandbox
 
-Tested. `make escape`, 22 of 22 tests at `2ed5361` on 2026-11-14. Linux
-aarch64 under WSL2, Docker 29.1.3, `kernel.yama.ptrace_scope` 1.
+Tested. `make escape`, 22 of 22 tests. Docker 29.1.3,
+`kernel.yama.ptrace_scope` 1.
 
 Without a scope, 12 escape attempts, each as a `run_shell` call:
 
@@ -82,41 +81,50 @@ With the mechanism off:
 
 | Switch | Outcome |
 |---|---|
-| `ESCAPE_DOCKER_DEFAULTS=1`: Docker's default settings, and a scoped command on the network directly | 13 tests failed |
-| `ESCAPE_NO_RULES=1`: a guard with no rules | All 7 scope tests failed |
+| `ESCAPE_DOCKER_DEFAULTS=1`: Docker's default settings, and a scoped command on the network directly | 13 of 22 tests failed |
+| `ESCAPE_NO_RULES=1`: a guard with no rules | All 7 scope tests failed, the other 15 passed |
 
 ## Approval before a tool call
 
-Tested. `tests/chaos/test_approval.py` in the short run of `make chaos`, 16
-of 16 tests, at `9af6677` on 2026-11-15. Seed `20261113`, 3 workers, fake
-provider, Linux aarch64 under WSL2.
+Tested. `tests/chaos/test_approval.py`, 200 runs in the chaos run.
 
-- 20 jobs that ask before `create_issue`. The worker holding the job was
+- 200 jobs that ask before `create_issue`. The worker holding the job was
   killed at a random time before the question, and again after the answer.
-- 27 kills sent, 18 takeovers. 14 jobs were approved and 6 denied. 20 of 20
-  jobs succeeded.
-- The tracker holds 14 issues for 14 approvals, each created after its
+- 246 kills sent, 122 takeovers. 134 jobs were approved and 66 denied. No
+  run failed.
+- The tracker holds 134 issues for 134 approvals, each created after its
   approval by the tracker's own time, and none for a denied call.
 - Worker stopped after the intent of an approved call: a person is asked
   again. Two approvals, one issue.
 - Worker stopped after the approved call ran: the check finds the issue. One
   approval, one issue.
-- A job nobody answered, with an 8 s timeout: `failed` 0.46 s after its
+- A job nobody answered, with an 8 s timeout: `failed` 0.06 s after its
   deadline, no issue.
 
 `tests/integration/test_approval.py` covers the same with a tool that
-records its own runs, and that a spec cannot take a tool out.
+records its own runs. It also checks that a spec cannot take a tool out, and
+that an answer counts only for the question it names.
 
-With the mechanism off: with the gate removed, all 4 chaos tests fail (6 of
-6 jobs opened an issue with no approval) and 9 integration tests fail.
+With the mechanism off: with the gate removed, all 4 chaos tests fail. In 20
+short runs the tracker holds 20 issues for 0 approvals. 14 of the 19
+integration tests fail.
 
 ## Bad tool output
 
-Built for `run_shell` and `list_dir`. No result recorded yet.
+Tested for `run_shell` and `list_dir`, the tools that run in a container.
+Integration suite, `test_sandbox.py`.
 
-- An integration test runs one job whose commands run past the timeout, exit
-  non-zero, print 100 MB and print bytes that are not UTF-8.
+- One job runs commands that exit non-zero, print 100 MB, and print bytes
+  that are not UTF-8. Another runs one past its timeout.
 - Each becomes a tool result of at most 64 KiB, the 100 MB one flagged
-  `truncated`, and the job succeeds.
+  `truncated`. Each job succeeds, and the model is sent every result.
 - `read_file` and `create_issue` run in the worker and have no general
   timeout.
+
+With the mechanism off:
+
+| Removed | Outcome |
+|---|---|
+| The cut of the stream | The worker kept all 100 MB, and the runner's test fails. The job's test passes: the result is still cut. |
+| The cut of the result | The stored result was 65,612 bytes. The job's test fails. |
+| The tool timeout | Both timeout tests fail. The command was not stopped. |

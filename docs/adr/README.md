@@ -32,7 +32,7 @@ An arrow means the later record builds on, or follows from, the earlier one.
 | [0004](0004-fence-writes-with-the-lease-epoch-and-a-row-lock.md) | Fence a worker's writes with the lease epoch and a row lock, and accept one gap | Yes |
 | [0005](0005-rerun-an-interrupted-tool-call-only-when-it-is-safe.md) | Rerun an interrupted tool call only when that is known to be safe. Otherwise ask a person. | Yes |
 | [0006](0006-count-takeovers-apart-from-claims.md) | Count takeovers apart from claims, and release the job when a worker is told to stop | Yes |
-| [0007](0007-security-agents-and-owasp-apts-as-the-yardstick.md) | Build for security agents, and measure the controls against OWASP APTS | The APTS table is not built |
+| [0007](0007-security-agents-and-owasp-apts-as-the-yardstick.md) | Build for security agents, and measure the controls against OWASP APTS | [The APTS table](../apts.md) has the milestone 2 rows |
 | [0008](0008-run-each-tool-call-in-its-own-container.md) | Run each tool call in its own container, started by the worker | For `run_shell` and `list_dir` |
 | [0009](0009-enforce-the-target-scope-in-the-network-namespace.md) | Enforce a job's target scope in the network namespace of its tools | For `run_shell` |
 | [0010](0010-one-halt-path-and-a-budget-bound.md) | Halt a job through one path, and bound a model call's tokens before it is sent | Yes |
