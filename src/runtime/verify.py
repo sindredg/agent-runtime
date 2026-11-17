@@ -66,8 +66,10 @@ async def verify(
     try:
         async with engine.connect() as conn:
             await conn.execute(text("SET TRANSACTION READ ONLY"))
+            # One statement per job: a by-hand check, not a hot path.
             if job_ids is None:
                 job_ids = [row.id for row in await conn.execute(_ALL_JOBS)]
+            job_ids = list(dict.fromkeys(job_ids))
             for job_id in job_ids:
                 try:
                     check = await verify_job(conn, job_id)
@@ -79,7 +81,9 @@ async def verify(
                 mismatched += bool(check.mismatches)
                 _report(job_id, check, out, quiet=quiet)
             await conn.rollback()
-    except (SQLAlchemyError, OSError) as error:
+    # TypeError: asyncpg refuses a URL parameter it does not know, such as
+    # libpq's `sslmode`.
+    except (SQLAlchemyError, OSError, TypeError) as error:
         print(f"runtime: cannot check the database: {_reason(error)}", file=err)
         return EXIT_MISMATCH if mismatched else EXIT_CANNOT_CHECK
     finally:

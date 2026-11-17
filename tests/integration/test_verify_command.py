@@ -5,10 +5,13 @@ The tampering is the owner's, with the triggers off, as in
 """
 
 import io
+from uuid import UUID
 
 import pytest
-from sqlalchemy import make_url
+from sqlalchemy import make_url, text
+from sqlalchemy.ext.asyncio import AsyncConnection
 
+from runtime import verify
 from runtime.cli import main
 
 from .conftest import as_app
@@ -95,6 +98,31 @@ def test_a_url_it_cannot_read_is_not_printed() -> None:
 
     assert (status, out) == (2, "")
     assert err == "runtime: cannot check: the database URL cannot be read\n"
+
+
+def test_a_job_given_twice_is_checked_once(database_url: str) -> None:
+    job_id = make_job(database_url)
+    status, out, _ = run(database_url, str(job_id), str(job_id))
+    assert (status, out.splitlines()[-1]) == (0, "1 jobs checked, 0 with a mismatch")
+
+
+def test_the_command_only_reads(database_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Its transaction is read-only: a write in it is refused by Postgres."""
+
+    async def write(conn: AsyncConnection, job_id: UUID) -> None:
+        await conn.execute(text("UPDATE jobs SET error = 'written' WHERE id = :id"), {"id": job_id})
+
+    monkeypatch.setattr(verify, "verify_job", write)
+    status, _, err = run(database_url, str(make_job(database_url)))
+
+    assert status == 2
+    assert "ReadOnlySQLTransactionError" in err
+
+
+def test_a_url_parameter_the_driver_does_not_know_is_reported(database_url: str) -> None:
+    status, out, err = run(f"{database_url}?sslmode=require", "--all")
+    assert (status, out) == (2, "")
+    assert err.startswith("runtime: cannot check the database: TypeError")
 
 
 def test_an_empty_database_holds(database_url: str) -> None:
