@@ -35,7 +35,7 @@ from runtime.store.jobs import (
     get_job,
 )
 from runtime.store.payload import InvalidPayload
-from runtime.store.roles import check_app_role
+from runtime.store.roles import wait_for_app_role
 from runtime.store.status import FINAL_STATUSES, JobStatus
 from runtime.store.steps import read_progress
 
@@ -73,9 +73,9 @@ def create_app(
         )
         try:
             # Before the first request: an API connected as the owner
-            # could change or delete steps (ADR 0013).
-            async with app.state.engine.connect() as conn:
-                await check_app_role(conn)
+            # could change or delete steps (ADR 0013). Waits for a database
+            # that cannot be reached yet until the process is stopped.
+            await wait_for_app_role(app.state.engine, asyncio.Event())
             yield
         finally:
             await app.state.engine.dispose()

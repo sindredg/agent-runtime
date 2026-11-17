@@ -51,14 +51,18 @@ the role:
 
 - is a superuser,
 - is a member of the role that owns `jobs` or `steps`,
-- holds UPDATE, DELETE, TRUNCATE or TRIGGER on `steps`.
+- holds UPDATE, DELETE, TRUNCATE or TRIGGER on `steps`,
+- may create objects in the schema `public`.
 
 Connected as the owner, both would run, and nothing on the step log would
-hold them back.
+hold them back. A database that cannot be reached yet is tried again every
+2 seconds until the service is stopped.
 
 ## What this does not protect
 
 - The owner and any superuser can still change or delete steps.
+- `migrate` sends the app role's password to Postgres in clear, inside the
+  compose network. A server set to log every statement logs it.
 - Both passwords have development defaults, and Postgres is published on
   `127.0.0.1`. See [Known limits](limits.md#api).
 - A change to a job's columns by `runtime_app` is not refused. The fence and

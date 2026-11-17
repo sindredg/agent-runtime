@@ -99,6 +99,29 @@ async def expire_lease(conn: AsyncConnection, job_id: UUID) -> None:
     )
 
 
+type Connection = asyncpg.Connection[asyncpg.Record]
+
+
+def on[T](database_url: str, body: Callable[[Connection], Awaitable[T]]) -> T:
+    """Run `body` with a connection to the database and close it afterwards."""
+
+    async def run() -> T:
+        conn = await asyncpg.connect(database_url, timeout=5)
+        try:
+            return await body(conn)
+        finally:
+            await conn.close()
+
+    return asyncio.run(run())
+
+
+def as_owner(database_url: str) -> str:
+    """The same database, as the owner that DATABASE_URL names."""
+    owner = make_url(os.environ.get("DATABASE_URL", DEFAULT_DATABASE_URL))
+    database = make_url(database_url).database
+    return owner.set(database=database).render_as_string(hide_password=False)
+
+
 def as_app(database_url: str) -> str:
     """The same database, as the app role that the API and the worker use."""
     app = make_url(os.environ.get("APP_DATABASE_URL", DEFAULT_APP_DATABASE_URL))

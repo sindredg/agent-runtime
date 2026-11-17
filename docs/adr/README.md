@@ -40,7 +40,7 @@ An arrow means the later record builds on, or follows from, the earlier one.
 | [0010](0010-one-halt-path-and-a-budget-bound.md) | Halt a job through one path, and bound a model call's tokens before it is sent | Yes |
 | [0011](0011-ask-a-person-before-a-risky-tool-call.md) | Ask a person before a risky tool call runs | Yes |
 | [0012](0012-an-answer-names-its-question.md) | An answer names the question it answers | Yes |
-| [0013](0013-chain-the-step-log-and-split-the-database-roles.md) | Chain the step log with a hash, and write it as a role that cannot switch the chain off | No |
+| [0013](0013-chain-the-step-log-and-split-the-database-roles.md) | Chain the step log with a hash, and write it as a role that cannot switch the chain off | [The two roles](../database-roles.md). The chain is not built. |
 | [0014](0014-limit-a-jobs-workspace-with-a-watcher.md) | Limit a job's workspace with a watcher, and accept an overshoot | No |
 
 Each record states what was built at the time it was written. What is built

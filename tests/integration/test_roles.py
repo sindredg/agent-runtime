@@ -23,11 +23,23 @@ from sqlalchemy import make_url, text
 from runtime.api.app import create_app
 from runtime.config import ApiConfig
 from runtime.store.engine import create_engine
-from runtime.store.roles import APP_ROLE, RoleError, allow_login, check_app_role
+from runtime.store.roles import (
+    APP_ROLE,
+    RoleError,
+    allow_login,
+    check_app_role,
+    wait_for_app_role,
+)
 
-from .conftest import DEFAULT_APP_DATABASE_URL, REPO_ROOT, alembic, as_app
-
-type Connection = asyncpg.Connection[asyncpg.Record]
+from .conftest import (
+    DEFAULT_APP_DATABASE_URL,
+    REPO_ROOT,
+    Connection,
+    alembic,
+    as_app,
+    as_owner,
+    on,
+)
 
 ADD_JOB = (
     "INSERT INTO jobs (spec, token_budget, deadline)"
@@ -37,23 +49,6 @@ ADD_STEP = (
     "INSERT INTO steps (job_id, seq, kind, payload, lease_epoch)"
     " VALUES ($1, 1, 'model_request', '{}', 1)"
 )
-
-
-def on[T](database_url: str, body: Callable[[Connection], Awaitable[T]]) -> T:
-    async def run() -> T:
-        conn = await asyncpg.connect(database_url, timeout=5)
-        try:
-            return await body(conn)
-        finally:
-            await conn.close()
-
-    return asyncio.run(run())
-
-
-def as_owner(database_url: str, stack_database_url: str) -> str:
-    """The same database, as the owner."""
-    database = make_url(database_url).database
-    return make_url(stack_database_url).set(database=database).render_as_string(hide_password=False)
 
 
 def app_password() -> str:
@@ -151,9 +146,9 @@ def test_the_check_passes_the_app_role(database_url: str) -> None:
     check(database_url)
 
 
-def test_the_check_refuses_the_owner(database_url: str, stack_database_url: str) -> None:
+def test_the_check_refuses_the_owner(database_url: str) -> None:
     with pytest.raises(RoleError, match="is a superuser and owns the tables"):
-        check(as_owner(database_url, stack_database_url))
+        check(as_owner(database_url))
 
 
 # A role made for the test, in a transaction that is rolled back.
@@ -168,6 +163,7 @@ ROLE = "runtime_check_test"
         ("GRANT DELETE ON steps TO {role}", "may change or delete steps"),
         ("GRANT TRUNCATE ON steps TO {role}", "may change or delete steps"),
         ("GRANT TRIGGER ON steps TO {role}", "add a trigger to them"),
+        ("GRANT CREATE ON SCHEMA public TO {role}", "may create objects in the schema"),
     ],
 )
 def test_the_check_refuses_a_role_with_one_right_too_many(
@@ -176,14 +172,14 @@ def test_the_check_refuses_a_role_with_one_right_too_many(
     owner = make_url(stack_database_url).username
     with pytest.raises(RoleError, match=problem):
         check(
-            as_owner(database_url, stack_database_url),
+            as_owner(database_url),
             f"CREATE ROLE {ROLE} NOLOGIN",
             grant.format(owner=owner, role=ROLE),
             f"SET LOCAL ROLE {ROLE}",
         )
 
 
-def test_the_api_does_not_start_as_the_owner(database_url: str, stack_database_url: str) -> None:
+def test_the_api_does_not_start_as_the_owner(database_url: str) -> None:
     def config(url: str) -> ApiConfig:
         return ApiConfig(
             database_url=url,
@@ -196,17 +192,17 @@ def test_the_api_does_not_start_as_the_owner(database_url: str, stack_database_u
     with TestClient(create_app(config(database_url)), base_url="http://localhost") as client:
         assert client.get("/healthz").status_code == 200
 
-    owner = create_app(config(as_owner(database_url, stack_database_url)))
+    owner = create_app(config(as_owner(database_url)))
     with pytest.raises(RoleError, match="superuser"), TestClient(owner):
         pass
 
 
 def test_the_worker_does_not_start_as_the_owner(
-    database_url: str, stack_database_url: str, fake_provider_url: str, tmp_path: Path
+    database_url: str, fake_provider_url: str, tmp_path: Path
 ) -> None:
     env = {
         "PATH": os.environ["PATH"],
-        "DATABASE_URL": as_owner(database_url, stack_database_url),
+        "DATABASE_URL": as_owner(database_url),
         "ANTHROPIC_BASE_URL": fake_provider_url,
         "ANTHROPIC_API_KEY": "not-a-real-key",
         "MODEL": "hello",
@@ -227,6 +223,44 @@ def test_the_worker_does_not_start_as_the_owner(
     assert done.returncode != 0
     assert "RoleError" in done.stderr
     assert "superuser" in done.stderr
+
+
+def test_the_start_check_waits_until_the_database_lets_it_in(
+    database_url: str, stack_database_url: str
+) -> None:
+    """A role that may not log in yet stands for a database that does not answer yet."""
+    role = f"runtime_wait_test_{uuid.uuid4().hex[:8]}"
+    password = "wait-test"  # noqa: S105
+    url = make_url(database_url).set(username=role, password=password)
+
+    async def run() -> bool:
+        engine = create_engine(url.render_as_string(hide_password=False))
+        owner = create_engine(stack_database_url)
+        try:
+            waiting = asyncio.create_task(
+                wait_for_app_role(engine, asyncio.Event(), retry_seconds=0.1)
+            )
+            await asyncio.sleep(1)
+            # Refused several times by now, and still trying.
+            assert not waiting.done()
+            async with owner.begin() as conn:
+                await allow_login(conn, password, role=role)
+            return await asyncio.wait_for(waiting, 5)
+        finally:
+            await owner.dispose()
+            await engine.dispose()
+
+    async def create(conn: Connection) -> None:
+        await conn.execute(f"CREATE ROLE {role} NOLOGIN")
+
+    async def drop(conn: Connection) -> None:
+        await conn.execute(f"DROP ROLE IF EXISTS {role}")
+
+    on(stack_database_url, create)
+    try:
+        assert asyncio.run(run()) is True
+    finally:
+        on(stack_database_url, drop)
 
 
 # The stack

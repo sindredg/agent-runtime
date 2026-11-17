@@ -5,50 +5,39 @@ API and the worker, may read and add steps but not change them, and cannot
 switch a trigger off (ADR 0013). Migration 0006 grants its rights.
 """
 
-from dataclasses import dataclass
+import asyncio
+import contextlib
+import logging
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncConnection
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 # The name migration 0006 grants to.
 APP_ROLE = "runtime_app"
+
+# Seconds between two tries of the start check while the database cannot be reached.
+RETRY_SECONDS = 2.0
+
+log = logging.getLogger(__name__)
 
 
 class RoleError(Exception):
     """The service's database role could change the step log or switch its protection off."""
 
 
-@dataclass(frozen=True, slots=True)
-class RoleRights:
-    name: str
-    superuser: bool
-    # A member of the role that owns `jobs` or `steps`: it can alter them,
-    # and disable or drop their triggers.
-    owner: bool
-    # Holds UPDATE, DELETE, TRUNCATE or TRIGGER on `steps`.
-    changes_steps: bool
-
-    @property
-    def problems(self) -> list[str]:
-        found = []
-        if self.superuser:
-            found.append("is a superuser")
-        if self.owner:
-            found.append("owns the tables")
-        if self.changes_steps:
-            found.append("may change or delete steps, or add a trigger to them")
-        return found
-
-
+# One row: what the connection's role may do that the app role may not.
 _RIGHTS = text(
     """
     SELECT r.rolname AS name,
            r.rolsuper AS superuser,
+           -- A member of the owner can alter the tables, and disable or drop
+           -- their triggers.
            pg_has_role(r.oid, s.relowner, 'MEMBER')
                OR pg_has_role(r.oid, j.relowner, 'MEMBER') AS owner,
            has_any_column_privilege(r.oid, s.oid, 'UPDATE')
                OR has_table_privilege(r.oid, s.oid, 'DELETE, TRUNCATE, TRIGGER')
-               AS changes_steps
+               AS changes_steps,
+           has_schema_privilege(r.oid, 'public', 'CREATE') AS creates
       FROM pg_roles r,
            pg_class s,
            pg_class j
@@ -59,26 +48,53 @@ _RIGHTS = text(
 )
 
 
-async def role_rights(conn: AsyncConnection) -> RoleRights:
-    """What the connection's role may do to the tables."""
-    row = (await conn.execute(_RIGHTS)).one()
-    return RoleRights(
-        name=row.name, superuser=row.superuser, owner=row.owner, changes_steps=row.changes_steps
-    )
-
-
 async def check_app_role(conn: AsyncConnection) -> None:
     """Raise RoleError unless the connection's role is limited like the app role.
 
-    The API and the worker call this before they start. Connected as the
-    owner, they would run, and the step log's triggers would protect nothing.
+    Connected as the owner, the API and the worker would run, and nothing in
+    the database would stop them changing a step.
     """
-    rights = await role_rights(conn)
-    if rights.problems:
+    row = (await conn.execute(_RIGHTS)).one()
+    problems = [
+        problem
+        for found, problem in [
+            (row.superuser, "is a superuser"),
+            (row.owner, "owns the tables"),
+            (row.changes_steps, "may change or delete steps, or add a trigger to them"),
+            (row.creates, "may create objects in the schema"),
+        ]
+        if found
+    ]
+    if problems:
         raise RoleError(
-            f"the database role {rights.name!r} {' and '.join(rights.problems)}."
+            f"the database role {row.name!r} {' and '.join(problems)}."
             f" Connect as {APP_ROLE!r}: DATABASE_URL names the role (ADR 0013)."
         )
+
+
+async def wait_for_app_role(
+    engine: AsyncEngine, stop: asyncio.Event, retry_seconds: float = RETRY_SECONDS
+) -> bool:
+    """Run the start check once the database answers. False if `stop` was set first.
+
+    The API and the worker call this before they start. A database that
+    cannot be reached yet is tried again, as the worker's loop does. A role
+    with too many rights raises RoleError at once: waiting does not fix it.
+    """
+    while not stop.is_set():
+        try:
+            async with engine.connect() as conn:
+                await check_app_role(conn)
+        except RoleError:
+            raise
+        except Exception:
+            log.warning("the database role could not be checked; trying again", exc_info=True)
+        else:
+            return True
+        # The pause before the next try ends early when the service is stopped.
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(stop.wait(), retry_seconds)
+    return False
 
 
 async def allow_login(conn: AsyncConnection, password: str, role: str = APP_ROLE) -> None:

@@ -3,9 +3,7 @@
 Each test runs against a real Postgres server and its own new database.
 """
 
-import asyncio
 import subprocess
-from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 
 import asyncpg
@@ -13,9 +11,7 @@ import pytest
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 
-from .conftest import REPO_ROOT, alembic
-
-type Connection = asyncpg.Connection[asyncpg.Record]
+from .conftest import REPO_ROOT, Connection, alembic, on
 
 JOB_COLUMNS = {
     "id",
@@ -61,19 +57,6 @@ INSERT_JOB = "INSERT INTO jobs (spec, token_budget, deadline) VALUES ('{}', 1000
 INSERT_STEP = (
     "INSERT INTO steps (job_id, seq, kind, payload, lease_epoch) VALUES ($1, $2, $3, '{}', 1)"
 )
-
-
-def on[T](database_url: str, body: Callable[[Connection], Awaitable[T]]) -> T:
-    """Run `body` with a connection to the database and close it afterwards."""
-
-    async def run() -> T:
-        conn = await asyncpg.connect(database_url, timeout=5)
-        try:
-            return await body(conn)
-        finally:
-            await conn.close()
-
-    return asyncio.run(run())
 
 
 async def public_objects(conn: Connection) -> set[tuple[str, str]]:
