@@ -35,6 +35,7 @@ from runtime.store.jobs import (
     get_job,
 )
 from runtime.store.payload import InvalidPayload
+from runtime.store.roles import check_app_role
 from runtime.store.status import FINAL_STATUSES, JobStatus
 from runtime.store.steps import read_progress
 
@@ -67,8 +68,14 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.config = config or ApiConfig.from_env()
-        app.state.engine = create_engine(app.state.config.database_url)
+        app.state.engine = create_engine(
+            app.state.config.database_url, application_name="runtime-api"
+        )
         try:
+            # Before the first request: an API connected as the owner
+            # could change or delete steps (ADR 0013).
+            async with app.state.engine.connect() as conn:
+                await check_app_role(conn)
             yield
         finally:
             await app.state.engine.dispose()

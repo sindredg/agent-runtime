@@ -14,6 +14,13 @@ def sqlalchemy_url(database_url: str) -> URL:
     return make_url(database_url).set(drivername="postgresql+asyncpg")
 
 
-def create_engine(database_url: str) -> AsyncEngine:
-    """An engine with a connection pool. Dispose it when the service stops."""
-    return create_async_engine(sqlalchemy_url(database_url))
+def create_engine(database_url: str, application_name: str | None = None) -> AsyncEngine:
+    """An engine with a connection pool. Dispose it when the service stops.
+
+    `application_name` names the service in `pg_stat_activity`, so its
+    connections can be told apart from anyone else's.
+    """
+    connect_args = {}
+    if application_name is not None:
+        connect_args["server_settings"] = {"application_name": application_name}
+    return create_async_engine(sqlalchemy_url(database_url), connect_args=connect_args)

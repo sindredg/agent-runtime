@@ -24,6 +24,9 @@ flowchart LR
 | `tests/contract` | by hand | The fake provider against the Claude API |
 
 - The integration and chaos suites never mock Postgres.
+- Integration tests run store and worker code as `runtime_app`, as the
+  stack does, so a missing right fails a test. The owner builds and
+  migrates the test databases ([Database roles](database-roles.md)).
 - They stop before the first test unless every worker is on the fake
   provider ([The Claude API](settings.md#the-claude-api)).
 - `make chaos` replaces the normal stack. Run `make up` afterwards.

@@ -12,7 +12,7 @@ flowchart LR
     C -->|LEASE_SECONDS, HEARTBEAT_SECONDS, TRACKER_URL| W[worker]
     C -->|SANDBOX_TIMEOUT_SECONDS, STOP_GRACE_SECONDS| W
     C -->|API_PORT, POSTGRES_PORT, FAKE_PROVIDER_PORT, FAKE_TRACKER_PORT| H[host ports on 127.0.0.1]
-    C -->|POSTGRES_PASSWORD| DB[(postgres)]
+    C -->|POSTGRES_PASSWORD, APP_DATABASE_PASSWORD| DB[(postgres)]
 ```
 
 - The provider is not in this picture: `make up` always puts the worker on
@@ -48,7 +48,7 @@ flowchart LR
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `DATABASE_URL` | required | `postgresql://` URL, also read by `api` and `migrate`. `sslmode` is not supported. |
+| `DATABASE_URL` | required | `postgresql://` URL without `sslmode`, also read by `api` and `migrate`. Names the [app role](database-roles.md) for `api` and `worker`. |
 | `ANTHROPIC_BASE_URL` | the Claude API | Which provider to call. The stack sets the fake provider. |
 | `ANTHROPIC_API_KEY` | required | The provider key. The fake accepts any value. |
 | `MODEL` | required | Model for jobs that name none. With the fake provider, a scenario name. |
@@ -92,6 +92,7 @@ flowchart LR
 | `DEFAULT_TIMEOUT_SECONDS` | api | 3600 | For a submission without `timeout_seconds` |
 | `API_HOST`, `API_PORT` | api | `127.0.0.1`, `8000` | Where the API listens |
 | `API_ALLOWED_HOSTS` | api | `localhost,127.0.0.1` | The names a request may use in `Host`. No ports, no wildcards, no IPv6. |
+| `APP_DATABASE_PASSWORD` | migrate | required; the stack sets `runtime-app-dev` | Sets the login of `runtime_app`, the role of the API and the worker. In the stack's URLs too, so URL-safe characters only. |
 | `RUNTIME_API_URL` | CLI | `http://127.0.0.1:8000` | Where the CLI finds the API |
 | `FAKE_SCENARIO_DIR` | fake-provider | scenarios in the package | Directory of scenario files |
 

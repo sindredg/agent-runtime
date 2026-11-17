@@ -132,8 +132,9 @@ refused, but the tool ran. An idempotency key on the other side closes this.
   and cancel. That includes every local user and process of the host.
 - The Host and Origin check stops a browser page of another site. It does not
   stop a program on the host, which can send any header.
-- Postgres is published on `127.0.0.1` with a default password. A local
-  process can write jobs and steps directly, past the fence and the gate.
+- Postgres is published on `127.0.0.1` with default passwords for both
+  [roles](database-roles.md). A local process can write jobs and steps
+  directly, past the fence and the gate, and as the owner change any step.
 - There is no list of jobs and no status page. A job is found only by its
   id ([issue 74](https://github.com/sindredg/agent-runtime/issues/74),
   [issue 76](https://github.com/sindredg/agent-runtime/issues/76)).

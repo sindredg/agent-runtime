@@ -17,9 +17,14 @@ x-runtime: &runtime
   security_opt:
     - no-new-privileges:true
 
-# Development default, for the services inside the compose network.
-x-database-url: &database-url >-
+# Development defaults, for the services inside the compose network. The
+# owner runs the migrations. The API and the worker connect as the app role,
+# which cannot change a step or switch a trigger off, and refuse to start as
+# any role that can (ADR 0013).
+x-owner-database-url: &owner-database-url >-
   postgresql://runtime:${POSTGRES_PASSWORD:-runtime-dev}@postgres:5432/runtime
+x-app-database-url: &app-database-url >-
+  postgresql://runtime_app:${APP_DATABASE_PASSWORD:-runtime-app-dev}@postgres:5432/runtime
 
 # urllib because the slim image has no curl.
 x-http-healthcheck: &http-healthcheck
@@ -59,15 +64,16 @@ services:
       timeout: 3s
       retries: 10
 
-  # One-shot: applies the schema migrations and must exit 0 before api and
-  # worker start.
+  # One-shot: applies the schema migrations, sets the app role's login, and
+  # must exit 0 before api and worker start.
   migrate:
     <<: *runtime
     build: .
     pull_policy: build
-    command: [alembic, upgrade, head]
+    command: [python, -m, runtime.store.migrate]
     environment:
-      DATABASE_URL: *database-url
+      DATABASE_URL: *owner-database-url
+      APP_DATABASE_PASSWORD: ${APP_DATABASE_PASSWORD:-runtime-app-dev}
     depends_on:
       postgres:
         condition: service_healthy
@@ -76,7 +82,7 @@ services:
     <<: *runtime
     command: [python, -m, runtime.api]
     environment:
-      DATABASE_URL: *database-url
+      DATABASE_URL: *app-database-url
       # All interfaces inside the container; the port is published on
       # localhost only, below.
       API_HOST: 0.0.0.0
@@ -103,7 +109,7 @@ services:
     group_add:
       - "${DOCKER_GID:?set DOCKER_GID to the group id of /var/run/docker.sock}"
     environment:
-      DATABASE_URL: *database-url
+      DATABASE_URL: *app-database-url
       # Always the fake provider, whatever .env or the shell holds.
       # docker-compose.claude.yml (`make up-claude`) is the only way to the
       # Claude API. The integration and chaos suites check for this URL.
