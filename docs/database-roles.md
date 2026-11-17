@@ -6,12 +6,11 @@ reasons are in [ADR 0013](adr/0013-chain-the-step-log-and-split-the-database-rol
 
 ```mermaid
 flowchart LR
-    M[migrate] -->|runtime: owner, superuser| DB[(postgres)]
-    A[api] -->|runtime_app| DB
-    W[worker] -->|runtime_app| DB
-    M -->|creates runtime_app, grants its rights,<br/>sets its login| R{{runtime_app}}
-    A -.->|refuses to start as a<br/>role that can do more| C[start check]
-    W -.-> C
+    M[migrate] -->|as runtime: owner, superuser.<br/>Creates runtime_app, grants its rights,<br/>sets its login| DB[(postgres)]
+    A[api] --> C{start check:<br/>is the role limited?}
+    W[worker] --> C
+    C -->|yes: runs as runtime_app| DB
+    C -->|no| X[stops with RoleError]
 ```
 
 ## What each role may do
