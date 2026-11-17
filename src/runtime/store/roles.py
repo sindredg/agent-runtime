@@ -2,7 +2,7 @@
 
 The owner runs the migrations and owns the tables. The app role, used by the
 API and the worker, may read and add steps but not change them, and cannot
-switch a trigger off (ADR 0013). Migration 0006 grants its rights.
+switch a trigger off (ADR 0013). Migrations 0006 and 0007 grant its rights.
 """
 
 import asyncio
@@ -37,6 +37,9 @@ _RIGHTS = text(
            has_any_column_privilege(r.oid, s.oid, 'UPDATE')
                OR has_table_privilege(r.oid, s.oid, 'DELETE, TRUNCATE, TRIGGER')
                AS changes_steps,
+           has_column_privilege(r.oid, j.oid, 'head_seq', 'INSERT, UPDATE')
+               OR has_column_privilege(r.oid, j.oid, 'head_hash', 'INSERT, UPDATE')
+               AS writes_head,
            has_schema_privilege(r.oid, 'public', 'CREATE') AS creates
       FROM pg_roles r,
            pg_class s,
@@ -61,6 +64,7 @@ async def check_app_role(conn: AsyncConnection) -> None:
             (row.superuser, "is a superuser"),
             (row.owner, "owns the tables"),
             (row.changes_steps, "may change or delete steps, or add a trigger to them"),
+            (row.writes_head, "may write the head of the step log"),
             (row.creates, "may create objects in the schema"),
         ]
         if found

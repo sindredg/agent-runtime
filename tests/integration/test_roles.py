@@ -69,6 +69,13 @@ REFUSED = [
     " EXECUTE FUNCTION suppress_redundant_updates_trigger()",
     "CREATE TABLE extra (x int)",
     "SET session_replication_role = replica",
+    # The head of the chain, which only the insert trigger writes.
+    "UPDATE jobs SET head_seq = 0",
+    "UPDATE jobs SET head_hash = NULL",
+    "INSERT INTO jobs (spec, token_budget, deadline, head_seq)"
+    " VALUES ('{}', 1000, now() + interval '1 hour', 5)",
+    "CREATE OR REPLACE FUNCTION steps_refuse() RETURNS trigger LANGUAGE plpgsql"
+    " AS $$ BEGIN RETURN OLD; END $$",
 ]
 
 
@@ -84,20 +91,28 @@ def test_the_app_role_is_refused(database_url: str, statement: str) -> None:
         on(database_url, body)
 
 
-def test_the_app_role_may_update_every_column_of_a_job(database_url: str) -> None:
+# The head of the step log's chain: only the insert trigger writes it.
+HEAD_COLUMNS = ["head_hash", "head_seq"]
+
+
+@pytest.mark.parametrize("right", ["INSERT", "UPDATE"])
+def test_the_app_role_may_write_every_column_of_a_job_but_the_head(
+    database_url: str, right: str
+) -> None:
     """A column that a migration adds without a grant shows up here."""
 
     async def body(conn: Connection) -> dict[str, bool]:
         rows = await conn.fetch(
-            "SELECT column_name, has_column_privilege(current_user, 'jobs', column_name, 'UPDATE')"
+            "SELECT column_name, has_column_privilege(current_user, 'jobs', column_name, $1)"
             " AS allowed FROM information_schema.columns"
-            " WHERE table_schema = 'public' AND table_name = 'jobs'"
+            " WHERE table_schema = 'public' AND table_name = 'jobs'",
+            right,
         )
         return {row["column_name"]: row["allowed"] for row in rows}
 
     allowed = on(database_url, body)
-    assert allowed
-    assert [column for column, ok in allowed.items() if not ok] == []
+    assert len(allowed) > len(HEAD_COLUMNS)
+    assert sorted(column for column, ok in allowed.items() if not ok) == HEAD_COLUMNS
 
 
 def test_the_rights_leave_with_their_migration(empty_database_url: str) -> None:
@@ -163,6 +178,8 @@ ROLE = "runtime_check_test"
         ("GRANT DELETE ON steps TO {role}", "may change or delete steps"),
         ("GRANT TRUNCATE ON steps TO {role}", "may change or delete steps"),
         ("GRANT TRIGGER ON steps TO {role}", "add a trigger to them"),
+        ("GRANT UPDATE (head_seq) ON jobs TO {role}", "may write the head"),
+        ("GRANT INSERT ON jobs TO {role}", "may write the head"),
         ("GRANT CREATE ON SCHEMA public TO {role}", "may create objects in the schema"),
     ],
 )

@@ -22,7 +22,7 @@ from runtime.store.engine import sqlalchemy_url
 from runtime.store.held import LeaseLost
 from runtime.store.jobs import Job, claim_job, get_job, job_from_row
 from runtime.store.payload import InvalidPayload
-from runtime.store.schema import jobs
+from runtime.store.schema import job_columns, jobs
 from runtime.store.status import JobStatus
 from runtime.store.steps import Step, StepConflict, StepKind, read_steps
 
@@ -466,7 +466,7 @@ def test_a_worker_paused_right_after_its_statement_holds_nothing(
     async def look(other: AsyncEngine, job_id: UUID) -> Job | None:
         async with other.begin() as conn:
             result = await conn.execute(
-                select(jobs).where(jobs.c.id == job_id).with_for_update(skip_locked=True)
+                select(*job_columns).where(jobs.c.id == job_id).with_for_update(skip_locked=True)
             )
             row = result.one_or_none()
             return None if row is None else job_from_row(row)

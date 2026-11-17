@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from sqlalchemy.sql.elements import ColumnElement
 
 from runtime.store.payload import check_json
-from runtime.store.schema import jobs, steps
+from runtime.store.schema import job_columns, jobs, steps
 from runtime.store.status import FINAL_STATUSES, JobStatus, sources_of
 from runtime.store.steps import StepKind, next_seq
 
@@ -90,13 +90,13 @@ async def create_job(
     result = await conn.execute(
         insert(jobs)
         .values(spec=spec, token_budget=token_budget, deadline=deadline)
-        .returning(*jobs.c)
+        .returning(*job_columns)
     )
     return job_from_row(result.one())
 
 
 async def get_job(conn: AsyncConnection, job_id: UUID) -> Job | None:
-    result = await conn.execute(select(jobs).where(jobs.c.id == job_id))
+    result = await conn.execute(select(*job_columns).where(jobs.c.id == job_id))
     row = result.one_or_none()
     return None if row is None else job_from_row(row)
 
@@ -175,7 +175,7 @@ def claim_statement(worker_id: str, lease: timedelta) -> Update:
                 else_=jobs.c.error,
             ),
         )
-        .returning(*jobs.c)
+        .returning(*job_columns)
     )
 
 
@@ -269,7 +269,7 @@ async def update_status(
         update(jobs)
         .where(jobs.c.id == job_id, jobs.c.status.in_(sources))
         .values(status=new_status, error=error)
-        .returning(*jobs.c)
+        .returning(*job_columns)
     )
     row = result.one_or_none()
     if row is None:
@@ -320,7 +320,7 @@ async def _answer(conn: AsyncConnection, job_id: UUID, kind: StepKind, question:
             update(jobs)
             .where(jobs.c.id == job_id, jobs.c.status == JobStatus.NEEDS_APPROVAL.value)
             .values(status=JobStatus.QUEUED.value)
-            .returning(*jobs.c)
+            .returning(*job_columns)
         )
     ).one()
     job = job_from_row(row)
@@ -397,7 +397,7 @@ async def cancel_job(conn: AsyncConnection, job_id: UUID) -> tuple[Job, bool]:
             lease_owner=case((unheld, None), else_=jobs.c.lease_owner),
             lease_expires_at=case((unheld, None), else_=jobs.c.lease_expires_at),
         )
-        .returning(*jobs.c)
+        .returning(*job_columns)
     )
     row = result.one_or_none()
     if row is not None:
@@ -445,7 +445,7 @@ async def fail_overdue(conn: AsyncConnection) -> list[Job]:
             lease_owner=None,
             lease_expires_at=None,
         )
-        .returning(*jobs.c)
+        .returning(*job_columns)
     )
     ended = [job_from_row(row) for row in result]
     for job in ended:

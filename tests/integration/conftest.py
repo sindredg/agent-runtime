@@ -85,6 +85,21 @@ async def add_step(
     )
 
 
+async def move_to_the_heap_end(conn: AsyncConnection, job_id: UUID, seq: int) -> None:
+    """Rewrite one step unchanged, so its row moves to the end of the table.
+
+    For a test that a read sorts by `seq`: rows inserted in `seq` order come
+    back in that order without a sort. Needs the owner, which may switch the
+    refusal trigger off for its own session (ADR 0013).
+    """
+    await conn.execute(text("SET LOCAL session_replication_role = replica"))
+    await conn.execute(
+        text("UPDATE steps SET payload = payload WHERE job_id = :id AND seq = :seq"),
+        {"id": job_id, "seq": seq},
+    )
+    await conn.execute(text("SET LOCAL session_replication_role = origin"))
+
+
 async def expire_lease(conn: AsyncConnection, job_id: UUID) -> None:
     """Move the job's lease into the past, as if its worker had stopped renewing it.
 
