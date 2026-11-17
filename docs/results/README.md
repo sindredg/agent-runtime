@@ -4,12 +4,13 @@ Each guarantee has a test with a pass line that was fixed before the run, and
 a run with the mechanism switched off to show that the test can fail.
 
 The table with one line per guarantee is in the
-[README](../../README.md#results). The evidence is on two pages:
+[README](../../README.md#results). The evidence is on three pages:
 
 - [Durability](durability.md): surviving a lost worker, unsafe tool
   calls, stale workers, crash loops.
-- [Budget, scope and approval](controls.md): what a job may spend,
-  reach and do.
+- [Scope and sandbox](sandbox.md): what a tool can reach.
+- [Budget, approval and tool output](controls.md): what a job may spend
+  and do.
 
 Jobs that ran with a real model, which are not the evidence for a guarantee:
 [Runs against the Claude API](api.md).
