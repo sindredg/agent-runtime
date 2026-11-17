@@ -16,8 +16,8 @@ the results do not show.
 
 ## The run
 
-Every result is from one run of every suite at one commit, on a quiet
-machine, in this order:
+Every result is from one run of every suite at one commit, on one machine
+with no other test run, in this order:
 
 ```mermaid
 flowchart LR
@@ -30,7 +30,7 @@ flowchart LR
 | | |
 |---|---|
 | Commit | `e656fd8`, 2026-11-16, 21:27 to 22:40 UTC |
-| Runs and seed | 200 random kill times for G1 and G2, 200 for G10, seed `20261113`. Every other test: 1 run. |
+| Runs and seed | 200 random kill times for the lost-worker test, 200 for the approval test, seed `20261113`. Every other test: 1 run. |
 | Workers | 3 in the chaos stack, 1 in the normal stack |
 | Provider | The fake provider. The issue tracker is a fake too. |
 | Where | Docker Compose on one machine: Linux aarch64 under WSL2, 8 CPUs, Docker 29.1.3 |
@@ -85,6 +85,9 @@ log. See [Testing](testing.md#records-a-test-trusts).
 
 - Nothing ran against a real model provider or a real issue tracker. The
   contract test against the Claude API was not part of this run.
+- The worker logs of the run hold lease renewals that timed out. Not all of
+  them are explained
+  ([issue 69](https://github.com/sindredg/agent-runtime/issues/69)).
 - Everything ran on one host with one clock. A lost network between a worker
   and the database is covered by an integration test that cuts the database
   sessions, not by a chaos run.
@@ -94,8 +97,8 @@ log. See [Testing](testing.md#records-a-test-trusts).
 
 - `8c22e4e`: a takeover waited up to 39 ms less than its bound, in integration
   and in the sandbox-kill test
-  ([issue 49](https://github.com/sindredg/agent-runtime/issues/49)). The G10
-  kill test was void: the wall clock moved back 1.2 s.
+  ([issue 49](https://github.com/sindredg/agent-runtime/issues/49)). The
+  approval kill test was void: the wall clock moved back 1.2 s.
 - `97e56d3`: a unit test that relied on a 0.2 s window failed under load from
   another process ([issue 57](https://github.com/sindredg/agent-runtime/issues/57)).
   The run was stopped.
@@ -106,7 +109,7 @@ log. See [Testing](testing.md#records-a-test-trusts).
   that started it ended, once for load from another process. No test had
   failed.
 
-Earlier runs, before milestone 2:
+Earlier runs:
 
 - One run of the pause test had two takeovers instead of one. The wall clock
   moved forward by 36.6 s, which ended the second worker's lease early.

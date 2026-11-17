@@ -39,10 +39,14 @@ With the mechanism off:
 | The deadline timer | Both deadline tests fail |
 | The claim's deadline check | Both claim tests fail. The job stayed `running`. |
 
+The budget's run did not overspend, so the check of the spend itself has no
+failing run ([issue 65](https://github.com/sindredg/agent-runtime/issues/65)).
+
 ## Scope and sandbox
 
 Tested. `make escape`, 22 of 22 tests. Docker 29.1.3,
-`kernel.yama.ptrace_scope` 1.
+`kernel.yama.ptrace_scope` 1, both read from the host and not recorded by
+the run.
 
 Without a scope, 12 escape attempts, each as a `run_shell` call:
 
@@ -81,8 +85,19 @@ With the mechanism off:
 
 | Switch | Outcome |
 |---|---|
-| `ESCAPE_DOCKER_DEFAULTS=1`: Docker's default settings, and a scoped command on the network directly | 13 of 22 tests failed |
+| `ESCAPE_DOCKER_DEFAULTS=1`: Docker's default settings, and a scoped command on the network directly | 13 of 22 tests failed: 12 attempts got through, and 1 control test |
 | `ESCAPE_NO_RULES=1`: a guard with no rules | All 7 scope tests failed, the other 15 passed |
+
+What the switched-off runs do not show:
+
+- Under Docker's defaults these attempts were still stopped: the write to
+  the root file system, the mount, capabilities, running as root, the Docker
+  socket, the metadata address and both file searches.
+- The image itself sets a user that is not root. The read-only root, the
+  dropped capabilities and the user setting have no failing run
+  ([issue 63](https://github.com/sindredg/agent-runtime/issues/63)).
+- The suite runs commands as the host's user, not the stack's 10001
+  ([issue 64](https://github.com/sindredg/agent-runtime/issues/64)).
 
 ## Approval before a tool call
 
@@ -111,8 +126,9 @@ integration tests fail.
 
 ## Bad tool output
 
-Tested for `run_shell` and `list_dir`, the tools that run in a container.
-Integration suite, `test_sandbox.py`.
+Tested for `run_shell`. Integration suite, `test_sandbox.py`. `list_dir`
+runs in a container through the same code and has no bad-output test of its
+own ([issue 67](https://github.com/sindredg/agent-runtime/issues/67)).
 
 - One job runs commands that exit non-zero, print 100 MB, and print bytes
   that are not UTF-8. Another runs one past its timeout.
