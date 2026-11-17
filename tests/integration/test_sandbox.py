@@ -10,6 +10,7 @@ import asyncio
 import dataclasses
 import ipaddress
 import os
+import re
 import subprocess
 import time
 import uuid
@@ -314,6 +315,43 @@ def test_bad_output_becomes_tool_results_and_the_job_goes_on(
     sent = sent_results(ran)
     assert [block["is_error"] for block in sent] == [True, False, False]
     assert [block["content"] for block in sent] == [result["content"] for result in results]
+
+
+def test_a_long_listing_with_a_bad_name_becomes_a_cut_result_and_the_job_goes_on(
+    stack: Stack, workspace_volume: tuple[Path, str], settings: SandboxSettings
+) -> None:
+    """list_dir runs through the same runner as run_shell. Its bad output is cut the same way."""
+    assert stack.workspace_root == workspace_volume[0]
+    tools = default_tools(sandbox=OwnClientSandbox(settings))
+
+    spec = {"prompt": "List a big directory.", "model": "sandbox-list-dir-bad-output"}
+    ran = stack.run_one(spec, tools)
+
+    assert ran.job.status == "succeeded", ran.job.error
+    calls = [step.payload for step in ran.steps if step.kind is StepKind.TOOL_INTENT]
+    assert [call["name"] for call in calls] == ["run_shell", "list_dir"]
+    results = [step.payload for step in ran.steps if step.kind is StepKind.TOOL_RESULT]
+    made, listing = results
+    assert made["content"] == "made\n[exit status 0]"
+
+    assert listing["is_error"] is False
+    assert listing["truncated"] is True
+    assert len(listing["content"].encode()) <= LIMIT
+    assert re.search(
+        rf"\[output cut to fit {LIMIT} bytes; the command wrote \d+\]\n\[exit status 0\]$",
+        listing["content"],
+    )
+    # The bad name sorts first, before the cut. Its two bytes became U+FFFD.
+    assert " a��name\n" in listing["content"]
+    assert "file-with-a-long-name-to-fill-the-listing-1\n" in listing["content"]
+    assert our_containers(workspace_volume[1]) == []
+
+    # The model was sent the cut listing as it was stored.
+    assert [entry["turn"] for entry in ran.requests] == [0, 1, 2]
+    assert [block["content"] for block in sent_results(ran)] == [
+        made["content"],
+        listing["content"],
+    ]
 
 
 # A worker that stops during a sandboxed call (ADR 0008): its container goes

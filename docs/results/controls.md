@@ -1,8 +1,26 @@
-# Results: budget, scope and approval
+# Results: budget, approval and tool output
 
-The evidence for the guarantees about what a job may spend, reach and do.
-Every result here is from the run at `e656fd8`. Its conditions, and the runs
-with a mechanism switched off, are on the [Results](README.md) page.
+The evidence for the guarantees about what a job may spend and do. Every
+result here is from the run at `e656fd8`, unless a line names another
+commit. Its conditions, and the runs with a mechanism switched off, are on
+the [Results](README.md) page. What a job may reach is on
+[Scope and sandbox](sandbox.md).
+
+The checks this page has evidence for, around one round of a job:
+
+```mermaid
+flowchart LR
+    B{next call fits<br/>the budget?} -->|no| F[job failed]
+    B -->|yes| M[model call]
+    M --> A{tool call needs<br/>approval?}
+    A -->|no| T[tool runs]
+    A -->|yes| P[wait for a person]
+    P -->|approved| T
+    P -->|denied, or the deadline| N[call not run]
+    T --> C[output cut to 64 KiB]
+    C --> B
+    N --> B
+```
 
 ## Budget, deadline and cancel
 
@@ -35,73 +53,10 @@ With the mechanism off:
 | Removed | Outcome |
 |---|---|
 | The check that the next call fits | The call was made with no valid `max_tokens`, and the provider refused it. The job failed with that error, not the budget's. |
+| The check and the cut of `max_tokens`, at `bd830cc` | The job spent 282,118 tokens in 31 calls against its 20,000, by the provider's count. The test fails on the spend. |
 | The cancel check | Both cancel tests fail. One job ended `succeeded` instead of `cancelled`. |
 | The deadline timer | Both deadline tests fail |
 | The claim's deadline check | Both claim tests fail. The job stayed `running`. |
-
-The budget's run did not overspend, so the check of the spend itself has no
-failing run ([issue 65](https://github.com/sindredg/agent-runtime/issues/65)).
-
-## Scope and sandbox
-
-Tested. `make escape`, 22 of 22 tests. Docker 29.1.3,
-`kernel.yama.ptrace_scope` 1, both read from the host and not recorded by
-the run.
-
-Without a scope, 12 escape attempts, each as a `run_shell` call:
-
-- DNS, TCP out, the cloud metadata address, a network interface besides
-  loopback, the Docker socket, a write to the root file system.
-- A mount, capabilities, gaining privileges, running as root, 200 forks, 512
-  MiB of memory.
-- Each was stopped and came back as a failed tool result. 61 of 200 forks
-  ran, and the memory hog was killed (137).
-- The host's canary file and another job's file were not found, while the
-  same search found a file of the job's own. Both stayed unchanged.
-- No metadata service runs on this machine. That attempt shows only that the
-  address was unreachable.
-
-With a scope, against two targets on the guards' network:
-
-```mermaid
-flowchart LR
-    C[run_shell command] --> G{the guard's rules}
-    G -->|answered| T1[the target in scope]
-    G -->|blocked, 3 packets counted| T2[the target outside the scope]
-    G -->|blocked| P[a port outside the scope's ports]
-    G -->|blocked, also when a scope lists them| M[the metadata address<br/>and Docker's DNS]
-```
-
-- The target in scope answered. The one outside was blocked, its packets
-  counted (3) and reported to the model.
-- A port outside the scope's ports was blocked.
-- A pinned name resolved and no other name did.
-- The metadata address and Docker's DNS stayed blocked even in a scope that
-  listed them, each with its own count.
-- `nft flush ruleset` as root in the namespace, without capabilities, was
-  refused, and the outside target stayed blocked.
-- In the stack, at `185c89b`: the worker refused a job whose scope named
-  `postgres:5432` before any call, and the job went on
-  (`tests/integration/test_scope_in_stack.py`).
-
-With the mechanism off:
-
-| Switch | Outcome |
-|---|---|
-| `ESCAPE_DOCKER_DEFAULTS=1`: Docker's default settings, and a scoped command on the network directly | 13 of 22 tests failed: 12 attempts got through, and 1 control test |
-| The runtime's networks left out of the worker's deny list, at `185c89b` | The scoped command connected to Postgres. Docker's network isolation did not stop it: the deny list is the only barrier. |
-| `ESCAPE_NO_RULES=1`: a guard with no rules | All 7 scope tests failed, the other 15 passed |
-
-What the switched-off runs do not show:
-
-- Under Docker's defaults these attempts were still stopped: the write to
-  the root file system, the mount, capabilities, running as root, the Docker
-  socket, the metadata address and both file searches.
-- The image itself sets a user that is not root. The read-only root, the
-  dropped capabilities and the user setting have no failing run
-  ([issue 63](https://github.com/sindredg/agent-runtime/issues/63)).
-- The suite runs commands as the host's user, not the stack's 10001
-  ([issue 64](https://github.com/sindredg/agent-runtime/issues/64)).
 
 ## Approval before a tool call
 
@@ -130,14 +85,15 @@ integration tests fail.
 
 ## Bad tool output
 
-Tested for `run_shell`. Integration suite, `test_sandbox.py`. `list_dir`
-runs in a container through the same code and has no bad-output test of its
-own ([issue 67](https://github.com/sindredg/agent-runtime/issues/67)).
+Tested. Integration suite, `test_sandbox.py`.
 
 - One job runs commands that exit non-zero, print 100 MB, and print bytes
   that are not UTF-8. Another runs one past its timeout.
 - Each becomes a tool result of at most 64 KiB, the 100 MB one flagged
   `truncated`. Each job succeeds, and the model is sent every result.
+- `list_dir`, added at `81750b6`: a listing of 2,000 files and a name that is
+  not UTF-8 is cut to 64 KiB and flagged `truncated`. The bad name comes back
+  as U+FFFD, and the job succeeds.
 - `read_file` and `create_issue` run in the worker and have no general
   timeout.
 
@@ -148,3 +104,4 @@ With the mechanism off:
 | The cut of the stream | The worker kept all 100 MB, and the runner's test fails. The job's test passes: the result is still cut. |
 | The cut of the result | The stored result was 65,612 bytes. The job's test fails. |
 | The tool timeout | Both timeout tests fail. The command was not stopped. |
+| Both cuts, for the `list_dir` test, at `81750b6` | The test fails: the whole listing went to the model, the next call's bound passed the budget, and the job failed. |

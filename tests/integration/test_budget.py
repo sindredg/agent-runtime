@@ -49,14 +49,16 @@ def test_a_job_that_loops_stops_before_its_budget_by_the_providers_count(stack: 
     requests = [step.payload for step in steps if step.kind is StepKind.MODEL_REQUEST]
     print(f"\n{len(answered)} calls, {spent} of {BUDGET} tokens by the provider's count")
 
+    # The guarantee first: by the provider's own count, and by the runtime's.
+    # Checked before the status, so that a job that overspends and ends some
+    # other way fails here.
+    assert spent <= BUDGET
+    assert job.tokens_used == spent
     # The budget stopped it, after several rounds and well before the scenario's end.
     assert job.status == "failed"
     assert job.error is not None
     assert job.error.startswith("the token budget does not cover the next model call")
     assert 3 <= len(answered) < 30
-    # By the provider's own count, and by the runtime's.
-    assert spent <= BUDGET
-    assert job.tokens_used == spent
     # Each call: the provider's input stayed within the bound, and the
     # count, the bound and max_tokens together fit the budget.
     assert len(requests) == len(answered)

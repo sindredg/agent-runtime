@@ -1,0 +1,8 @@
+{
+  "description": "list_dir on a listing past 64 KiB with a name that is not UTF-8. A run_shell call makes 2,000 files and the bad name first; the name starts with a, so it sorts before the cut. Then the turn ends.",
+  "turns": [
+    {"content": [{"type": "tool_use", "name": "run_shell", "input": {"command": "mkdir many && cd many && for i in $(seq 2000); do : > \"file-with-a-long-name-to-fill-the-listing-$i\"; done && : > \"$(printf 'a\\377\\376name')\" && echo made"}}]},
+    {"content": [{"type": "tool_use", "name": "list_dir", "input": {"path": "many"}}]},
+    {"content": [{"type": "text", "text": "The listing came back. The job is done."}]}
+  ]
+}
