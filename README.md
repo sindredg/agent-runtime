@@ -94,6 +94,10 @@ the fake provider. The output of the switched-off runs is kept on that
 machine, not in the repository. The run, and what it does not show:
 [Results](docs/results.md).
 
+The fake provider is compared with the Claude API by a contract test that is
+run by hand. Its result and what it does not show:
+[Testing](docs/testing.md#the-contract-test).
+
 ## Documentation
 
 | Page | Covers |
