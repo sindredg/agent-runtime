@@ -71,7 +71,14 @@ RETURN sha256(
 # A `seq` at or below the head is let through with a placeholder hash. The
 # step with that `seq` exists, so the primary key refuses the row, and
 # INSERT ... ON CONFLICT DO NOTHING still works. A `seq` below 1 is refused by
-# the `seq` check. A job that does not exist is refused by the foreign key.
+# the `seq` check.
+#
+# Refused here, because a check after the trigger would come too late:
+# - a job that does not exist yet. The foreign key is checked at the end of
+#   the statement, and a statement can insert the job after its steps.
+# - a `seq` above the head that is taken already. ON CONFLICT DO NOTHING
+#   would skip the row and keep the head the trigger wrote.
+# - any table but `steps`. The function runs with the owner's rights.
 STEPS_CHAIN = """
 CREATE FUNCTION public.steps_chain() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER
@@ -81,9 +88,17 @@ DECLARE
     h_seq integer;
     h_hash bytea;
 BEGIN
+    IF TG_RELID <> 'public.steps'::regclass THEN
+        RAISE EXCEPTION 'steps_chain runs on public.steps only'
+            USING ERRCODE = 'insufficient_privilege';
+    END IF;
     SELECT head_seq, head_hash INTO h_seq, h_hash
       FROM public.jobs WHERE id = NEW.job_id FOR NO KEY UPDATE;
-    IF NOT FOUND OR NEW.seq < 1 THEN
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'job % of step % does not exist', NEW.job_id, NEW.seq
+            USING ERRCODE = 'foreign_key_violation';
+    END IF;
+    IF NEW.seq < 1 THEN
         NEW.hash := '\\x'::bytea;
         RETURN NEW;
     END IF;
@@ -101,6 +116,11 @@ BEGIN
     IF NEW.seq <> h_seq + 1 THEN
         RAISE EXCEPTION 'step % of job % does not follow its last step %',
             NEW.seq, NEW.job_id, h_seq
+            USING ERRCODE = 'integrity_constraint_violation';
+    END IF;
+    IF EXISTS (SELECT FROM public.steps WHERE job_id = NEW.job_id AND seq = NEW.seq) THEN
+        RAISE EXCEPTION 'job % already has step %, above its head %',
+            NEW.job_id, NEW.seq, h_seq
             USING ERRCODE = 'integrity_constraint_violation';
     END IF;
     NEW.hash := public.step_hash(
@@ -158,6 +178,13 @@ UPDATE public.jobs AS j
 """
 
 
+FUNCTIONS = (
+    "step_hash(bytea, uuid, integer, integer, timestamptz, text, jsonb)",
+    "steps_chain()",
+    "steps_refuse()",
+)
+
+
 def upgrade() -> None:
     op.add_column("steps", sa.Column("hash", sa.LargeBinary()))
     op.add_column(
@@ -187,6 +214,17 @@ def upgrade() -> None:
         " FOR EACH STATEMENT EXECUTE FUNCTION steps_refuse()"
     )
 
+    # Only the trigger calls these. EXECUTE is PUBLIC by default, and every
+    # role may create a temporary table: the app could hang the owner's
+    # function on a table of its own and move any job's head.
+    for function in FUNCTIONS:
+        op.execute(f"REVOKE EXECUTE ON FUNCTION {function} FROM PUBLIC")
+
+    # A new id would move a job's steps under another job's row: the foreign
+    # key is checked at the end of the statement, when the old id may exist
+    # again.
+    op.execute(f"REVOKE UPDATE (id) ON jobs FROM {APP_ROLE}")
+
     # 0006 granted INSERT on the whole table. A job inserted with a head of
     # the app's choosing would start its chain wherever the app wanted.
     op.execute(f"REVOKE INSERT ON jobs FROM {APP_ROLE}")
@@ -196,14 +234,14 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.execute(f"GRANT UPDATE (id) ON jobs TO {APP_ROLE}")
     op.execute(f"REVOKE INSERT ({', '.join(JOB_COLUMNS)}) ON jobs FROM {APP_ROLE}")
     op.execute(f"GRANT INSERT ON jobs TO {APP_ROLE}")
     op.execute("DROP TRIGGER steps_no_truncate ON steps")
     op.execute("DROP TRIGGER steps_no_change ON steps")
     op.execute("DROP TRIGGER steps_chain ON steps")
-    op.execute("DROP FUNCTION steps_refuse()")
-    op.execute("DROP FUNCTION steps_chain()")
-    op.execute("DROP FUNCTION step_hash(bytea, uuid, integer, integer, timestamptz, text, jsonb)")
+    for function in reversed(FUNCTIONS):
+        op.execute(f"DROP FUNCTION {function}")
     op.drop_column("jobs", "head_hash")
     op.drop_column("jobs", "head_seq")
     op.drop_column("steps", "hash")

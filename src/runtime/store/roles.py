@@ -40,6 +40,7 @@ _RIGHTS = text(
            has_column_privilege(r.oid, j.oid, 'head_seq', 'INSERT, UPDATE')
                OR has_column_privilege(r.oid, j.oid, 'head_hash', 'INSERT, UPDATE')
                AS writes_head,
+           has_function_privilege(r.oid, 'public.steps_chain()', 'EXECUTE') AS runs_chain,
            has_schema_privilege(r.oid, 'public', 'CREATE') AS creates
       FROM pg_roles r,
            pg_class s,
@@ -65,6 +66,7 @@ async def check_app_role(conn: AsyncConnection) -> None:
             (row.owner, "owns the tables"),
             (row.changes_steps, "may change or delete steps, or add a trigger to them"),
             (row.writes_head, "may write the head of the step log"),
+            (row.runs_chain, "may hang the chain's trigger on a table of its own"),
             (row.creates, "may create objects in the schema"),
         ]
         if found

@@ -76,6 +76,13 @@ REFUSED = [
     " VALUES ('{}', 1000, now() + interval '1 hour', 5)",
     "CREATE OR REPLACE FUNCTION steps_refuse() RETURNS trigger LANGUAGE plpgsql"
     " AS $$ BEGIN RETURN OLD; END $$",
+    # The chain's trigger runs with the owner's rights. On a table of the
+    # app's own it would move any job's head.
+    "CREATE TEMP TABLE fake (LIKE steps);"
+    " CREATE TRIGGER t BEFORE INSERT ON fake FOR EACH ROW EXECUTE FUNCTION steps_chain()",
+    "SELECT step_hash('\\x', gen_random_uuid(), 1, 1, now(), 'error', '{}')",
+    # A new id would move a job's steps under another job's row.
+    "UPDATE jobs SET id = gen_random_uuid()",
 ]
 
 
@@ -91,11 +98,15 @@ def test_the_app_role_is_refused(database_url: str, statement: str) -> None:
         on(database_url, body)
 
 
-# The head of the step log's chain: only the insert trigger writes it.
-HEAD_COLUMNS = ["head_hash", "head_seq"]
+# Columns the app role may not write. The head of the step log's chain is
+# written only by the insert trigger; the id ties a job to its steps.
+NOT_WRITABLE = {
+    "INSERT": ["head_hash", "head_seq"],
+    "UPDATE": ["head_hash", "head_seq", "id"],
+}
 
 
-@pytest.mark.parametrize("right", ["INSERT", "UPDATE"])
+@pytest.mark.parametrize("right", NOT_WRITABLE)
 def test_the_app_role_may_write_every_column_of_a_job_but_the_head(
     database_url: str, right: str
 ) -> None:
@@ -111,8 +122,8 @@ def test_the_app_role_may_write_every_column_of_a_job_but_the_head(
         return {row["column_name"]: row["allowed"] for row in rows}
 
     allowed = on(database_url, body)
-    assert len(allowed) > len(HEAD_COLUMNS)
-    assert sorted(column for column, ok in allowed.items() if not ok) == HEAD_COLUMNS
+    assert len(allowed) > len(NOT_WRITABLE[right])
+    assert sorted(column for column, ok in allowed.items() if not ok) == NOT_WRITABLE[right]
 
 
 def test_the_rights_leave_with_their_migration(empty_database_url: str) -> None:
@@ -180,6 +191,7 @@ ROLE = "runtime_check_test"
         ("GRANT TRIGGER ON steps TO {role}", "add a trigger to them"),
         ("GRANT UPDATE (head_seq) ON jobs TO {role}", "may write the head"),
         ("GRANT INSERT ON jobs TO {role}", "may write the head"),
+        ("GRANT EXECUTE ON FUNCTION steps_chain() TO {role}", "may hang the chain's trigger"),
         ("GRANT CREATE ON SCHEMA public TO {role}", "may create objects in the schema"),
     ],
 )

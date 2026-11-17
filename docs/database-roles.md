@@ -18,13 +18,14 @@ flowchart LR
 | Role | Used by | `steps` | `jobs` |
 |---|---|---|---|
 | `runtime` | `migrate`, tests that build a database | Everything. It owns the tables and is a superuser. | Everything |
-| `runtime_app` | `api`, `worker` | SELECT, INSERT | SELECT, and INSERT and UPDATE on every column but the [chain's head](step-log-chain.md). No DELETE. |
+| `runtime_app` | `api`, `worker` | SELECT, INSERT | SELECT, INSERT and UPDATE by column: not the [chain's head](step-log-chain.md), and no UPDATE of `id`. No DELETE. |
 
 - `runtime_app` cannot alter a table, add, disable or drop a trigger,
   create a table, or set `session_replication_role`.
 - Its INSERT and UPDATE on `jobs` are granted per column. A column that a
   later migration adds is not writable until that migration grants it.
-- Migration 0006 grants the rights and 0007 narrows INSERT to columns.
+- Migration 0006 grants the rights. 0007 narrows INSERT to columns and
+  takes UPDATE of `id` back.
   Their downgrades take them back and keep the role: a role belongs to the
   server, not to one database.
 
@@ -53,6 +54,7 @@ the role:
 - is a member of the role that owns `jobs` or `steps`,
 - holds UPDATE, DELETE, TRUNCATE or TRIGGER on `steps`,
 - may insert or update `head_seq` or `head_hash` on `jobs`,
+- may run the chain's trigger function `steps_chain`,
 - may create objects in the schema `public`.
 
 Connected as the owner, both would run, and nothing on the step log would

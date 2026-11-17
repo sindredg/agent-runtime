@@ -37,13 +37,15 @@ reads that text and does not print JSON itself.
 |---|---|---|---|
 | UPDATE, DELETE, TRUNCATE a step | No right | Refused by `steps_refuse` | Found by the recomputation |
 | Insert a step out of order | Refused by `steps_chain` | Refused by `steps_chain` | Found |
-| Cut the last steps | No right | Refused | Found at the head |
+| Cut the last steps | No right | Refused | Found at the head, unless the head is set back too |
 | Write the head on the job row | No right | Allowed | Found |
 
-- The app role may insert and update every job column but `head_seq` and
-  `head_hash`. Its rights are on [Database roles](database-roles.md).
+- The app role may not write `head_seq` or `head_hash`, nor change a job's
+  `id`. Its rights are on [Database roles](database-roles.md).
 - A `seq` at or below the head reaches the primary key, so a second step
   with the same `seq` is refused as before, with the same error.
+- The trigger refuses a step whose job does not exist yet, and runs on
+  `steps` only. Only the owner may run the chain's functions.
 - Each insert locks its job row until it commits. A claim skips the job
   meanwhile. The worker sends each step in autocommit, so this is one
   statement long.
@@ -59,8 +61,10 @@ is planned.
 
 ## What it does not catch
 
-- A role that can switch the triggers off and also rewrites every later hash
-  and the head. Keeping the head outside the database is the follow-up.
+- A role that can switch the triggers off, deletes the last steps and sets
+  the head to the new last step. No hash has to be computed for that.
+- The same role rewriting a step, every later hash and the head. Keeping the
+  head outside the database is the follow-up for both.
 - A restore of an older backup.
 - A status change without a step, such as a cancel.
 - A step whose content was false when it was written.

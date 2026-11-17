@@ -172,6 +172,63 @@ def test_a_step_that_does_not_follow_the_last_one_is_refused(
     assert verify(database_url, job_id) == []
 
 
+def test_a_step_inserted_before_its_job_is_refused(database_url: str) -> None:
+    """In one statement the foreign key is checked at its end, after the job exists."""
+    job_id = UUID("00000000-0000-7000-8000-0000000000aa")
+
+    async def body(conn: Connection) -> None:
+        await conn.execute(
+            "WITH s AS (INSERT INTO steps (job_id, seq, kind, payload, lease_epoch)"
+            " VALUES ($1, 1, 'error', '{}', 1), ($1, 7, 'error', '{}', 1) RETURNING job_id)"
+            " INSERT INTO jobs (id, spec, token_budget, deadline)"
+            " SELECT DISTINCT job_id, '{}'::jsonb, 1, now() + interval '1 day' FROM s",
+            job_id,
+        )
+
+    with pytest.raises(asyncpg.ForeignKeyViolationError):
+        on(database_url, body)
+
+
+def test_a_head_behind_the_log_is_not_moved_by_a_skipped_insert(database_url: str) -> None:
+    """ON CONFLICT DO NOTHING keeps what the trigger did. It must not write a head."""
+    job_id = make_job(database_url)
+    tamper(database_url, job_id, "UPDATE jobs SET head_seq = 0, head_hash = NULL WHERE id = $job")
+
+    async def again(conn: AsyncConnection) -> None:
+        await conn.execute(
+            text(
+                "INSERT INTO steps (job_id, seq, kind, payload, lease_epoch)"
+                " VALUES (:id, 1, 'error', '{}', 1) ON CONFLICT DO NOTHING"
+            ),
+            {"id": job_id},
+        )
+
+    with pytest.raises(Exception, match="already has step 1"):
+        in_transaction(database_url, again)
+    assert head(database_url, job_id) == (0, None)
+
+
+def test_the_chain_trigger_runs_on_the_steps_table_only(database_url: str) -> None:
+    """The owner may still attach it elsewhere. It refuses before it touches a job."""
+    job_id = make_job(database_url)
+    before = head(database_url, job_id)
+
+    async def body(conn: Connection) -> None:
+        await conn.execute(
+            "CREATE TEMP TABLE fake (LIKE steps);"
+            " CREATE TRIGGER t BEFORE INSERT ON fake FOR EACH ROW EXECUTE FUNCTION steps_chain()"
+        )
+        await conn.execute(
+            "INSERT INTO fake (job_id, seq, kind, payload, lease_epoch, created_at, hash)"
+            " VALUES ($1, 4, 'error', '{}', 1, now(), '\\x')",
+            job_id,
+        )
+
+    with pytest.raises(asyncpg.InsufficientPrivilegeError, match=r"public\.steps only"):
+        on(as_owner(database_url), body)
+    assert head(database_url, job_id) == before
+
+
 def test_the_holders_writes_land_with_the_head(database_url: str) -> None:
     """The fenced writes update the job row in the same statement as the trigger does."""
 
