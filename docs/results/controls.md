@@ -36,12 +36,10 @@ With the mechanism off:
 | Removed | Outcome |
 |---|---|
 | The check that the next call fits | The call was made with no valid `max_tokens`, and the provider refused it. The job failed with that error, not the budget's. |
+| The check and the cut of `max_tokens`, at `bd830cc` | The job spent 282,118 tokens in 31 calls against its 20,000, by the provider's count. The test fails on the spend. |
 | The cancel check | Both cancel tests fail. One job ended `succeeded` instead of `cancelled`. |
 | The deadline timer | Both deadline tests fail |
 | The claim's deadline check | Both claim tests fail. The job stayed `running`. |
-
-The budget's run did not overspend, so the check of the spend itself has no
-failing run ([issue 65](https://github.com/sindredg/agent-runtime/issues/65)).
 
 ## Scope and sandbox
 
