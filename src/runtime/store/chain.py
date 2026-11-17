@@ -69,12 +69,22 @@ class Mismatch:
     reason: str
 
 
+@dataclass(frozen=True, slots=True)
+class ChainCheck:
+    """What the recomputation of one job's chain found."""
+
+    steps: int
+    mismatches: list[Mismatch]
+
+
 class UnknownJob(LookupError):
     """There is no job with this id."""
 
 
-async def verify_job(conn: AsyncConnection, job_id: UUID) -> list[Mismatch]:
-    """Recompute the job's chain and compare it with what is stored. Empty means it holds.
+async def verify_job(conn: AsyncConnection, job_id: UUID) -> ChainCheck:
+    """Recompute the job's chain and compare it with what is stored.
+
+    The chain holds when no mismatch is found.
 
     Each step is hashed from the stored hash of the step before it, so a
     changed step is named alone and the steps after it still verify. A step
@@ -83,6 +93,7 @@ async def verify_job(conn: AsyncConnection, job_id: UUID) -> list[Mismatch]:
     """
     found: list[Mismatch] = []
     head = None
+    count = 0
     prev = job_id.bytes
     last_seq = 0
     # Streamed: a long log is not held in memory at once.
@@ -91,6 +102,7 @@ async def verify_job(conn: AsyncConnection, job_id: UUID) -> list[Mismatch]:
         if row.seq is None:
             # A job without steps: one row whose step columns are NULL.
             break
+        count += 1
         if row.seq != last_seq + 1:
             found.append(Mismatch(row.seq, f"follows step {last_seq}"))
         want = step_hash(
@@ -112,4 +124,4 @@ async def verify_job(conn: AsyncConnection, job_id: UUID) -> list[Mismatch]:
         found.append(Mismatch(None, f"head is step {head.head_seq}, the log ends at {last_seq}"))
     elif head.head_hash != (prev if last_seq else None):
         found.append(Mismatch(None, "head hash differs from the last step's"))
-    return found
+    return ChainCheck(count, found)

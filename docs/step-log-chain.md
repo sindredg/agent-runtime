@@ -57,8 +57,12 @@ reads that text and does not print JSON itself.
 `verify_job` in `src/runtime/store/chain.py` takes a job id and returns what
 does not match: a step whose hash differs, a gap in `seq`, or a head that is
 not the last step. Each step is hashed from the stored hash before it, so a
-changed step is named on its own. No command runs it yet: `runtime verify`
-is planned.
+changed step is named on its own.
+
+`runtime verify <job id>...` or `runtime verify --all` runs it, straight
+against the database ([ADR 0016](adr/0016-verify-reads-the-database-not-the-api.md)).
+It prints each mismatch as job, step and reason. Exit status 0: every chain
+holds, 1: a mismatch, 2: a job could not be checked.
 
 ## What it does not catch
 

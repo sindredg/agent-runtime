@@ -25,8 +25,10 @@ flowchart LR
 | `runtime approve <job id> <question>` | Lets the call a question asks about run once |
 | `runtime deny <job id> <question>` | Refuses that call. The model gets an error result and the job goes on. |
 | `runtime cancel <job id>` | Cancels the job |
+| `runtime verify <job id>... \| --all` | Checks the [hash chain](step-log-chain.md) of the jobs' steps. Reads the database, not the API. |
 
-Run them as `uv run runtime ...`. `RUNTIME_API_URL` says where the API is.
+Run them as `uv run runtime ...`. `RUNTIME_API_URL` says where the API is,
+`RUNTIME_DATABASE_URL` where `verify` finds the database.
 
 ## Examples
 

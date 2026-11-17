@@ -61,7 +61,7 @@ def make_job(url: str) -> UUID:
 
 def verify(url: str, job_id: UUID) -> list[Mismatch]:
     async def body(conn: AsyncConnection) -> list[Mismatch]:
-        return await verify_job(conn, job_id)
+        return (await verify_job(conn, job_id)).mismatches
 
     return in_transaction(url, body)
 
@@ -101,7 +101,7 @@ def test_the_chain_does_not_depend_on_the_session_time_zone(database_url: str) -
         await conn.execute(text("SET LOCAL TIME ZONE 'Asia/Kathmandu'"))
         job_id = await three_steps(conn)
         await conn.execute(text("SET LOCAL TIME ZONE 'America/St_Johns'"))
-        return job_id, await verify_job(conn, job_id)
+        return job_id, (await verify_job(conn, job_id)).mismatches
 
     job_id, found = in_transaction(database_url, body)
     assert found == []
@@ -250,7 +250,7 @@ def test_the_holders_writes_land_with_the_head(database_url: str) -> None:
         async with engine.begin() as conn:
             after = await get_job(conn, job.id)
             assert after is not None
-            found = await verify_job(conn, job.id)
+            found = (await verify_job(conn, job.id)).mismatches
             steps = await read_steps(conn, job.id)
         return after.tokens_used, after.status.value, found, len(steps)
 
@@ -384,7 +384,7 @@ def test_another_job_is_not_affected(database_url: str) -> None:
 def test_a_job_without_steps_verifies_and_an_unknown_one_is_named(database_url: str) -> None:
     async def body(conn: AsyncConnection) -> list[Mismatch]:
         job = await new_job(conn)
-        return await verify_job(conn, job.id)
+        return (await verify_job(conn, job.id)).mismatches
 
     assert in_transaction(database_url, body) == []
     with pytest.raises(UnknownJob):

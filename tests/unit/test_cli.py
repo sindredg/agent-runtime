@@ -753,3 +753,34 @@ def test_a_cancel_the_api_refuses_exits_with_2_and_shows_why() -> None:
     code, out, err = run("cancel", JOB_ID, api=api)
     assert (code, out) == (2, "")
     assert "cannot be cancelled" in err
+
+
+# `runtime verify` reads the database; only its arguments are checked here.
+# The integration tests run it against Postgres.
+
+
+@pytest.mark.parametrize(
+    "args",
+    [["verify"], ["verify", "--all", JOB_ID], ["verify", "not-an-id"]],
+)
+def test_verify_takes_job_ids_or_all(args: list[str]) -> None:
+    with pytest.raises(SystemExit) as stopped:
+        build_parser().parse_args(args)
+    assert stopped.value.code == 2
+
+
+def test_verify_reads_its_database_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RUNTIME_DATABASE_URL", "postgresql://u@db/x")
+    args = build_parser().parse_args(["verify", JOB_ID, JOB_ID])
+    assert (args.database_url, args.job_ids, args.all) == (
+        "postgresql://u@db/x",
+        [JOB_ID, JOB_ID],
+        False,
+    )
+
+
+def test_verify_defaults_to_the_stacks_app_role(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("RUNTIME_DATABASE_URL", raising=False)
+    args = build_parser().parse_args(["verify", "--all"])
+    assert args.database_url.startswith("postgresql://runtime_app:")
+    assert args.all
