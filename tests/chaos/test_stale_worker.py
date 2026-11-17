@@ -9,7 +9,7 @@ answer, and to wake it while another worker is in the middle of the job.
 
 import time
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -59,8 +59,13 @@ def test_a_worker_paused_past_its_lease_writes_nothing_when_it_wakes(default_lea
         # The second worker is in the middle of the job when the first wakes.
         at_unpause = chaos.job(job_id)
     finally:
+        # A paused container writes nothing, so any time inside the pause is
+        # a lower bound for what it logs after waking. A time taken after
+        # `docker unpause` returns is not: the woken worker can log within
+        # milliseconds, before the command returns. Five seconds also cover
+        # a gap between this clock and the Docker VM's.
+        woke_at = datetime.now(UTC) - timedelta(seconds=5)
         docker("docker", "unpause", stale)
-    woke_at = datetime.now(UTC)
     run = chaos.finish(job_id, timeout=60, note=f"paused {PAUSE_SECONDS:g}s")
     # Give the woken worker time to do whatever it is going to do.
     time.sleep(5)
