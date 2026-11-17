@@ -94,6 +94,10 @@ the fake provider. The output of the switched-off runs is kept on that
 machine, not in the repository. The run, and what it does not show:
 [Results](docs/results.md).
 
+The fake provider is compared with the Claude API by a contract test that is
+run by hand: [Testing](docs/testing.md#the-contract-test). Eight jobs have
+run against the API: [Runs against the Claude API](docs/results-api.md).
+
 ## Documentation
 
 | Page | Covers |
@@ -101,6 +105,7 @@ machine, not in the repository. The run, and what it does not show:
 | [Running jobs](docs/usage.md) | The examples, job files, the CLI |
 | [Architecture](docs/architecture.md) | Components, how a job runs, and a map of the other pages |
 | [Results](docs/results.md) | The evidence behind each guarantee |
+| [Runs against the Claude API](docs/results-api.md) | Eight jobs with a real model, and what they do not show |
 | [Known limits](docs/limits.md) | What is accepted and what is not built |
 | [OWASP APTS](docs/apts.md) | The security standard's requirements that the runtime meets, and its gaps |
 | [Decision records](docs/adr/README.md) | Why it is built this way |
