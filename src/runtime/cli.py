@@ -2,14 +2,16 @@
 and approve or deny a tool call that waits for a person.
 
 It talks to the API over HTTP. The API's address comes from --api-url or
-RUNTIME_API_URL and defaults to http://127.0.0.1:8000.
+RUNTIME_API_URL and defaults to http://127.0.0.1:8000. `runtime verify` is
+the exception: it reads the database itself (`runtime.verify`).
 
-Exit status: 0 on success, 1 when a followed job did not succeed, 2 when
-the command could not be carried out, 3 when a followed job stopped to wait
-for approval.
+Exit status: 0 on success, 1 when a followed job did not succeed or a chain
+does not hold, 2 when the command could not be carried out, 3 when a followed
+job stopped to wait for approval.
 """
 
 import argparse
+import asyncio
 import json
 import os
 import sys
@@ -20,6 +22,8 @@ from typing import Any, TextIO
 from uuid import UUID
 
 import httpx2
+
+from runtime.verify import DEFAULT_DATABASE_URL, verify
 
 DEFAULT_API_URL = "http://127.0.0.1:8000"
 # Following a job: seconds without any data before a connection counts as
@@ -120,6 +124,26 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     cancel.add_argument("job_id", type=_job_id)
+
+    check = commands.add_parser(
+        "verify",
+        help="check that a job's step log is as it was written",
+        description=(
+            "Recomputes the hash chain of each job's steps and compares it with the stored"
+            " hashes and the job's head. Reads the database directly, not the API, in a"
+            " read-only transaction. Exit status 0: every chain holds. 1: a mismatch, named"
+            " by job and step. 2: a job could not be checked."
+        ),
+    )
+    which = check.add_mutually_exclusive_group(required=True)
+    which.add_argument("job_ids", nargs="*", type=_job_id, default=[], metavar="job_id")
+    which.add_argument("--all", action="store_true", help="check every job")
+    check.add_argument(
+        "--database-url",
+        default=os.environ.get("RUNTIME_DATABASE_URL", DEFAULT_DATABASE_URL),
+        help="the database, as the app role is enough (default: RUNTIME_DATABASE_URL"
+        " or the stack's app role on 127.0.0.1)",
+    )
     return parser
 
 
@@ -389,6 +413,9 @@ def main(
     out = sys.stdout if out is None else out
     err = sys.stderr if err is None else err
     args = build_parser().parse_args(argv)
+    if args.command == "verify":
+        ids = None if args.all else [UUID(job_id) for job_id in args.job_ids]
+        return asyncio.run(verify(args.database_url, ids, out, err))
     handlers = {
         "submit": _submit,
         "status": _status,

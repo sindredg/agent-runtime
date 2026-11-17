@@ -9,6 +9,7 @@ What is built, described from the code. Reasons are in the
 flowchart LR
     CLI[runtime CLI] -->|HTTP| API[api]
     API --> DB[(postgres: jobs, steps)]
+    CLI -.->|runtime verify| DB
     W1[worker] --> DB
     W2[worker] --> DB
     W1 -->|Messages API| P{{ANTHROPIC_BASE_URL}}
@@ -36,7 +37,7 @@ flowchart LR
 | Provider client | `src/runtime/provider/` | The worker's one way to call a model: the official SDK behind a `Provider` interface. |
 | Tools | `src/runtime/tools/` | `run_shell` and `list_dir` run in a container per call. `read_file` and `create_issue` run in the worker. |
 | Sandbox | `src/runtime/sandbox/` | Starts, reads and removes the container of each sandboxed call. A scoped call also gets a guard container. |
-| CLI | `src/runtime/cli.py` | `runtime submit`, `status`, `logs`, `approve`, `deny`, `cancel`. Talks to the API only. |
+| CLI | `src/runtime/cli.py`, `src/runtime/verify.py` | `runtime submit`, `status`, `logs`, `approve`, `deny`, `cancel` talk to the API. `runtime verify` reads the database. |
 
 The API has no authentication, so the stack publishes it on localhost only.
 

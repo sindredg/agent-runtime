@@ -94,6 +94,7 @@ flowchart LR
 | `API_ALLOWED_HOSTS` | api | `localhost,127.0.0.1` | The names a request may use in `Host`. No ports, no wildcards, no IPv6. |
 | `APP_DATABASE_PASSWORD` | migrate | required; the stack sets `runtime-app-dev` | Sets the login of `runtime_app`, the role of the API and the worker. In the stack's URLs too, so URL-safe characters only. |
 | `RUNTIME_API_URL` | CLI | `http://127.0.0.1:8000` | Where the CLI finds the API |
+| `RUNTIME_DATABASE_URL` | `runtime verify` | the stack's `runtime_app` on `127.0.0.1:5432` | The database whose step log it checks. The app role is enough. |
 | `FAKE_SCENARIO_DIR` | fake-provider | scenarios in the package | Directory of scenario files |
 
 The switches for failure tests (`FAILPOINT`, `FAILPOINT_TOOL`, `CHAOS_TOOLS`,
