@@ -131,3 +131,4 @@ Only a tool call with an intent and no result needs more: see
 | [Testing](testing.md) | Suites, failure switches, commands |
 | [Results](results.md) | The evidence behind each guarantee |
 | [Known limits](limits.md) | What is accepted and what is not built |
+| [OWASP APTS](apts.md) | The APTS requirements of the runtime's layer, and what meets each |

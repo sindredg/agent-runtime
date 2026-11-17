@@ -31,9 +31,11 @@ refused, but the tool ran. An idempotency key on the other side closes this.
 - The worker's lease deadline is on its monotonic clock, the lease itself on
   the database clock. A suspended machine, or a database clock set forward,
   lets one check pass on a lease that is over. The write is still refused.
-- Five takeovers fail a job, also when the workers were lost for reasons that
-  have nothing to do with the job. The limit is a constant.
+- A job is failed at its sixth takeover, also when the workers were lost for
+  reasons that have nothing to do with the job. The limit is a constant.
 - A failed model call fails the job. There is no retry and no backoff.
+- A response cut off at `max_tokens`, or a refusal, fails the job. It is not
+  continued.
 - The whole conversation is sent with every model call. A job that outgrows
   the model's context window fails.
 - All workers have to see the same workspace directory. The stack does that
@@ -72,7 +74,7 @@ refused, but the tool ran. An idempotency key on the other side closes this.
 - A command can also write to `/dev/shm` (counted against its memory) and
   `/dev/mqueue`. Neither outlives the call.
 - A tool container whose removal failed, or was cut off when its worker
-  exited, stays on the host stopped
+  exited, stays on the host stopped. The sweep removes workspaces only
   ([issue 45](https://github.com/sindredg/agent-runtime/issues/45)).
 - A container whose `create` was cut off is removed by name. If Docker had
   not created it yet, it is left in the `created` state, without running.
