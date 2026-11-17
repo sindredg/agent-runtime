@@ -1,0 +1,17 @@
+# Puts the workers on the Claude API. Used on top of docker-compose.yml:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.claude.yml up --wait
+#
+# `make up-claude` does that. Every job then costs money, so no test suite
+# runs against this stack: they stop before the first test. `make up` puts
+# the workers back on the fake provider.
+name: agent-runtime
+
+services:
+  worker:
+    environment:
+      ANTHROPIC_BASE_URL: https://api.anthropic.com
+      # Read from .env or the shell only when this file is used.
+      ANTHROPIC_API_KEY: ${CLAUDE_API_KEY:?set CLAUDE_API_KEY in .env to use the Claude API}
+      # The model for jobs that name none.
+      MODEL: ${CLAUDE_MODEL:-claude-haiku-5-5}

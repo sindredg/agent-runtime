@@ -45,9 +45,23 @@ def test_the_clock_is_set_while_it_runs():
 """
 
 
+# The chaos conftest refuses to run unless every worker is on the fake
+# provider. There is no stack here: this stand-in for docker reports one
+# worker that is.
+DOCKER = """#!/bin/sh
+case "$1" in
+  ps) echo agent-runtime-worker-1 ;;
+  exec) echo http://fake-provider:8000 ;;
+esac
+"""
+
+
 def run_chaos_fixtures(tmp_path: Path) -> tuple[str, dict[str, dict[str, Any]]]:
     """Run TESTS under the chaos conftest. Returns pytest's output and the results by test."""
     (tmp_path / "test_results_file.py").write_text(TESTS, encoding="utf-8")
+    (tmp_path / "bin").mkdir()
+    (tmp_path / "bin" / "docker").write_text(DOCKER, encoding="utf-8")
+    (tmp_path / "bin" / "docker").chmod(0o755)
     results = tmp_path / "results"
     finished = subprocess.run(  # noqa: S603 - fixed command
         [
@@ -64,7 +78,11 @@ def run_chaos_fixtures(tmp_path: Path) -> tuple[str, dict[str, dict[str, Any]]]:
             str(tmp_path / "test_results_file.py"),
         ],
         cwd=REPO_ROOT,
-        env={**os.environ, "RESULTS_DIR": str(results)},
+        env={
+            **os.environ,
+            "RESULTS_DIR": str(results),
+            "PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}",
+        },
         capture_output=True,
         text=True,
         timeout=120,

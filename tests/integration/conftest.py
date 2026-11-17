@@ -292,3 +292,15 @@ class Stack:
 @pytest.fixture
 def stack(database_url: str, fake_provider_url: str, tmp_path: Path) -> Stack:
     return Stack(database_url, fake_provider_url, tmp_path / "workspaces")
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    """End the session before any test unless every worker is on the fake provider."""
+    check = subprocess.run(  # noqa: S603 - fixed program and script
+        [sys.executable, str(REPO_ROOT / "scripts" / "check_fake_provider.py")],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if check.returncode != 0:
+        pytest.exit(check.stderr.strip(), returncode=pytest.ExitCode.USAGE_ERROR)

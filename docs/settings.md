@@ -9,21 +9,40 @@ Every service reads its settings from environment variables
 ```mermaid
 flowchart LR
     E[.env] --> C[docker-compose.yml]
-    C -->|PROVIDER_BASE_URL becomes ANTHROPIC_BASE_URL| W[worker]
-    C -->|PROVIDER_API_KEY becomes ANTHROPIC_API_KEY| W
-    C -->|PROVIDER_MODEL becomes MODEL| W
-    C -->|LEASE_SECONDS, HEARTBEAT_SECONDS, TRACKER_URL| W
+    C -->|LEASE_SECONDS, HEARTBEAT_SECONDS, TRACKER_URL| W[worker]
     C -->|SANDBOX_TIMEOUT_SECONDS, STOP_GRACE_SECONDS| W
     C -->|API_PORT, POSTGRES_PORT, FAKE_PROVIDER_PORT, FAKE_TRACKER_PORT| H[host ports on 127.0.0.1]
     C -->|POSTGRES_PASSWORD| DB[(postgres)]
 ```
 
-- The three provider settings have their own names in `.env`, so a key
-  exported in the shell does not reach the stack by accident.
+- The provider is not in this picture: `make up` always puts the worker on
+  the fake. See [The Claude API](#the-claude-api).
 - In `.env`, `API_PORT` is the host port the stack publishes the API on.
   Inside the container the API listens on `0.0.0.0:8000`.
 - The stack publishes the API on 8000, Postgres on 5432, the fake provider
   on 8001 and the fake tracker on 8002, all on `127.0.0.1` only.
+
+## The Claude API
+
+The fake provider is the default, and the only provider the test suites
+run against. The Claude API takes its own command.
+
+```mermaid
+flowchart LR
+    U[make up] --> F[worker on the fake provider]
+    C[make up-claude] -->|adds docker-compose.claude.yml| A[worker on the Claude API]
+    K[CLAUDE_API_KEY, CLAUDE_MODEL in .env] --> C
+    F --> T[make integration, make chaos]
+    A -->|refused before the first test| T
+```
+
+- Only `docker-compose.claude.yml` reads `CLAUDE_API_KEY`, so the key can
+  stay in `.env`. `CLAUDE_MODEL` defaults to `claude-haiku-5-5`.
+- `make up-claude` ends by printing the worker's provider URL and model.
+  A result from that stack names both.
+- `scripts/check_fake_provider.py` does the refusing: it reads each
+  worker's `ANTHROPIC_BASE_URL`, and never the whole environment.
+- `make up` puts the worker back on the fake provider.
 
 ## Worker: job and provider
 

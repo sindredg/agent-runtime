@@ -117,6 +117,7 @@ uv installs the pinned Python and tools into `.venv`.
 | Command | What it does |
 |---|---|
 | `make up` | Build the images, start every service, wait until all are healthy |
+| `make up-claude` | The same stack with the worker on the Claude API. Every job costs money. |
 | `make logs` | Follow the service logs |
 | `make down` | Stop the services, keep the database volume |
 | `make clean` | Stop the services, delete the database volume |

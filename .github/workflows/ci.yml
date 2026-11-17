@@ -96,8 +96,13 @@ jobs:
           echo "$CHECKMAKE_SHA256  $RUNNER_TEMP/checkmake" | sha256sum --check --strict
           chmod +x "$RUNNER_TEMP/checkmake"
           "$RUNNER_TEMP/checkmake" Makefile
-      - name: Validate the compose file
-        run: docker compose config --quiet
+      # The Claude override is checked with a made-up key: config never
+      # starts anything, and --quiet prints nothing.
+      - name: Validate the compose files
+        run: |
+          docker compose config --quiet
+          CLAUDE_API_KEY=not-a-real-key docker compose \
+            -f docker-compose.yml -f docker-compose.claude.yml config --quiet
       # Builds the image and fails unless every service becomes healthy and
       # the one-shot migrate service exits 0.
       - name: Start the stack
