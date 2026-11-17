@@ -45,7 +45,7 @@ step log. It reads:
 
 A check counts only if it can fail. Each tested guarantee has a run with its
 mechanism switched off, which had to fail. The outcomes are in
-[Results](results.md).
+[Results](results/README.md).
 
 | Switch | Effect |
 |---|---|
@@ -122,7 +122,7 @@ passed: the fourth expected text before the tool call, and the model wrote
 none.
 
 Whole jobs have also run against the API:
-[Runs against the Claude API](results-api.md).
+[Runs against the Claude API](results/api.md).
 
 ## Commands
 

@@ -2,7 +2,7 @@
 
 The evidence for the guarantees about what a job may spend, reach and do.
 Every result here is from the run at `e656fd8`. Its conditions, and the runs
-with a mechanism switched off, are on the [Results](results.md) page.
+with a mechanism switched off, are on the [Results](README.md) page.
 
 ## Budget, deadline and cancel
 

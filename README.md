@@ -78,25 +78,25 @@ such a run did not reach is named with its result.
 
 | Guarantee | Status | Evidence |
 |---|---|---|
-| A job survives a worker stopping | Tested | [200 of 200 jobs, 176 kills](docs/results-durability.md#a-job-survives-a-worker-stopping) |
-| An unsafe tool call does not run twice without approval | Tested, one accepted exception | [No operation id with two issues](docs/results-durability.md#an-unsafe-tool-call-does-not-run-twice-without-approval) |
-| A stale worker cannot corrupt a job | Tested | [No write after the takeover](docs/results-durability.md#a-stale-worker-cannot-corrupt-a-job) |
-| A job that crashes its worker every time does not loop forever | Tested | [Failed after 5 takeovers](docs/results-durability.md#a-job-that-crashes-its-worker-does-not-loop-forever) |
-| Every job stays inside its token budget and deadline, and can be cancelled | Tested, with [accepted exceptions](docs/limits.md#halt-and-budget) | [Budget, cancel and deadline](docs/results-controls.md#budget-deadline-and-cancel) |
-| A tool can reach only its job's scope, and nothing else of the host | Tested, with [accepted exceptions](docs/limits.md#sandbox-and-scope) | [22 of 22 escape tests](docs/results-controls.md#scope-and-sandbox) |
-| A tool call that needs approval does not run before a person approved it | Tested | [134 issues for 134 approvals](docs/results-controls.md#approval-before-a-tool-call) |
-| Bad tool output does not break a job | Tested for `run_shell` | [100 MB cut to 64 KiB, the job goes on](docs/results-controls.md#bad-tool-output) |
+| A job survives a worker stopping | Tested | [200 of 200 jobs, 176 kills](docs/results/durability.md#a-job-survives-a-worker-stopping) |
+| An unsafe tool call does not run twice without approval | Tested, one accepted exception | [No operation id with two issues](docs/results/durability.md#an-unsafe-tool-call-does-not-run-twice-without-approval) |
+| A stale worker cannot corrupt a job | Tested | [No write after the takeover](docs/results/durability.md#a-stale-worker-cannot-corrupt-a-job) |
+| A job that crashes its worker every time does not loop forever | Tested | [Failed after 5 takeovers](docs/results/durability.md#a-job-that-crashes-its-worker-does-not-loop-forever) |
+| Every job stays inside its token budget and deadline, and can be cancelled | Tested, with [accepted exceptions](docs/limits.md#halt-and-budget) | [Budget, cancel and deadline](docs/results/controls.md#budget-deadline-and-cancel) |
+| A tool can reach only its job's scope, and nothing else of the host | Tested, with [accepted exceptions](docs/limits.md#sandbox-and-scope) | [22 of 22 escape tests](docs/results/controls.md#scope-and-sandbox) |
+| A tool call that needs approval does not run before a person approved it | Tested | [134 issues for 134 approvals](docs/results/controls.md#approval-before-a-tool-call) |
+| Bad tool output does not break a job | Tested for `run_shell` | [100 MB cut to 64 KiB, the job goes on](docs/results/controls.md#bad-tool-output) |
 | Provider rate limits slow jobs, they do not fail them | Not built | |
 | Throughput scales with workers | Not measured | |
 
 Every result is from one run at commit `e656fd8`, on one machine, against
 the fake provider. The output of the switched-off runs is kept on that
 machine, not in the repository. The run, and what it does not show:
-[Results](docs/results.md).
+[Results](docs/results/README.md).
 
 The fake provider is compared with the Claude API by a contract test that is
 run by hand: [Testing](docs/testing.md#the-contract-test). Eight jobs have
-run against the API: [Runs against the Claude API](docs/results-api.md).
+run against the API: [Runs against the Claude API](docs/results/api.md).
 
 ## Documentation
 
@@ -104,8 +104,8 @@ run against the API: [Runs against the Claude API](docs/results-api.md).
 |---|---|
 | [Running jobs](docs/usage.md) | The examples, job files, the CLI |
 | [Architecture](docs/architecture.md) | Components, how a job runs, and a map of the other pages |
-| [Results](docs/results.md) | The evidence behind each guarantee |
-| [Runs against the Claude API](docs/results-api.md) | Eight jobs with a real model, and what they do not show |
+| [Results](docs/results/README.md) | The evidence behind each guarantee |
+| [Runs against the Claude API](docs/results/api.md) | Eight jobs with a real model, and what they do not show |
 | [Known limits](docs/limits.md) | What is accepted and what is not built |
 | [OWASP APTS](docs/apts.md) | The security standard's requirements that the runtime meets, and its gaps |
 | [Decision records](docs/adr/README.md) | Why it is built this way |
