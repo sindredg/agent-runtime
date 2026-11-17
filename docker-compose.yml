@@ -104,12 +104,12 @@ services:
       - "${DOCKER_GID:?set DOCKER_GID to the group id of /var/run/docker.sock}"
     environment:
       DATABASE_URL: *database-url
-      # The fake provider unless .env says otherwise. The compose variables
-      # have their own names, so an ANTHROPIC_API_KEY exported in the shell
-      # never reaches the stack by accident.
-      ANTHROPIC_BASE_URL: ${PROVIDER_BASE_URL:-http://fake-provider:8000}
-      ANTHROPIC_API_KEY: ${PROVIDER_API_KEY:-not-a-real-key}
-      MODEL: ${PROVIDER_MODEL:-hello}
+      # Always the fake provider, whatever .env or the shell holds.
+      # docker-compose.claude.yml (`make up-claude`) is the only way to the
+      # Claude API. The integration and chaos suites check for this URL.
+      ANTHROPIC_BASE_URL: http://fake-provider:8000
+      ANTHROPIC_API_KEY: not-a-real-key
+      MODEL: hello
       # On a volume that every worker mounts: a job that is taken over
       # keeps the files its tools wrote.
       WORKSPACE_ROOT: /workspaces

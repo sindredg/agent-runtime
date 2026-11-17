@@ -14,6 +14,7 @@ import os
 import platform
 import re
 import subprocess
+import sys
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
@@ -447,3 +448,15 @@ def uninterrupted(chaos: Chaos) -> list[dict[str, Any]]:
     assert run.job["takeovers"] == 0
     assert [len(ids) for ids in run.issues.values()] == [1]
     return run.last_conversation
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    """End the session before any test unless every worker is on the fake provider."""
+    check = subprocess.run(  # noqa: S603 - fixed program and script
+        [sys.executable, str(REPO_ROOT / "scripts" / "check_fake_provider.py")],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if check.returncode != 0:
+        pytest.exit(check.stderr.strip(), returncode=pytest.ExitCode.USAGE_ERROR)

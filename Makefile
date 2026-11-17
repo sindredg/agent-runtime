@@ -1,4 +1,4 @@
-.PHONY: all up down clean logs test integration escape chaos
+.PHONY: all up up-claude down clean logs test integration escape chaos
 
 # The group that owns the Docker socket. The worker joins it to start a
 # container for each sandboxed tool call. Every compose command needs it.
@@ -8,8 +8,17 @@ export DOCKER_GID ?= $(shell stat -c %g /var/run/docker.sock)
 all: test
 
 # Build the images, start every service, and wait until all are healthy.
+# The workers are always on the fake provider.
 up:
 	docker compose up --build --wait
+
+# The same stack with the workers on the Claude API. Every job costs money.
+# Needs CLAUDE_API_KEY in .env; CLAUDE_MODEL picks the model. The test suites
+# refuse to run against it. `make up` puts the workers back on the fake.
+# The last line prints the provider and model the worker got, not the key.
+up-claude:
+	docker compose -f docker-compose.yml -f docker-compose.claude.yml up --build --wait
+	docker compose exec -T worker printenv ANTHROPIC_BASE_URL MODEL
 
 # Stop the services and keep the database volume.
 down:

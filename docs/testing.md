@@ -24,6 +24,8 @@ flowchart LR
 | `tests/contract` | by hand | The fake provider against the Claude API |
 
 - The integration and chaos suites never mock Postgres.
+- They stop before the first test unless every worker is on the fake
+  provider ([The Claude API](settings.md#the-claude-api)).
 - `make chaos` replaces the normal stack. Run `make up` afterwards.
 - `CHAOS_RUNS` sets the number of runs with a random kill time (default 20),
   `CHAOS_SEED` the times.
