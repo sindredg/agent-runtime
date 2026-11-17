@@ -19,15 +19,18 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-_STEPS = text(
+# One statement, so the head and the steps come from one snapshot. Read in
+# two, a step committed in between would look like a cut tail.
+_LOG = text(
     """
-    SELECT seq, lease_epoch,
-           (extract(epoch FROM created_at) * 1000000)::bigint AS created_us,
-           kind, payload::text AS payload, hash
-      FROM steps WHERE job_id = :job_id ORDER BY seq
+    SELECT j.head_seq, j.head_hash, s.seq, s.lease_epoch,
+           (extract(epoch FROM s.created_at) * 1000000)::bigint AS created_us,
+           s.kind, s.payload::text AS payload, s.hash
+      FROM jobs j LEFT JOIN steps s ON s.job_id = j.id
+     WHERE j.id = :job_id
+     ORDER BY s.seq
     """
 )
-_HEAD = text("SELECT head_seq, head_hash FROM jobs WHERE id = :job_id")
 
 
 def step_hash(
@@ -78,13 +81,16 @@ async def verify_job(conn: AsyncConnection, job_id: UUID) -> list[Mismatch]:
     that is missing or moved shows as a gap in `seq` or a hash that differs.
     A log cut after its last step shows at the head.
     """
-    head = (await conn.execute(_HEAD, {"job_id": job_id})).one_or_none()
-    if head is None:
-        raise UnknownJob(job_id)
     found: list[Mismatch] = []
+    head = None
     prev = job_id.bytes
     last_seq = 0
-    for row in await conn.execute(_STEPS, {"job_id": job_id}):
+    # Streamed: a long log is not held in memory at once.
+    async for row in await conn.stream(_LOG, {"job_id": job_id}):
+        head = row
+        if row.seq is None:
+            # A job without steps: one row whose step columns are NULL.
+            break
         if row.seq != last_seq + 1:
             found.append(Mismatch(row.seq, f"follows step {last_seq}"))
         want = step_hash(
@@ -100,6 +106,8 @@ async def verify_job(conn: AsyncConnection, job_id: UUID) -> list[Mismatch]:
             found.append(Mismatch(row.seq, "hash differs"))
         prev = row.hash
         last_seq = row.seq
+    if head is None:
+        raise UnknownJob(job_id)
     if head.head_seq != last_seq:
         found.append(Mismatch(None, f"head is step {head.head_seq}, the log ends at {last_seq}"))
     elif head.head_hash != (prev if last_seq else None):

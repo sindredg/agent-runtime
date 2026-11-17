@@ -218,6 +218,19 @@ def test_claim_does_not_wait_for_a_job_another_worker_is_claiming(database_url: 
     assert a.id != b.id
 
 
+async def waits_for_a_lock(conn: AsyncConnection) -> bool:
+    """True once another session of this database waits for a lock, False after 5 s."""
+    query = text(
+        "SELECT count(*) FROM pg_stat_activity"
+        " WHERE datname = current_database() AND wait_event_type = 'Lock'"
+    )
+    for _ in range(50):
+        if (await conn.execute(query)).scalar_one():
+            return True
+        await asyncio.sleep(0.1)
+    return False
+
+
 def test_a_step_insert_and_a_claim_of_one_job_take_turns(database_url: str) -> None:
     """A step insert locks its job row: it moves the head of the chain (ADR 0013).
 
@@ -238,8 +251,7 @@ def test_a_step_insert_and_a_claim_of_one_job_take_turns(database_url: str) -> N
             await writer.commit()
             claimed = await claim_job(claimer, worker_id="w1")
             insert = asyncio.create_task(add_step(writer, job.id, 2))
-            await asyncio.sleep(0.5)
-            waited = not insert.done()
+            waited = await waits_for_a_lock(claimer)
             await claimer.commit()
             async with asyncio.timeout(5):
                 await insert

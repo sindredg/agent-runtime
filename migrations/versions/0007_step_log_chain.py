@@ -125,7 +125,9 @@ END
 $$
 """
 
-# The hashes of the steps that exist already, in `seq` order per job.
+# The hashes of the steps that exist already, in `seq` order per job. Each
+# hash needs the one before it, so this is a loop with one UPDATE per step,
+# under the migration's lock on the table.
 BACKFILL = """
 DO $$
 DECLARE
