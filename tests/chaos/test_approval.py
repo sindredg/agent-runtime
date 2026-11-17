@@ -145,6 +145,8 @@ def run_gated(chaos: Chaos, job_id: str, answer: str, rng: random.Random) -> tup
 def test_a_gated_call_never_runs_before_its_approval_under_random_kills(chaos: Chaos) -> None:
     chaos.workers_up()
     failures: list[str] = []
+    # A run can have several problems; a failed run is counted once.
+    failed_runs = 0
     kills = takeovers = approved_jobs = denied_jobs = approvals = denials = issues = 0
     print(f"\n{RUNS} runs, seed {SEED}, {WORKERS} workers, lease {SHORT_LEASE:g} s, {SCENARIO}")
     for index in range(RUNS):
@@ -171,6 +173,7 @@ def test_a_gated_call_never_runs_before_its_approval_under_random_kills(chaos: C
         approved_jobs += answer == "approve"
         denied_jobs += answer == "deny"
         print(f"{index:>3} {'FAIL' if problems else 'ok  '} {answer:<7} {gated.summary()}")
+        failed_runs += bool(problems)
         failures += [f"run {index} (seed {SEED}:approval:{index}): {p}" for p in problems]
 
     record(
@@ -187,7 +190,7 @@ def test_a_gated_call_never_runs_before_its_approval_under_random_kills(chaos: C
             "approvals": approvals,
             "denials": denials,
             "issues": issues,
-            "failed_runs": len(failures),
+            "failed_runs": failed_runs,
         },
     )
     assert not failures, "\n".join(failures)
