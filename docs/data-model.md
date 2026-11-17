@@ -66,6 +66,8 @@ erDiagram
         bool cancel_requested
         text error
         timestamptz created_at
+        int head_seq "last step, by trigger"
+        bytea head_hash "its hash, by trigger"
     }
     steps {
         uuid job_id PK
@@ -74,12 +76,15 @@ erDiagram
         jsonb payload
         int lease_epoch
         timestamptz created_at
+        bytea hash "by trigger"
     }
 ```
 
 - Lease owner and expiry are set together or not at all. Counters are not
   negative.
 - A job that has steps cannot be deleted.
+- Steps are append-only and chained by a hash. `seq` has no gaps. See
+  [The step log's hash chain](step-log-chain.md).
 - `lease_epoch` counts every claim that handed the job out. `takeovers`
   counts only claims of a `running` job whose lease had expired
   ([ADR 0006](adr/0006-count-takeovers-apart-from-claims.md)).
@@ -132,4 +137,5 @@ Fields that are present only in some steps:
 - Numbers have no int or float type. A float written without a fraction,
   such as `1e22`, is read back as an int.
 - A second step with the same (`job_id`, `seq`) is refused. In a fenced
-  write the refusal undoes the token count with it.
+  write the refusal undoes the token count with it. A step whose `seq` is
+  not the next one is refused by the chain's trigger.

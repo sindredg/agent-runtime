@@ -15,6 +15,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     MetaData,
     Table,
     Text,
@@ -50,6 +51,10 @@ jobs = Table(
     Column("cancel_requested", Boolean, nullable=False, server_default=false()),
     Column("error", Text),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=text("now()")),
+    # The head of the step log's hash chain: the last step's `seq` and hash.
+    # Written only by the insert trigger on steps (ADR 0013).
+    Column("head_seq", Integer, nullable=False, server_default=text("0")),
+    Column("head_hash", LargeBinary),
     Index(
         "jobs_claim_order",
         "created_at",
@@ -68,4 +73,12 @@ steps = Table(
     Column("payload", JSONB, nullable=False),
     Column("lease_epoch", Integer, nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=text("now()")),
+    # Set by the insert trigger, whatever the writer sends (ADR 0013).
+    Column("hash", LargeBinary, nullable=False),
 )
+
+# The columns a `Job` and a `Step` are read from. The chain's columns are
+# read only by `runtime.store.chain`.
+CHAIN_COLUMNS = frozenset({"head_seq", "head_hash", "hash"})
+job_columns = tuple(column for column in jobs.c if column.name not in CHAIN_COLUMNS)
+step_columns = tuple(column for column in steps.c if column.name not in CHAIN_COLUMNS)

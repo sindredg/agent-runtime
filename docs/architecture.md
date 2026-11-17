@@ -122,6 +122,7 @@ Only a tool call with an intent and no result needs more: see
 | [API](api.md) | Routes and the event stream |
 | [Jobs and steps](data-model.md) | Statuses, tables, step kinds |
 | [Database roles](database-roles.md) | The owner, the app role, and the start check |
+| [Hash chain](step-log-chain.md) | How the step log is chained, and what a change runs into |
 | [Durability](durability.md) | Claim, lease, fencing, takeover, graceful stop |
 | [Interrupted tool calls](interrupted-calls.md) | When a call runs again, and when a person is asked |
 | [Sandbox](sandbox.md) | The container of a tool call and its time bounds |

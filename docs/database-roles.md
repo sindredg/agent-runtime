@@ -18,14 +18,16 @@ flowchart LR
 | Role | Used by | `steps` | `jobs` |
 |---|---|---|---|
 | `runtime` | `migrate`, tests that build a database | Everything. It owns the tables and is a superuser. | Everything |
-| `runtime_app` | `api`, `worker` | SELECT, INSERT | SELECT, INSERT, UPDATE by column. No DELETE. |
+| `runtime_app` | `api`, `worker` | SELECT, INSERT | SELECT, INSERT and UPDATE by column: not the [chain's head](step-log-chain.md), and no UPDATE of `id`. No DELETE. |
 
 - `runtime_app` cannot alter a table, add, disable or drop a trigger,
   create a table, or set `session_replication_role`.
-- Its UPDATE on `jobs` is granted per column. A column that a later
-  migration adds is not writable until that migration grants it.
-- Migration 0006 grants the rights. Its downgrade takes them back and keeps
-  the role: a role belongs to the server, not to one database.
+- Its INSERT and UPDATE on `jobs` are granted per column. A column that a
+  later migration adds is not writable until that migration grants it.
+- Migration 0006 grants the rights. 0007 narrows INSERT to columns and
+  takes UPDATE of `id` back.
+  Their downgrades take them back and keep the role: a role belongs to the
+  server, not to one database.
 
 ## How the role gets its login
 
@@ -51,6 +53,8 @@ the role:
 - is a superuser,
 - is a member of the role that owns `jobs` or `steps`,
 - holds UPDATE, DELETE, TRUNCATE or TRIGGER on `steps`,
+- may insert or update `head_seq` or `head_hash` on `jobs`,
+- may run the chain's trigger function `steps_chain`,
 - may create objects in the schema `public`.
 
 Connected as the owner, both would run, and nothing on the step log would
@@ -59,7 +63,9 @@ hold them back. A database that cannot be reached yet is tried again every
 
 ## What this does not protect
 
-- The owner and any superuser can still change or delete steps.
+- The owner and any superuser can switch the triggers off and change or
+  delete steps. The [chain](step-log-chain.md) finds that, unless every
+  later hash and the head are rewritten too.
 - `migrate` sends the app role's password to Postgres in clear, inside the
   compose network. A server set to log every statement logs it.
 - Both passwords have development defaults, and Postgres is published on

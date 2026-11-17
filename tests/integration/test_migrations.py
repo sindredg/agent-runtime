@@ -28,8 +28,10 @@ JOB_COLUMNS = {
     "cancel_requested",
     "error",
     "created_at",
+    "head_seq",
+    "head_hash",
 }
-STEP_COLUMNS = {"job_id", "seq", "kind", "payload", "lease_epoch", "created_at"}
+STEP_COLUMNS = {"job_id", "seq", "kind", "payload", "lease_epoch", "created_at", "hash"}
 
 JOB_STATUSES = [
     "queued",

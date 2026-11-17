@@ -27,7 +27,7 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from runtime.store.jobs import Job, job_from_row
 from runtime.store.payload import check_json
-from runtime.store.schema import jobs, steps
+from runtime.store.schema import job_columns, jobs, step_columns, steps
 from runtime.store.status import JobStatus, can_move
 from runtime.store.steps import Step, StepConflict, StepKind, next_seq, step_from_row
 
@@ -109,7 +109,7 @@ async def append_step(
                 literal(lease_epoch, Integer),
             ),
         )
-        .returning(*steps.c)
+        .returning(*step_columns)
     )
     try:
         row = await _send(engine, statement, job_id, lease_epoch)
@@ -173,7 +173,7 @@ async def leave_running(
             lease_owner=None,
             lease_expires_at=None,
         )
-        .returning(*jobs.c)
+        .returning(*job_columns)
     )
     return job_from_row(await _send(engine, statement, job_id, lease_epoch))
 
@@ -212,7 +212,7 @@ async def fail(engine: AsyncEngine, *, job_id: UUID, lease_epoch: int, error: st
                 literal(lease_epoch, Integer),
             ),
         )
-        .returning(*steps.c)
+        .returning(*step_columns)
     )
     return step_from_row(await _send(engine, statement, job_id, lease_epoch))
 

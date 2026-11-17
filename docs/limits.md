@@ -134,7 +134,8 @@ refused, but the tool ran. An idempotency key on the other side closes this.
   stop a program on the host, which can send any header.
 - Postgres is published on `127.0.0.1` with default passwords for both
   [roles](database-roles.md). A local process can write jobs and steps
-  directly, past the fence and the gate, and as the owner change any step.
+  directly, past the fence and the gate. As the owner it can switch the
+  [chain's](step-log-chain.md) triggers off and rewrite the log.
 - There is no list of jobs and no status page. A job is found only by its
   id ([issue 74](https://github.com/sindredg/agent-runtime/issues/74),
   [issue 76](https://github.com/sindredg/agent-runtime/issues/76)).

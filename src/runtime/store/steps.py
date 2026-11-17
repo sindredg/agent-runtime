@@ -15,7 +15,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from runtime.store.payload import check_json
-from runtime.store.schema import jobs, steps
+from runtime.store.schema import jobs, step_columns, steps
 from runtime.store.status import JobStatus
 
 
@@ -95,7 +95,7 @@ async def append_step(
         insert(steps)
         .values(job_id=job_id, seq=seq, kind=kind, payload=payload, lease_epoch=lease_epoch)
         .on_conflict_do_nothing(index_elements=[steps.c.job_id, steps.c.seq])
-        .returning(*steps.c)
+        .returning(*step_columns)
     )
     row = result.one_or_none()
     if row is None:
@@ -106,7 +106,9 @@ async def append_step(
 async def read_steps(conn: AsyncConnection, job_id: UUID, *, after_seq: int = 0) -> list[Step]:
     """The job's steps with `seq` greater than `after_seq`, in order."""
     result = await conn.execute(
-        select(steps).where(steps.c.job_id == job_id, steps.c.seq > after_seq).order_by(steps.c.seq)
+        select(*step_columns)
+        .where(steps.c.job_id == job_id, steps.c.seq > after_seq)
+        .order_by(steps.c.seq)
     )
     return [step_from_row(row) for row in result]
 
@@ -123,7 +125,7 @@ async def read_progress(
     if limit < 1:
         raise ValueError("limit must be at least 1")
     result = await conn.execute(
-        select(jobs.c.status, *steps.c)
+        select(jobs.c.status, *step_columns)
         .select_from(
             jobs.outerjoin(steps, and_(steps.c.job_id == jobs.c.id, steps.c.seq > after_seq))
         )

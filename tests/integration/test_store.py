@@ -28,7 +28,15 @@ from runtime.store.payload import InvalidPayload, check_json
 from runtime.store.status import TRANSITIONS, JobStatus
 from runtime.store.steps import StepConflict, StepKind, read_progress, read_steps
 
-from .conftest import DEADLINE, add_step, expire_lease, in_transaction, new_job, with_engine
+from .conftest import (
+    DEADLINE,
+    add_step,
+    expire_lease,
+    in_transaction,
+    move_to_the_heap_end,
+    new_job,
+    with_engine,
+)
 
 S = JobStatus
 
@@ -210,30 +218,52 @@ def test_claim_does_not_wait_for_a_job_another_worker_is_claiming(database_url: 
     assert a.id != b.id
 
 
-def test_claim_and_step_insert_on_one_job_do_not_block_each_other(database_url: str) -> None:
-    """A step insert locks its job row against key changes only; a claim changes no key."""
+async def waits_for_a_lock(conn: AsyncConnection) -> bool:
+    """True once another session of this database waits for a lock, False after 5 s."""
+    query = text(
+        "SELECT count(*) FROM pg_stat_activity"
+        " WHERE datname = current_database() AND wait_event_type = 'Lock'"
+    )
+    for _ in range(50):
+        if (await conn.execute(query)).scalar_one():
+            return True
+        await asyncio.sleep(0.1)
+    return False
 
-    async def body(engine: AsyncEngine) -> tuple[Job, Job | None]:
+
+def test_a_step_insert_and_a_claim_of_one_job_take_turns(database_url: str) -> None:
+    """A step insert locks its job row: it moves the head of the chain (ADR 0013).
+
+    A claim skips a job whose step insert has not committed, and a step
+    insert waits for an uncommitted claim of its job. The worker sends each
+    step in autocommit, so the lock lasts one statement.
+    """
+
+    async def body(engine: AsyncEngine) -> tuple[UUID, UUID, Job | None, Job | None, bool]:
         async with engine.begin() as conn:
             job = await new_job(conn)
             other = await new_job(conn)
         async with engine.connect() as writer, engine.connect() as claimer:
-            # An uncommitted step insert does not hide its job from a claim.
             await add_step(writer, job.id, 1)
             async with asyncio.timeout(5):
-                claimed = await claim_job(claimer, worker_id="w1")
-            await writer.commit()
-            # An uncommitted claim does not block a step insert for that job.
-            assert await claim_job(claimer, worker_id="w1") is not None
-            async with asyncio.timeout(5):
-                await add_step(writer, other.id, 1)
-            await writer.commit()
+                skipped_to = await claim_job(claimer, worker_id="w1")
             await claimer.commit()
-        return job, claimed
+            await writer.commit()
+            claimed = await claim_job(claimer, worker_id="w1")
+            insert = asyncio.create_task(add_step(writer, job.id, 2))
+            waited = await waits_for_a_lock(claimer)
+            await claimer.commit()
+            async with asyncio.timeout(5):
+                await insert
+            await writer.commit()
+        return job.id, other.id, skipped_to, claimed, waited
 
-    job, claimed = with_engine(database_url, body)
+    job_id, other_id, skipped_to, claimed, waited = with_engine(database_url, body)
+    assert skipped_to is not None
+    assert skipped_to.id == other_id
     assert claimed is not None
-    assert claimed.id == job.id
+    assert claimed.id == job_id
+    assert waited
 
 
 def test_claim_statement_uses_the_claim_index(database_url: str) -> None:
@@ -516,19 +546,20 @@ def test_a_failed_claim_of_a_capped_job_rolls_back_with_its_error_step(database_
 # Steps
 
 
-def test_steps_are_read_back_in_seq_order(migrated_database_url: str) -> None:
+def test_steps_are_read_back_in_seq_order(migrated_owner_url: str) -> None:
     async def body(conn: AsyncConnection) -> tuple[UUID, list[Any], list[Any]]:
         job = await new_job(conn)
-        for seq in (2, 1, 3):
+        for seq in (1, 2, 3):
             await add_step(conn, job.id, seq, {"n": seq})
-        # Without index scans the rows come back in insertion order (2, 1, 3)
+        await move_to_the_heap_end(conn, job.id, 1)
+        # Without index scans the rows come back in heap order (2, 3, 1)
         # unless the query sorts them. The primary key index would hide a
         # missing ORDER BY.
         await conn.execute(text("SET LOCAL enable_indexscan = off"))
         await conn.execute(text("SET LOCAL enable_bitmapscan = off"))
         return job.id, await read_steps(conn, job.id), await read_steps(conn, job.id, after_seq=2)
 
-    job_id, steps, tail = in_transaction(migrated_database_url, body)
+    job_id, steps, tail = in_transaction(migrated_owner_url, body)
     assert [(s.job_id, s.seq, s.kind, s.payload, s.lease_epoch) for s in steps] == [
         (job_id, n, StepKind.MODEL_REQUEST, {"n": n}, 1) for n in (1, 2, 3)
     ]
@@ -782,14 +813,15 @@ def test_update_status_of_an_unknown_job_is_rejected(migrated_database_url: str)
 
 
 def test_read_progress_returns_status_and_steps_from_one_statement(
-    migrated_database_url: str,
+    migrated_owner_url: str,
 ) -> None:
     async def body(conn: AsyncConnection) -> dict[str, Any]:
         job, other = await new_job(conn), await new_job(conn)
         await add_step(conn, other.id, 1)
         empty = await read_progress(conn, job.id)
-        for seq in (2, 1, 3):
+        for seq in (1, 2, 3):
             await add_step(conn, job.id, seq, {"n": seq})
+        await move_to_the_heap_end(conn, job.id, 1)
         # As in the read_steps test: without index scans, only ORDER BY sorts.
         await conn.execute(text("SET LOCAL enable_indexscan = off"))
         await conn.execute(text("SET LOCAL enable_bitmapscan = off"))
@@ -802,7 +834,7 @@ def test_read_progress_returns_status_and_steps_from_one_statement(
             "steps": await read_steps(conn, job.id),
         }
 
-    got = in_transaction(migrated_database_url, body)
+    got = in_transaction(migrated_owner_url, body)
     assert got["missing"] is None
     assert got["empty"] == (JobStatus.QUEUED, [])
     assert got["all"] == (JobStatus.QUEUED, got["steps"])
