@@ -19,7 +19,7 @@ every job, and also when the API is down or the database is a restored copy.
 
 | Option | For | Against |
 |---|---|---|
-| A route in the API, called by the CLI | One way in for the CLI. No database login on the operator's side. | Needs a running API. Checking every job needs a list of jobs, which the API does not have. The API checks the database it serves. |
+| A route in the API, called by the CLI | One way in for the CLI. No database login on the operator's side. | Needs a running API, and a list of jobs that the API does not have. |
 | The CLI connects to Postgres | Works on a stopped stack and on a copy. Checks every job. | A second way in, and a database login for the operator. |
 
 ## Decision
