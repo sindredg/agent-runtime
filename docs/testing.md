@@ -51,7 +51,7 @@ mechanism switched off, which had to fail. The outcomes are in
 
 | Switch | Effect |
 |---|---|
-| `ESCAPE_DOCKER_DEFAULTS=1` | The escape attempts run with Docker's default container settings |
+| `ESCAPE_DOCKER_DEFAULTS=1` | The escape attempts run as root with Docker's default container settings |
 | `ESCAPE_NO_RULES=1` | The scope tests run with a guard that has no rules |
 
 ## Failure switches
