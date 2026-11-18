@@ -118,7 +118,8 @@ refused, but the tool ran. An idempotency key on the other side closes this.
 - A cancel that arrives as the job finishes can find it `succeeded`. The API
   had answered 202.
 - The deadline timer reads the database clock once, then counts on the
-  worker's clock. A skew between the two is not tested.
+  worker's monotonic clock. A wall clock step during the wait moves the stop
+  by that step, earlier or later. Steps of about 12 ms were seen under WSL2.
 - The 5 s a stop leaves around a sandboxed call is a margin, not a bound. A
   slow database can push a stop past `STOP_GRACE_SECONDS`.
 
