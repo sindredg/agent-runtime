@@ -26,12 +26,24 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from runtime.provider.base import ModelRequest, ModelResponse
 from runtime.provider.messages import AnthropicProvider
 from runtime.sandbox.docker import Docker
-from runtime.sandbox.runner import LABEL, Run, Sandbox, SandboxSettings, ends_within
+from runtime.sandbox.runner import (
+    DEFAULT_WORKSPACE_LIMIT_MIB,
+    LABEL,
+    MIB,
+    Run,
+    Sandbox,
+    SandboxSettings,
+    ends_within,
+)
+from runtime.sandbox.workspace import Bounds, workspace_size
 from runtime.scope import FIXED_DENY, Resolved
 from runtime.store.jobs import DEADLINE_ERROR, Job, cancel_job, claim_job, create_job, get_job
 from runtime.store.status import JobStatus
 from runtime.store.steps import Step, StepKind, read_steps
 from runtime.tools import default_tools
+from runtime.tools.base import ToolCall, ToolResult
+from runtime.tools.run_shell import run_shell_tool
+from runtime.tools.sandboxed import SandboxTool
 from runtime.worker.agent import run_job
 
 from .conftest import Ran, Stack, expire_lease
@@ -90,11 +102,14 @@ def workspace_volume(tmp_path: Path) -> Iterator[tuple[Path, str]]:
 def settings(workspace_volume: tuple[Path, str]) -> SandboxSettings:
     # The test's own uid, which owns the workspace directories on the host.
     # The stack's worker and sandbox share uid 10001 the same way.
+    # The workspace limit is the worker's default: its config always sets one,
+    # so every call here goes through the watcher as in the stack.
     return SandboxSettings(
         image=IMAGE,
         volume=workspace_volume[1],
         user=f"{os.getuid()}:{os.getgid()}",
         timeout=TIMEOUT,
+        workspace_limit=DEFAULT_WORKSPACE_LIMIT_MIB * MIB,
     )
 
 
@@ -693,7 +708,12 @@ def halted_during_a_call(
     *,
     cancel: bool,
     deadline_in: timedelta,
-) -> tuple[JobStatus | None, Job, list[Step], float]:
+) -> tuple[JobStatus | None, Job, list[Step], float, list[str]]:
+    """Also returns the containers left when the job's run returned.
+
+    Looked up before the event loop closes: closing it cancels any task left
+    behind, and that would remove a container the call itself left.
+    """
     provider = OneLongCommand("sleep 300")
     volume = workspace_volume[1]
 
@@ -726,6 +746,7 @@ def halted_during_a_call(
             async with engine.begin() as conn:
                 await cancel_job(conn, claimed.id)
         status = await asyncio.wait_for(run, 60)
+        left = await asyncio.to_thread(our_containers, volume)
         took = (
             time.monotonic() - started
             if cancel
@@ -735,10 +756,10 @@ def halted_during_a_call(
             job = await get_job(conn, claimed.id)
             steps = await read_steps(conn, claimed.id)
         assert job is not None
-        return status, job, steps, took
+        return status, job, steps, took, left
 
-    status, job, steps, took = stack.run(body)
-    return status, job, steps, took
+    status, job, steps, took, left = stack.run(body)
+    return status, job, steps, took, left
 
 
 def test_a_cancel_kills_a_running_command_and_its_container(
@@ -746,14 +767,14 @@ def test_a_cancel_kills_a_running_command_and_its_container(
 ) -> None:
     assert stack.workspace_root == workspace_volume[0]
 
-    status, job, steps, took = halted_during_a_call(
+    status, job, steps, took, left = halted_during_a_call(
         stack, workspace_volume, settings, cancel=True, deadline_in=timedelta(hours=1)
     )
 
     assert status is JobStatus.CANCELLED
     assert job.status is JobStatus.CANCELLED
     assert took < 5.0
-    assert our_containers(workspace_volume[1]) == []
+    assert left == []
     # Killed, not finished: the intent has no result, and the job is final.
     kinds = [step.kind for step in steps]
     assert StepKind.TOOL_INTENT in kinds
@@ -770,14 +791,14 @@ def test_the_deadline_kills_a_running_command_and_fails_the_job(
 ) -> None:
     assert stack.workspace_root == workspace_volume[0]
 
-    status, job, steps, late = halted_during_a_call(
+    status, job, steps, late, left = halted_during_a_call(
         stack, workspace_volume, settings, cancel=False, deadline_in=timedelta(seconds=4)
     )
 
     assert status is JobStatus.FAILED
     assert (job.status, job.error) == (JobStatus.FAILED, DEADLINE_ERROR)
     assert 0 <= late < 5.0
-    assert our_containers(workspace_volume[1]) == []
+    assert left == []
     assert steps[-1].kind is StepKind.ERROR
 
 
@@ -789,7 +810,9 @@ def test_a_lost_lease_kills_a_running_command(
     provider = OneLongCommand("sleep 300")
     volume = workspace_volume[1]
 
-    async def body(engine: AsyncEngine, _: AnthropicProvider) -> tuple[JobStatus | None, float]:
+    async def body(
+        engine: AsyncEngine, _: AnthropicProvider
+    ) -> tuple[JobStatus | None, float, list[str]]:
         async with engine.begin() as conn:
             await stack.create(conn, {"prompt": "wait"})
             claimed = await claim_job(conn, worker_id="w1", lease=timedelta(seconds=2))
@@ -814,11 +837,74 @@ def test_a_lost_lease_kills_a_running_command(
             assert await claim_job(conn, worker_id="w2") is not None
         taken = time.monotonic()
         status = await asyncio.wait_for(run, 30)
-        return status, time.monotonic() - taken
+        took = time.monotonic() - taken
+        # Before the loop closes, as in halted_during_a_call.
+        return status, took, await asyncio.to_thread(our_containers, volume)
 
-    status, took = stack.run(body)
+    status, took, left = stack.run(body)
 
     # Dropped, not ended: the job is the other worker's now.
     assert status is None
     assert took < 5.0
+    assert left == []
+
+
+# The workspace watcher (ADR 0014)
+
+# Writes 1 MiB every 0.2 s, 60 times: 60 MiB in about 12 s if nothing stops it.
+# At 5 MiB/s, the 8 MiB margin of the test below covers 1.6 s of writing past
+# the limit: the 0.2 s interval, the walk and the kill, also on a loaded host.
+WRITER = (
+    "i=0; while [ $i -lt 60 ]; do head -c 1048576 /dev/zero > part-$i;"
+    " i=$((i+1)); sleep 0.2; done; echo wrote it all"
+)
+
+
+def measured(path: Path) -> int:
+    return workspace_size(path, Bounds(2**40, 10**9, time.monotonic() + 60))
+
+
+def tool_call(tool: SandboxTool, root: Path, job_id: uuid.UUID, command: str) -> ToolResult:
+    call = ToolCall(root / str(job_id), {"command": command}, f"{job_id}:toolu_1", 1)
+    return asyncio.run(tool.run(call))
+
+
+def test_a_command_that_writes_past_the_workspace_limit_is_stopped(
+    settings: SandboxSettings, workspace_volume: tuple[Path, str]
+) -> None:
+    """Soft: the overshoot is what the command writes in one interval plus the kill."""
+    root, volume = workspace_volume
+    job_id = new_workspace(root)
+    limit = dataclasses.replace(settings, workspace_limit=8 * MIB, watch_interval=0.2)
+    tool = run_shell_tool(OwnClientSandbox(limit))
+
+    started = time.monotonic()
+    result = tool_call(tool, root, job_id, WRITER)
+    took = time.monotonic() - started
+    size = measured(root / str(job_id))
+
+    assert result.is_error
+    assert result.content.startswith("[stopped: the job's workspace holds ")
+    assert "holds more than its limit of 8.0 MiB" in result.content
+    # Stopped long before the command's 12 s, and close to the limit.
+    assert took < 5
+    assert 8 * MIB < size < 16 * MIB
+    # The container is gone: nothing writes on.
     assert our_containers(volume) == []
+    time.sleep(0.5)
+    assert measured(root / str(job_id)) == size
+
+
+def test_a_workspace_over_its_limit_runs_no_command(
+    settings: SandboxSettings, workspace_volume: tuple[Path, str]
+) -> None:
+    root = workspace_volume[0]
+    job_id = new_workspace(root)
+    (root / str(job_id) / "big").write_bytes(b"b" * (2 * MIB))
+    limit = dataclasses.replace(settings, workspace_limit=MIB)
+
+    result = tool_call(run_shell_tool(OwnClientSandbox(limit)), root, job_id, "touch ran")
+
+    assert result.is_error
+    assert result.content.endswith("its limit of 1.0 MiB. The command did not start.")
+    assert not (root / str(job_id) / "ran").exists()

@@ -61,7 +61,7 @@ clear answer with none, and unknown on anything else.
 The container of a sandboxed call can outlive its worker
 ([ADR 0008](adr/0008-run-each-tool-call-in-its-own-container.md)). Its intent
 records `ends_within`: the seconds after the intent by which the container
-has ended. See [Sandbox](sandbox.md#time-bounds) for the sum, 57 s with the
+has ended. See [Sandbox](sandbox.md#time-bounds) for the sum, 60 s with the
 defaults.
 
 ```mermaid

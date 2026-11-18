@@ -16,9 +16,11 @@ import pytest
 from runtime.sandbox import runner
 from runtime.sandbox.docker import REQUEST_TIMEOUT, DockerError, SandboxError
 from runtime.sandbox.runner import (
+    DEFAULT_WORKSPACE_LIMIT_MIB,
     EPOCH_LABEL,
     JOB_LABEL,
     LABEL,
+    MIB,
     NotStarted,
     Run,
     Sandbox,
@@ -27,6 +29,7 @@ from runtime.sandbox.runner import (
     check_host,
     deny_list,
     ends_within,
+    measure_within,
 )
 from runtime.scope import FIXED_DENY, Resolved
 from runtime.tools.base import ToolCall, ToolResult
@@ -236,8 +239,11 @@ def timed_run(sandbox: Sandbox, scope: Resolved | None = None) -> tuple[float, R
 
 def test_a_whole_call_is_bounded_by_the_containers_bound_plus_one_request() -> None:
     assert call_within(settings()) == ends_within(settings()) + REQUEST_TIMEOUT
-    # The defaults: 15 + 10 + 30 + 2 + 10.
+    # Without a workspace limit: 15 + 10 + 30 + 2 + 10.
     assert call_within(settings()) == 67
+    # The worker's config always sets one: 3 s more for measuring it.
+    limited = settings(workspace_limit=DEFAULT_WORKSPACE_LIMIT_MIB * MIB)
+    assert call_within(limited) == 70
 
 
 def test_a_daemon_that_answers_every_request_late_ends_the_call_within_its_bound(
@@ -251,6 +257,23 @@ def test_a_daemon_that_answers_every_request_late_ends_the_call_within_its_bound
     # The create never came back, so Docker was never asked to start it.
     assert isinstance(outcome, NotStarted), outcome
     assert f"within {call_within(short):g} s" in str(outcome)
+
+
+def test_with_a_workspace_limit_the_run_leaves_the_measurement_its_part_of_the_bound(
+    short: SandboxSettings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The measurement before the call and the run together end within `call_within`."""
+    monkeypatch.setattr(runner, "MEASURE_WITHIN", 1.0)
+    limited = dataclasses.replace(short, workspace_limit=MIB)
+    sandbox = Sandbox(FakeDocker(late=EVERY_REQUEST), limited)  # type: ignore[arg-type]
+
+    took, outcome = timed_run(sandbox)
+
+    assert measure_within(limited) == 1.0
+    run_bound = call_within(limited) - measure_within(limited)
+    assert took < run_bound + 0.3
+    assert isinstance(outcome, NotStarted), outcome
+    assert f"within {run_bound:g} s" in str(outcome)
 
 
 def test_a_late_daemon_becomes_a_failed_result_that_says_the_command_did_not_run(

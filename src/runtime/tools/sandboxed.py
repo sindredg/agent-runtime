@@ -2,15 +2,23 @@
 
 A sandboxed tool only turns the model's input into the command's arguments.
 Everything else about the container is fixed by the sandbox's settings.
+
+With a workspace limit set, the worker measures the job's workspace before
+the call and while it runs (ADR 0014). Over the limit, the command does not
+start, or is stopped. A workspace that cannot be measured counts as over.
 """
 
-from collections.abc import Callable, Sequence
+import asyncio
+import time
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol
 from uuid import UUID
 
 from runtime.sandbox.docker import SandboxError
-from runtime.sandbox.runner import NotStarted, Run, SandboxSettings
+from runtime.sandbox.runner import NotStarted, Run, SandboxSettings, measure_within
+from runtime.sandbox.workspace import Bounds, OverLimit, Unmeasurable, workspace_size
 from runtime.scope import Resolved
 from runtime.tools.base import ToolCall, ToolResult, tool_definition
 
@@ -70,6 +78,70 @@ def describe(run: Run, *, timeout: float, limit: int) -> ToolResult:
     )
 
 
+async def _over(workspace: Path, settings: SandboxSettings, limit: int) -> str | None:
+    """Why the workspace is over its limits, or None while it is within them.
+
+    Returns within `measure_within`, the part of the call's bound kept for it,
+    also when the walk's thread waits for the executor or a slow file system.
+    Past it, or when cancelled, the walk is told to stop and ends on its own.
+    """
+    within = measure_within(settings)
+    bounds = Bounds(
+        size=limit, entries=settings.workspace_entries, deadline=time.monotonic() + within
+    )
+    try:
+        async with asyncio.timeout(within):
+            await asyncio.to_thread(workspace_size, workspace, bounds)
+    except OverLimit as error:
+        return f"the job's workspace {error}"
+    except Unmeasurable as error:
+        return f"the job's workspace cannot be measured ({error})"
+    except TimeoutError:
+        # workspace_size turns its own OSErrors into Unmeasurable: this is the timeout.
+        return f"the job's workspace cannot be measured (the walk took more than {within:g} s)"
+    finally:
+        bounds.stop.set()
+    return None
+
+
+async def _watched(
+    run: Awaitable[Run], workspace: Path, settings: SandboxSettings, limit: int
+) -> Run | str:
+    """Await `run` while measuring the workspace every `watch_interval` seconds.
+
+    Returns why it was stopped instead, once the workspace is over its
+    limits. Stopping cancels the run, and the sandbox kills and removes the
+    container before the cancel completes. A run that ends while a
+    measurement is under way is returned at once.
+    """
+    task = asyncio.ensure_future(run)
+    measuring: asyncio.Future[str | None] | None = None
+    try:
+        while True:
+            done, _ = await asyncio.wait({task}, timeout=settings.watch_interval)
+            if done:
+                return task.result()
+            measuring = asyncio.ensure_future(_over(workspace, settings, limit))
+            await asyncio.wait({task, measuring}, return_when=asyncio.FIRST_COMPLETED)
+            if task.done():
+                return task.result()
+            reason = measuring.result()
+            if reason is not None:
+                return reason
+    finally:
+        if measuring is not None and not measuring.done():
+            # Its walk is told to stop: the next call does not walk beside it.
+            measuring.cancel()
+        if not task.done():
+            task.cancel()
+            # Not suppressed: a cancel of this call that arrives while the
+            # container is removed propagates.
+            await asyncio.wait({task})
+        if not task.cancelled():
+            # Retrieved, so asyncio does not report it as never retrieved.
+            task.exception()
+
+
 @dataclass(frozen=True, slots=True)
 class SandboxTool:
     name: str
@@ -98,13 +170,26 @@ class SandboxTool:
             job_id = UUID(call.workspace.name)
         except ValueError:
             return ToolResult("the workspace is not a job's workspace", is_error=True)
+        settings = self.sandbox.settings
+        limit = settings.workspace_limit
+        if limit is not None and (reason := await _over(call.workspace, settings, limit)):
+            return ToolResult(f"{reason}. The command did not start.", is_error=True)
         try:
             scope = call.scope if self.networked else None
-            run = await self.sandbox.run(job_id, call.lease_epoch, argv, scope)
+            started = self.sandbox.run(job_id, call.lease_epoch, argv, scope)
+            if limit is None:
+                run = await started
+            else:
+                watched = await _watched(started, call.workspace, settings, limit)
+                if isinstance(watched, str):
+                    return ToolResult(
+                        f"[stopped: {watched}. The files it wrote stay; its output is lost.]",
+                        is_error=True,
+                    )
+                run = watched
         except NotStarted as error:
             return ToolResult(f"the sandbox could not start the command: {error}", True)
         except SandboxError as error:
             # Docker may have started the command before it failed.
             return ToolResult(f"the sandbox failed: {error}. The command may have run.", True)
-        settings = self.sandbox.settings
         return describe(run, timeout=settings.timeout, limit=settings.output_limit)

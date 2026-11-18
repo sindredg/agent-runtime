@@ -28,29 +28,75 @@ the command's arguments, never an image, a mount or a flag.
 | User | uid 10001, not root |
 | CPU, memory, processes | 1 CPU, 256 MiB with no swap, 64 processes |
 | Mount | Only the job's directory of the workspace volume, by `volume-subpath` |
+| Workspace size | 1 GiB, soft: see [below](#workspace-size) |
 | Labels | The job id and the lease epoch |
 | Log driver | None |
 
 `run_shell` and `list_dir` are offered only when `SANDBOX_IMAGE` is set, as
 it is in the stack. `read_file` and `create_issue` run in the worker process.
 
+## Workspace size
+
+The job's workspace is on the disk that holds Postgres too. The worker
+measures it and stops a command that makes it too big
+([ADR 0014](adr/0014-limit-a-jobs-workspace-with-a-watcher.md)).
+
+```mermaid
+sequenceDiagram
+    participant W as worker
+    participant V as job workspace
+    participant C as tool container
+    W->>V: measure
+    alt over the limit, or not measurable
+        Note over W: error result, no container
+    else within
+        W->>C: run the command
+        loop every poll interval
+            W->>V: measure
+        end
+        opt over the limit
+            W->>C: kill and remove
+            Note over W: error result, the files stay
+        end
+    end
+```
+
+- The size is the blocks the files and directories take, measured from the
+  worker's mount (`src/runtime/sandbox/workspace.py`). Links are not
+  followed. A sparse file counts what it uses.
+- The walk stops at 100,000 files and directories, 256 levels and 3 s
+  ([ADR 0017](adr/0017-bound-the-workspace-walk-and-state-what-it-cannot-see.md)).
+  Past the first two the workspace is over its limit; a directory it cannot
+  read or a walk that takes too long counts the same. An entry deleted or
+  replaced during the walk is skipped.
+- The limit is soft. A command writes on for up to one interval, plus the
+  time a measurement and the kill take.
+- The walk does not see a file deleted while a process holds it open, space
+  reserved with `fallocate` in one burst, or a file moved behind the walk.
+  None of these is bounded per call. The hard limit is
+  [issue 78](https://github.com/sindredg/agent-runtime/issues/78).
+- A job over its limit cannot shrink: `run_shell` does not start. It goes on
+  without sandboxed tools.
+
 ## Time bounds
 
 ```mermaid
 flowchart LR
-    A[start<br/>15 s bound<br/>+ 10 s request] --> B[command<br/>30 s timeout<br/>+ 2 s margin]
-    B -->|ends_within<br/>57 s| C[removal<br/>10 s]
-    C -->|call_within<br/>67 s| D[steps and<br/>release<br/>5 s]
-    D -->|72 s| E([STOP_GRACE_SECONDS<br/>75 s])
+    M[measure the<br/>workspace<br/>3 s] --> A[start<br/>15 s bound<br/>+ 10 s request]
+    A --> B[command<br/>30 s timeout<br/>+ 2 s margin]
+    B -->|ends_within<br/>60 s| C[removal<br/>10 s]
+    C -->|call_within<br/>70 s| D[steps and<br/>release<br/>5 s]
+    D -->|75 s| E([STOP_GRACE_SECONDS<br/>75 s])
 ```
 
 | Bound | With the defaults | Means |
 |---|---|---|
+| Measurement | 3 s | The walk of the workspace before the call. Only with a workspace limit. |
 | `SANDBOX_TIMEOUT_SECONDS` | 30 s | The command's time, from the start request to the exit status. Then the container is killed. |
 | Start bound | 15 s | Docker is not asked to start the command later than this after the call began |
 | Start request | 10 s | One Docker request's timeout |
-| `ends_within` | 57 s | By then the container has ended, also when its worker is gone. Two cases are [not covered](limits.md#tool-calls). |
-| `call_within` | 67 s | By then the whole call has returned, removal included |
+| `ends_within` | 60 s | By then the container has ended, also when its worker is gone. Two cases are [not covered](limits.md#tool-calls). |
+| `call_within` | 70 s | By then the whole call has returned, removal included |
 | Stop margin | 5 s | For the steps before and after the call, and for handing the job back |
 
 - The command also runs under `timeout` inside the container, at the timeout

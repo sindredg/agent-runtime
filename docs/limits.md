@@ -61,16 +61,17 @@ refused, but the tool ran. An idempotency key on the other side closes this.
 - The wait before a decision about an interrupted sandboxed call assumes the
   worker was not paused before the start request, and that Docker does not
   act on a request late. A container that starts later can still be running.
-- A takeover during a sandboxed call costs up to `ends_within` (57 s with the
+- A takeover during a sandboxed call costs up to `ends_within` (60 s with the
   defaults) before the job goes on.
 
 ## Sandbox and scope
 
 - The worker holds the Docker socket. Whoever controls the worker controls
   the host. Tool containers share the host's kernel.
-- The workspace has no disk quota. A command can fill the disk that holds the
-  Docker volumes, Postgres among them
-  ([issue 28](https://github.com/sindredg/agent-runtime/issues/28)).
+- The workspace limit is soft, and some writes are not seen at all: a file
+  deleted while it is held open, a large `fallocate`. One call can still
+  fill the disk that holds the Docker volumes, Postgres among them. The hard
+  limit is [issue 78](https://github.com/sindredg/agent-runtime/issues/78).
 - A command can also write to `/dev/shm` (counted against its memory) and
   `/dev/mqueue`. Neither outlives the call.
 - A tool container whose removal failed, or was cut off when its worker

@@ -70,6 +70,9 @@ flowchart LR
 | `SANDBOX_IMAGE` | unset | The image of the tool containers. Unset, `run_shell` and `list_dir` are not offered. |
 | `SANDBOX_VOLUME` | required with `SANDBOX_IMAGE` | The named volume mounted at `WORKSPACE_ROOT` |
 | `SANDBOX_TIMEOUT_SECONDS` | 30 | Time a sandboxed command may run. See [Sandbox](sandbox.md#time-bounds). |
+| `SANDBOX_WORKSPACE_LIMIT_MIB` | 1024 | Soft size limit of a job's workspace. See [Sandbox](sandbox.md#workspace-size). |
+| `SANDBOX_WORKSPACE_FILE_LIMIT` | 100000 | Files and directories a job's workspace may hold. Bounds each measurement. |
+| `SANDBOX_WORKSPACE_POLL_SECONDS` | 1 | Seconds between two measurements of the workspace while a command runs |
 | `GUARD_IMAGE` | unset | The image of a scoped call's guard, with nftables. Read only with `SANDBOX_IMAGE`. |
 | `SANDBOX_NETWORK` | set with `GUARD_IMAGE` | The Docker network the guards join. Its subnet is in the deny list. |
 | `SANDBOX_DENY_NETWORKS` | required with `GUARD_IMAGE` | Comma-separated Docker network names whose subnets no scope can reach |
