@@ -18,16 +18,52 @@ _RETRYABLE_STATUSES = frozenset({408, 409, 429})
 _RETRYABLE_ERROR_TYPES = frozenset(
     {"overloaded_error", "api_error", "rate_limit_error", "timeout_error"}
 )
+# The provider is busy: rate limited (429) or overloaded (529, or the same
+# error type inside a stream). The job waits and tries again (ADR 0018).
+_BUSY_STATUSES = frozenset({429, 529})
+_BUSY_ERROR_TYPES = frozenset({"rate_limit_error", "overloaded_error"})
+# A 429 for a spend cap. It has the rate limit's type and no `retry-after`,
+# and waiting does not lift it.
+_SPEND_CAP = "enforced_spend_limit_reached"
+# The longest `retry-after` taken as it is: one day. A job's deadline is at
+# most a week, and a larger value is more likely an error than a plan.
+MAX_RETRY_AFTER = 24 * 3600.0
 # Named here so that the client never falls back to ANTHROPIC_BASE_URL in the
 # process environment: the caller's configuration alone decides.
 CLAUDE_API_URL = "https://api.anthropic.com"
 
 
-def _error_type(error: anthropic.APIStatusError) -> str | None:
+def _error_detail(error: anthropic.APIStatusError) -> dict[str, Any]:
     body = error.body
     detail = body.get("error") if isinstance(body, dict) else None
-    kind = detail.get("type") if isinstance(detail, dict) else None
+    return detail if isinstance(detail, dict) else {}
+
+
+def _error_type(error: anthropic.APIStatusError) -> str | None:
+    kind = _error_detail(error).get("type")
     return kind if isinstance(kind, str) else None
+
+
+def _spend_cap(error: anthropic.APIStatusError) -> bool:
+    details = _error_detail(error).get("details")
+    return isinstance(details, dict) and details.get("error_code") == _SPEND_CAP
+
+
+def retry_after(value: str | None) -> float | None:
+    """The `retry-after` header in seconds, or None when it is missing or not a number.
+
+    The Claude API sends whole seconds. The HTTP-date form is not used by it
+    and is not read. A value over MAX_RETRY_AFTER is cut to it.
+    """
+    if value is None:
+        return None
+    try:
+        seconds = float(value.strip())
+    except ValueError:
+        return None
+    if not 0 <= seconds < float("inf"):
+        return None
+    return min(seconds, MAX_RETRY_AFTER)
 
 
 class AnthropicProvider:
@@ -82,11 +118,15 @@ class AnthropicProvider:
                     f"provider sent an error during the stream: {kind}: {error.message}",
                     status=None,
                     retryable=kind in _RETRYABLE_ERROR_TYPES,
+                    busy=kind in _BUSY_ERROR_TYPES,
                 ) from error
+            capped = status == 429 and _spend_cap(error)
             raise ProviderError(
                 f"provider answered {status}: {error.message}",
                 status=status,
-                retryable=status in _RETRYABLE_STATUSES or status >= 500,
+                retryable=not capped and (status in _RETRYABLE_STATUSES or status >= 500),
+                busy=not capped and status in _BUSY_STATUSES,
+                retry_after=retry_after(error.response.headers.get("retry-after")),
             ) from error
         except (anthropic.APIError, httpx2.HTTPError) as error:
             # Timeouts, a connection that broke during the stream, a response

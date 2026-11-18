@@ -36,6 +36,8 @@ class StatusCause(StrEnum):
 
     CANCEL_REQUESTED = "cancel_requested"
     APPROVAL_REQUESTED = "approval_requested"
+    # The provider was rate limited or overloaded; the job waits (ADR 0018).
+    PROVIDER_BUSY = "provider_busy"
 
 
 @dataclass(frozen=True, slots=True)

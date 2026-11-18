@@ -68,13 +68,17 @@ class Api:
     async def finish(self, job: Job, status: JobStatus = JobStatus.SUCCEEDED) -> None:
         """Finish the job the way its worker does: a fenced move out of `running`.
 
-        A failure brings its `error` step, as it does from a worker.
+        A failure brings its `error` step, as it does from a worker. A move
+        to `waiting` is a wait for a busy provider.
         """
         if status is JobStatus.FAILED:
             await held.fail(self.engine, job_id=job.id, lease_epoch=job.lease_epoch, error="boom")
             return
+        wait = None
+        if status is JobStatus.WAITING:
+            wait = held.Wait(seconds=60, attempt=1, retry_after=None, error="busy")
         await held.leave_running(
-            self.engine, job_id=job.id, lease_epoch=job.lease_epoch, new_status=status
+            self.engine, job_id=job.id, lease_epoch=job.lease_epoch, new_status=status, wait=wait
         )
 
     async def events(self, job_id: UUID, **request: Any) -> list[tuple[int | None, str, Any]]:
@@ -788,10 +792,14 @@ def test_an_answer_is_refused_for_a_job_that_is_not_waiting_for_one(
     assert "only a job that needs approval" in response.json()["detail"]
     assert job is not None
     assert job.status is status
-    # No step was added. A failed job has the one its failure wrote, and a
-    # cancelled job the one its cancel wrote.
+    # No step was added. A failed job has the one its failure wrote, a
+    # cancelled job the one its cancel wrote, a waiting job its wait's.
     assert steps == before
-    written = {JobStatus.FAILED: StepKind.ERROR, JobStatus.CANCELLED: StepKind.STATUS_CHANGED}
+    written = {
+        JobStatus.FAILED: StepKind.ERROR,
+        JobStatus.CANCELLED: StepKind.STATUS_CHANGED,
+        JobStatus.WAITING: StepKind.STATUS_CHANGED,
+    }
     assert [step.kind for step in steps] == ([written[status]] if status in written else [])
     if status is JobStatus.CANCELLED:
         assert steps[0].payload == {

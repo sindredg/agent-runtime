@@ -70,12 +70,13 @@ sequenceDiagram
             W->>D: step tool_result (fenced)
         end
     end
-    W->>D: leave running, or fail with the error step (fenced)
+    W->>D: leave running (to waiting if the provider was busy),<br/>or fail with the error step (fenced)
     A-->>C: one event per step, then end
 ```
 
 The loop ends when the model ends its turn, when a call needs a person, when
-the worker is told to stop, or when the job is halted.
+the provider is busy, when the worker is told to stop, or when the job is
+halted.
 
 Rules of one turn:
 
@@ -84,7 +85,9 @@ Rules of one turn:
 - A response that fails the check fails the job.
 - The calls of one response run one after another.
 - A failed tool call is an error result for the model, and the job goes on.
-- A failed model call fails the job with an `error` step. There is no retry.
+- A rate limit or overload from the provider makes the job wait in
+  `waiting` ([Backoff](backoff.md)). Any other failed model call fails the
+  job with an `error` step.
 
 ## Where a job's state lives
 
@@ -129,6 +132,7 @@ Only a tool call with an intent and no result needs more: see
 | [Sandbox](sandbox.md) | The container of a tool call and its time bounds |
 | [Scope](scope.md) | What a tool can reach on the network |
 | [Cancel, deadline and budget](halt.md) | How a job is stopped and kept inside its limits |
+| [Backoff](backoff.md) | How a job waits out a rate limit or overload |
 | [Approval](approval.md) | Asking a person before a tool call runs |
 | [Settings](settings.md) | Environment variables |
 | [Testing](testing.md) | Suites, failure switches, commands |

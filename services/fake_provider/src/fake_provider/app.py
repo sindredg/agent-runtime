@@ -5,20 +5,26 @@ the number of assistant messages in the request. It answers as a stream of
 server-sent events when the request sets `stream`, otherwise as one JSON
 message. Every request is kept in a log that tests read back as the record
 of what the provider was really asked.
+
+`PUT /_fake/busy` makes it answer every request for one model, or for all,
+with 429 `rate_limit_error` or 529 `overloaded_error` for a number of seconds,
+the way the Claude API does when it is rate limited or overloaded.
 """
 
 import asyncio
 import json
 import os
+import time
 from collections import deque
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from datetime import UTC, datetime
 from importlib import resources
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any, Literal
 
-from fastapi import FastAPI, Request
+from fastapi import Body, FastAPI, Request
 from fastapi.responses import Response, StreamingResponse
+from pydantic import BaseModel, ConfigDict, Field
 
 from fake_provider.messages import build_message, encode_sse, estimate_tokens, stream_events
 from fake_provider.requests import RequestError, check_request, turn_index
@@ -27,6 +33,24 @@ from fake_provider.scenario import Scenario, load_scenarios
 # The log keeps the newest entries and drops older ones. The cap is on the
 # number of requests, not on their size.
 REQUEST_LOG_SIZE = 10_000
+# The longest busy window one call can set: one hour.
+MAX_BUSY_SECONDS = 3600
+# The error type the Claude API sends with each busy status.
+BUSY_ERRORS = {429: "rate_limit_error", 529: "overloaded_error"}
+
+
+class Busy(BaseModel):
+    """The body of `PUT /_fake/busy`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    seconds: float = Field(gt=0, le=MAX_BUSY_SECONDS, allow_inf_nan=False)
+    status: Literal[429, 529] = 429
+    # Sent as the `retry-after` header, in whole seconds. Left out, no header:
+    # not every 429 of the Claude API carries one.
+    retry_after: int | None = Field(default=None, ge=0, le=MAX_BUSY_SECONDS)
+    # Only requests for this model are refused. Left out, every request is.
+    model: str | None = None
 
 
 def _json(content: Any, status: int = 200, headers: dict[str, str] | None = None) -> Response:
@@ -67,11 +91,27 @@ def default_scenarios() -> dict[str, Scenario]:
         return load_scenarios(packaged)
 
 
-def create_app(scenarios: dict[str, Scenario] | None = None) -> FastAPI:
+def create_app(
+    scenarios: dict[str, Scenario] | None = None, clock: Callable[[], float] = time.monotonic
+) -> FastAPI:
+    """The app. `clock` times the busy window; tests pass their own."""
     app = FastAPI(title="fake-provider")
     known = default_scenarios() if scenarios is None else scenarios
     log: deque[dict[str, Any]] = deque(maxlen=REQUEST_LOG_SIZE)
     counter = iter(range(1, 2**62))
+    # The busy window: its settings, and when it ends on the monotonic clock.
+    busy: list[tuple[Busy, float]] = []
+
+    def busy_now(body: Any) -> Busy | None:
+        """The busy window this request falls into, or None."""
+        if not busy:
+            return None
+        window, ends = busy[0]
+        if clock() >= ends:
+            busy.clear()
+            return None
+        model = body.get("model") if isinstance(body, dict) else None
+        return window if window.model in (None, model) else None
 
     def error(status: int, kind: str, message: str, request_id: str) -> Response:
         return _json(
@@ -119,6 +159,7 @@ def create_app(scenarios: dict[str, Scenario] | None = None) -> FastAPI:
 
     @app.post("/v1/messages")
     async def create_message(request: Request) -> Response:
+        """A scripted answer, or the busy window's error while one is set."""
         seq = next(counter)
         request_id = f"req_fake_{seq:08d}"
         try:
@@ -136,6 +177,14 @@ def create_app(scenarios: dict[str, Scenario] | None = None) -> FastAPI:
             "body": body,
         }
         log.append(entry)
+        if (window := busy_now(body)) is not None:
+            kind = BUSY_ERRORS[window.status]
+            entry.update(status=window.status, error=kind, retry_after=window.retry_after)
+            refused = error(window.status, kind, "the fake provider is busy", request_id)
+            refused.headers["request-id"] = request_id
+            if window.retry_after is not None:
+                refused.headers["retry-after"] = str(window.retry_after)
+            return refused
         try:
             name, turn, message, delay = answer(body, request.headers)
         except RequestError as refused:
@@ -176,6 +225,15 @@ def create_app(scenarios: dict[str, Scenario] | None = None) -> FastAPI:
     @app.delete("/_fake/requests", status_code=204)
     async def clear_requests() -> None:
         log.clear()
+
+    @app.put("/_fake/busy", status_code=204)
+    async def set_busy(window: Annotated[Busy, Body()]) -> None:
+        """Answer requests with the window's status from now for `seconds`. Replaces any window."""
+        busy[:] = [(window, clock() + window.seconds)]
+
+    @app.delete("/_fake/busy", status_code=204)
+    async def clear_busy() -> None:
+        busy.clear()
 
     return app
 

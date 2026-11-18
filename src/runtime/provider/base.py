@@ -41,12 +41,25 @@ class ProviderError(Exception):
     `status` is the HTTP status, or None when no response arrived.
     `retryable` says whether the same request may succeed later: rate
     limits, overload, server errors, timeouts and broken connections.
+    `busy` says the provider is rate limited or overloaded: the job waits
+    and sends the request again (ADR 0018). `retry_after` is the provider's
+    `retry-after` header in seconds, None without one.
     """
 
-    def __init__(self, message: str, *, status: int | None, retryable: bool) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        status: int | None,
+        retryable: bool,
+        busy: bool = False,
+        retry_after: float | None = None,
+    ) -> None:
         super().__init__(message)
         self.status = status
         self.retryable = retryable
+        self.busy = busy
+        self.retry_after = retry_after
 
 
 class Provider(Protocol):

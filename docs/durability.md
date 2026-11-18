@@ -33,8 +33,9 @@ What the second worker does depends on where the log ends:
 
 One `UPDATE` in `store/jobs.py` ([ADR 0002](adr/0002-postgres-as-the-job-queue.md)).
 
-- Its subquery picks the oldest job that is `queued`, or `running` with
-  `lease_expires_at` before the database clock.
+- Its subquery picks the oldest job that is `queued`, `waiting` with
+  `not_before` before the database clock ([Backoff](backoff.md)), or
+  `running` with `lease_expires_at` before the database clock.
 - `FOR NO KEY UPDATE SKIP LOCKED` lets many workers claim at once.
 - It sets `lease_owner`, sets `lease_expires_at` from the database clock, and
   increments `lease_epoch`.

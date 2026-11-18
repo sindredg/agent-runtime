@@ -15,11 +15,24 @@ That is why these functions take the engine and not a connection: the caller
 cannot wrap them in a transaction of its own.
 """
 
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Executable, Integer, Row, Text, case, func, insert, literal, select, update
+from sqlalchemy import (
+    Executable,
+    Integer,
+    Interval,
+    Row,
+    Text,
+    case,
+    func,
+    insert,
+    literal,
+    select,
+    update,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -149,7 +162,22 @@ async def renew_lease(
 # Leaving `running` for these writes a `status_changed` step with the move.
 # A release to `queued` is not a decision about the job, and an end with
 # `succeeded` follows the model's last answer: both stay log lines.
-_RECORDED = frozenset({JobStatus.NEEDS_APPROVAL, JobStatus.CANCELLED})
+_RECORDED = frozenset({JobStatus.NEEDS_APPROVAL, JobStatus.CANCELLED, JobStatus.WAITING})
+# Moves a requested cancel turns into `cancelled`: nobody else would stop
+# such a job before its deadline or its `not_before`.
+_CANCELLED_INSTEAD = frozenset({JobStatus.NEEDS_APPROVAL, JobStatus.WAITING})
+
+
+@dataclass(frozen=True, slots=True)
+class Wait:
+    """Why and how long a job waits after a busy provider (ADR 0018)."""
+
+    seconds: float
+    # The busy answers in a row, this one included.
+    attempt: int
+    # The provider's `retry-after`, None without one.
+    retry_after: float | None
+    error: str
 
 
 async def leave_running(
@@ -158,17 +186,24 @@ async def leave_running(
     job_id: UUID,
     lease_epoch: int,
     new_status: JobStatus,
+    wait: Wait | None = None,
 ) -> Job:
     """Move the held job from `running` to `new_status` and give up the lease.
 
-    This is how a worker finishes a job, parks it for an approval, and
-    releases it back to `queued`. A stored error is cleared. A job that
-    would be parked for an approval while its cancel is requested is
-    `cancelled` instead: nobody else would stop it before its deadline. A
-    released job keeps the request; the next claim cancels it.
+    This is how a worker finishes a job, parks it for an approval, makes it
+    wait for a busy provider, and releases it back to `queued`. A stored
+    error is cleared. A job that would be parked for an approval or made to
+    wait while its cancel is requested is `cancelled` instead: nobody else
+    would stop it before its deadline or its `not_before`. A released job
+    keeps the request; the next claim cancels it.
 
-    A park and a cancel also write a `status_changed` step, in the same
-    statement: from `running`, to the status the job got, and the cause.
+    A move to `waiting` takes `wait`. It sets `not_before` to the database
+    clock plus `wait.seconds`, never from the worker's clock.
+
+    A park, a wait and a cancel also write a `status_changed` step, in the
+    same statement: from `running`, to the status the job got, and the
+    cause. A wait's step adds `not_before`, the attempt, the delay, the
+    provider's `retry-after` and its error.
 
     Not to `failed`: that is `fail`, which writes the `error` step with it.
     """
@@ -176,18 +211,40 @@ async def leave_running(
         raise ValueError("a job is failed with held.fail, which also writes its error step")
     if not isinstance(new_status, JobStatus) or not can_move(JobStatus.RUNNING, new_status):
         raise ValueError(f"a running job cannot move to {new_status!r}")
+    if (wait is not None) != (new_status is JobStatus.WAITING):
+        raise ValueError("a move to waiting takes a wait, and only that move does")
+    waiting: dict[str, Any] = {}
+    if wait is not None:
+        if not 0 <= wait.seconds < float("inf") or wait.attempt < 1:
+            raise ValueError(f"not a wait: {wait!r}")
+        waiting = {
+            "attempt": wait.attempt,
+            "delay_seconds": round(wait.seconds, 3),
+            "retry_after": wait.retry_after,
+            "error": wait.error,
+        }
+        check_json(waiting)
     moved = (
         update(jobs)
         .where(*_held(job_id, lease_epoch))
         .values(
             status=(
                 case((jobs.c.cancel_requested, JobStatus.CANCELLED.value), else_=new_status.value)
-                if new_status is JobStatus.NEEDS_APPROVAL
+                if new_status in _CANCELLED_INSTEAD
                 else new_status.value
             ),
             error=None,
             lease_owner=None,
             lease_expires_at=None,
+            not_before=(
+                None
+                if wait is None
+                else case(
+                    (jobs.c.cancel_requested, None),
+                    else_=func.clock_timestamp()
+                    + literal(timedelta(seconds=wait.seconds), Interval),
+                )
+            ),
         )
         .returning(*job_columns)
     )
@@ -196,8 +253,26 @@ async def leave_running(
     held = moved.cte("held")
     cause = case(
         (held.c.status == JobStatus.CANCELLED.value, StatusCause.CANCEL_REQUESTED.value),
+        (held.c.status == JobStatus.WAITING.value, StatusCause.PROVIDER_BUSY.value),
         else_=StatusCause.APPROVAL_REQUESTED.value,
     )
+    change: ColumnElement[Any] = func.jsonb_build_object(
+        "from", JobStatus.RUNNING.value, "to", held.c.status, "cause", cause
+    )
+    if waiting:
+        # Only a job that really waits gets the details. One whose cancel
+        # was requested is cancelled, and its step says only that.
+        change = change.op("||")(
+            case(
+                (
+                    held.c.status == JobStatus.WAITING.value,
+                    literal(waiting, JSONB).op("||")(
+                        func.jsonb_build_object("not_before", held.c.not_before)
+                    ),
+                ),
+                else_=literal({}, JSONB),
+            )
+        )
     step = (
         insert(steps)
         .from_select(
@@ -206,9 +281,7 @@ async def leave_running(
                 held.c.id,
                 next_seq(job_id),
                 literal(StepKind.STATUS_CHANGED.value, Text),
-                func.jsonb_build_object(
-                    "from", JobStatus.RUNNING.value, "to", held.c.status, "cause", cause
-                ),
+                change,
                 literal(lease_epoch, Integer),
             ),
         )

@@ -30,9 +30,12 @@ flowchart LR
 - **A tool call can wait for a person** before it runs.
 - **A job can be cancelled**, is failed at its deadline, and stays inside its
   token budget.
+- **A busy provider slows a job, it does not fail it.** A rate limit or
+  overload makes the job wait, then it goes on.
 
-Not built: retry on provider errors and rate limits. Everything else that is
-missing or accepted is in [Known limits](docs/limits.md).
+Not built: retry on other provider errors, and a limit on provider calls
+shared by workers. Everything else that is missing or accepted is in
+[Known limits](docs/limits.md).
 
 Locally the model provider is a fake that answers from scenario files, so
 nothing here calls a paid API.
@@ -86,7 +89,7 @@ such a run did not reach is named with its result.
 | A tool can reach only its job's scope, and nothing else of the host | Tested, with [accepted exceptions](docs/limits.md#sandbox-and-scope) | [23 of 23 escape tests](docs/results/sandbox.md) |
 | A tool call that needs approval does not run before a person approved it | Tested | [134 issues for 134 approvals](docs/results/controls.md#approval-before-a-tool-call) |
 | Bad tool output does not break a job | Tested | [100 MB cut to 64 KiB, the job goes on](docs/results/controls.md#bad-tool-output) |
-| Provider rate limits slow jobs, they do not fail them | Not built | |
+| Provider rate limits slow jobs, they do not fail them | Built for one job, no shared limiter. Not yet in a recorded run. | [Backoff](docs/backoff.md) |
 | Throughput scales with workers | Not measured | |
 
 Every result is from one run at commit `e656fd8`, on one machine, against

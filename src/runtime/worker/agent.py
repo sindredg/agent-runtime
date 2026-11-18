@@ -21,6 +21,7 @@ import dataclasses
 import inspect
 import logging
 import math
+import random
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -40,13 +41,14 @@ from runtime.scope import ScopeRefused, Target, resolve
 from runtime.spec import JobSpec
 from runtime.store import held
 from runtime.store.clock import seconds_until
-from runtime.store.held import LeaseLost
+from runtime.store.held import LeaseLost, Wait
 from runtime.store.jobs import DEADLINE_ERROR, Job
 from runtime.store.payload import InvalidPayload, check_json
 from runtime.store.status import FINAL_STATUSES, JobStatus
 from runtime.store.steps import Step, StepKind, read_steps
 from runtime.tools.base import AnyTool, ToolCall, ToolRegistry, ToolResult, operation_id
 from runtime.tools.sandboxed import SandboxTool
+from runtime.worker import backoff
 from runtime.worker.approval import DENIED, DENIED_RERUN, gate_reason, not_offered
 from runtime.worker.budget import input_bound, max_tokens_within
 from runtime.worker.halt import Halt, Halted, HaltReason, watch_cancel
@@ -76,6 +78,8 @@ class AgentSettings:
     heartbeat: float = 10.0
     # Crash points for chaos tests. None is switched on unless FAILPOINT is set.
     failpoints: Failpoints = field(default_factory=Failpoints)
+    # The random part of a wait for a busy provider. Tests pass a seeded one.
+    rng: random.Random = field(default_factory=random.Random)
 
 
 class _JobFailed(Exception):
@@ -84,6 +88,16 @@ class _JobFailed(Exception):
 
 class _StoreUnreachable(Exception):
     """A read or write of the job could not be sent to the database."""
+
+
+class _ProviderBusy(Exception):
+    """The provider is rate limited or overloaded. The job waits (ADR 0018)."""
+
+    def __init__(self, error: ProviderError, attempt: int) -> None:
+        super().__init__(str(error))
+        self.error = error
+        # Busy answers in a row, this one included.
+        self.attempt = attempt
 
 
 async def _stored[T](call: Awaitable[T]) -> T:
@@ -595,8 +609,9 @@ async def _loop(
 
     Returns the status to leave the job in: `succeeded`, `needs_approval`,
     or `queued` when `stop` was set and the job is to be given back. Raises
-    _JobFailed if the job cannot finish, LeaseLost as soon as the worker
-    can no longer rely on its lease, and Halted when the job is halted.
+    _JobFailed if the job cannot finish, _ProviderBusy when it has to wait,
+    LeaseLost as soon as the worker can no longer rely on its lease, and
+    Halted when the job is halted.
     """
     model = spec.model or settings.default_model
     failpoints = settings.failpoints
@@ -677,6 +692,10 @@ async def _loop(
             try:
                 response = await _complete_unless_stopped(provider, request, stop, lease, halt)
             except ProviderError as error:
+                if error.busy:
+                    # The request step stays without a response. It is
+                    # sent again once the wait is over.
+                    raise _ProviderBusy(error, state.busy_in_a_row + 1) from error
                 raise _JobFailed(f"model call failed: {error}") from error
             if response is None:
                 continue
@@ -744,6 +763,15 @@ async def _loop(
         raise _JobFailed(failure)
 
 
+def _storable(text: str, instead: str) -> str:
+    """`text`, or `instead` if a JSON column cannot hold it."""
+    try:
+        check_json(text)
+    except InvalidPayload:
+        return instead
+    return text
+
+
 async def _run(
     engine: AsyncEngine,
     provider: Provider,
@@ -756,8 +784,8 @@ async def _run(
 ) -> JobStatus:
     """Run the job and record its outcome. Returns the status it was left in:
     `succeeded`, `failed`, `cancelled`, `needs_approval` when a person has
-    to decide about a tool call, or `queued` when the worker was stopped
-    and released the job.
+    to decide about a tool call, `waiting` when the provider was busy, or
+    `queued` when the worker was stopped and released the job.
 
     The job is halted at its deadline, by the database clock: the time left
     is read once, here, and a timer kept on the worker's clock.
@@ -769,6 +797,7 @@ async def _run(
     writer = _StepWriter(engine, lease, last_seq=steps[-1].seq if steps else 0)
     status = JobStatus.FAILED
     failure: str | None = None
+    wait: Wait | None = None
     left = await _stored(seconds_until(engine, job.deadline))
     if left <= 0:
         halt.set(HaltReason.DEADLINE)
@@ -794,6 +823,15 @@ async def _run(
             failure = DEADLINE_ERROR
     except _JobFailed as error:
         failure = str(error)
+    except _ProviderBusy as busy:
+        status = JobStatus.WAITING
+        retry_after = busy.error.retry_after
+        wait = Wait(
+            seconds=backoff.delay(busy.attempt, retry_after, settings.rng),
+            attempt=busy.attempt,
+            retry_after=retry_after,
+            error=_storable(str(busy.error), "the provider was busy"),
+        )
     except LeaseLost, _StoreUnreachable:
         raise
     except Exception as error:
@@ -803,10 +841,7 @@ async def _run(
         deadline.cancel()
 
     if failure is not None:
-        try:
-            check_json(failure)
-        except InvalidPayload:
-            failure = "the job failed with an error that cannot be stored as text"
+        failure = _storable(failure, "the job failed with an error that cannot be stored as text")
         # One statement for the `error` step and the status: a worker that
         # stops here leaves the job failed, or not failed at all. The step
         # takes the next free seq by itself, also when the failure was a
@@ -817,11 +852,22 @@ async def _run(
         log.info("step", extra={"job_id": job.id, "seq": step.seq, "kind": step.kind.value})
     else:
         left_as = await _stored(
-            held.leave_running(engine, job_id=job.id, lease_epoch=lease.epoch, new_status=status)
+            held.leave_running(
+                engine, job_id=job.id, lease_epoch=lease.epoch, new_status=status, wait=wait
+            )
         )
-        # A job that would wait for a person is cancelled instead if its
-        # cancel was requested meanwhile.
+        # A job that would wait for a person or a busy provider is
+        # cancelled instead if its cancel was requested meanwhile.
         status = left_as.status
+        if status is JobStatus.WAITING:
+            log.info(
+                "provider busy, job waits",
+                extra={
+                    "job_id": job.id,
+                    "not_before": left_as.not_before,
+                    "attempt": wait.attempt if wait else None,
+                },
+            )
     log.info(
         "job finished" if status in FINAL_STATUSES else "job handed back",
         extra={"job_id": job.id, "status": status.value, "error": failure},

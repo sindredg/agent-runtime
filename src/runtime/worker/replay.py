@@ -53,6 +53,11 @@ class Replay:
     # The id of every tool call the model has made in this job. A call's
     # operation id is built from its id, so no later call may use one again.
     used_ids: set[str] = field(default_factory=set)
+    # Busy answers from the provider since the last response: the waits
+    # recorded as `status_changed` steps to `waiting` (ADR 0018). The next
+    # wait grows with it. A request a stopped worker left without an answer
+    # is not counted: it was not refused.
+    busy_in_a_row: int = 0
 
     @property
     def needs_model_call(self) -> bool:
@@ -73,7 +78,8 @@ class Replay:
         the API requires. A `model_request` only records its `max_tokens`,
         and an `error` changes nothing: a request without a response is
         simply sent again. A question to a person and its answer are kept
-        for the worker and are not part of the conversation.
+        for the worker and are not part of the conversation, and so is a
+        wait for a busy provider.
         """
         self.last_seq = step.seq
         payload = step.payload
@@ -97,6 +103,9 @@ class Replay:
             self.stop_reason = payload["stop_reason"]
             self.interrupted, self.interrupted_at = None, None
             self._forget_question()
+            self.busy_in_a_row = 0
+        elif step.kind is StepKind.STATUS_CHANGED and payload.get("to") == "waiting":
+            self.busy_in_a_row += 1
         elif step.kind is StepKind.TOOL_INTENT:
             # Every run of a tool has its own intent, and an approval covers
             # one run. The intent uses it up: if this run is interrupted

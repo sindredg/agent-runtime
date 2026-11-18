@@ -140,20 +140,26 @@ def _literal(value: object) -> Any:
 def claim_statement(worker_id: str, lease: timedelta) -> Update:
     """The one statement that is a claim. Separate so a test can inspect its plan.
 
-    It picks the oldest job that is `queued`, or `running` under a lease
-    that has expired. The second kind is a takeover. The same statement ends
+    It picks the oldest job that is `queued`, `waiting` with its
+    `not_before` passed, or `running` under a lease that has expired. The
+    last kind is a takeover. The same statement ends
     a job instead of handing it out, in this order: one whose cancel was
     requested is `cancelled`; one past its deadline is `failed`; a takeover
     of a job that has already been taken over TAKEOVER_LIMIT times is
     `failed`.
     """
     queued = _literal(JobStatus.QUEUED.value)
+    waiting = _literal(JobStatus.WAITING.value)
     running = _literal(JobStatus.RUNNING.value)
     oldest_claimable = (
         select(jobs.c.id)
         .where(
             or_(
                 jobs.c.status == queued,
+                # The database clock decides when a wait is over (ADR 0018).
+                # A `waiting` job without `not_before` does not match, as
+                # with an expired lease: NULL is not earlier than anything.
+                and_(jobs.c.status == waiting, jobs.c.not_before <= func.clock_timestamp()),
                 # The database clock decides whether a lease is over. A
                 # `running` job without a lease does not match: NULL is not
                 # earlier than anything.
@@ -195,6 +201,8 @@ def claim_statement(worker_id: str, lease: timedelta) -> Update:
             # counted. A stale worker is fenced off all the same: the job is
             # no longer `running`.
             lease_epoch=jobs.c.lease_epoch + case((ended, 0), else_=1),
+            # A wait is over once its job is claimed or ended.
+            not_before=None,
             takeovers=jobs.c.takeovers + case((and_(takeover, ~ended), 1), else_=0),
             error=case(
                 (overdue, DEADLINE_ERROR),
@@ -256,7 +264,9 @@ async def claim_job(
 ) -> Job | None:
     """Claim the oldest claimable job for `worker_id`, or return None if there is none.
 
-    Claimable is a `queued` job, or a `running` job whose lease has expired.
+    Claimable is a `queued` job, a `waiting` job whose `not_before` has
+    passed (by the database clock), or a `running` job whose lease has
+    expired.
     The claim moves the job to `running`, sets the lease, and increments
     `lease_epoch`, all in one statement. Taking a `running` job also
     increments `takeovers`. The claim is final when the caller's transaction
@@ -267,8 +277,6 @@ async def claim_job(
     claimable job is looked for. Such jobs are appended to `failed`, if
     given: no worker runs them again, so the caller is the one to clean up
     after them once its transaction has committed.
-
-    Jobs that are backing off (`waiting`) are not picked up yet.
     """
     if lease <= timedelta(0):
         raise ValueError("lease must be positive")

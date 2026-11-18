@@ -539,6 +539,23 @@ def test_error_and_failed_tool_steps_are_marked() -> None:
     assert format_step(error) == "   5  error           model call failed: 404"
 
 
+def test_a_wait_for_a_busy_provider_says_until_when() -> None:
+    waited = step(
+        3,
+        "status_changed",
+        {
+            "from": "running",
+            "to": "waiting",
+            "cause": "provider_busy",
+            "not_before": "2026-11-18T15:00:05+00:00",
+            "attempt": 1,
+        },
+    )
+    assert format_step(waited) == (
+        "   3  status_changed  running -> waiting (provider_busy) until 2026-11-18T15:00:05+00:00"
+    )
+
+
 def test_long_text_is_cut_to_one_short_line() -> None:
     long = step(9, "tool_result", {"tool_use_id": "t", "content": "x" * 500, "is_error": False})
     line = format_step(long)
