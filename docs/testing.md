@@ -1,6 +1,6 @@
 # Testing
 
-Five suites, each with its own needs. Nothing here calls a paid API except
+Six suites, each with its own needs. Nothing here calls a paid API except
 the contract test, which is run by hand.
 
 ```mermaid
@@ -9,6 +9,7 @@ flowchart LR
     I[tests/integration] --> S[make up:<br/>Postgres, api, worker, fakes]
     E[tests/escape] --> IMG[the sandbox and guard images,<br/>no stack]
     C[tests/chaos] --> CS[make chaos:<br/>three workers, 2 s lease,<br/>failure switches]
+    L[tests/lab] --> LS[make lab:<br/>Gitea, two workers,<br/>a failpoint]
     K[tests/contract] --> S
     K --> KEY[a Claude API key]
 ```
@@ -21,6 +22,7 @@ flowchart LR
 | `tests/integration` | `make up`, then `make integration` | The store on real Postgres, the worker against the fakes, the API over HTTP, the sandbox against Docker |
 | `tests/escape` | `make escape` | Attempts to get out of the sandbox, and scoped calls against two targets |
 | `tests/chaos` | `make chaos` | Workers that are killed, paused, crashed or stopped while jobs run |
+| `tests/lab` | `make lab` | A worker stopped in a call to Gitea ([Lab demo](lab-demo.md)) |
 | `tests/contract` | by hand | The fake provider against the Claude API |
 
 - The integration and chaos suites never mock Postgres.
@@ -29,7 +31,7 @@ flowchart LR
   migrates the test databases ([Database roles](database-roles.md)).
 - They stop before the first test unless every worker is on the fake
   provider ([The Claude API](settings.md#the-claude-api)).
-- `make chaos` replaces the normal stack. Run `make up` afterwards.
+- `make chaos` and `make lab` replace the normal stack. Run `make up` afterwards.
 - `CHAOS_RUNS` and `CHAOS_SEED` set the number and times of random kills.
 - CI runs unit, integration, escape and the short chaos run on every pull
   request.
@@ -39,7 +41,8 @@ flowchart LR
 A test that checks what happened outside a job does not read the job's own
 step log. It reads:
 
-- The fake provider's request log and the fake tracker's list of issues.
+- The fake provider's request log, and the fake tracker's or Gitea's list
+  of issues.
 - The `crash_worker` tool's log file, and a worker's container log.
 - The records of a stand-in provider or tool.
 - Docker's list of containers, and the Postgres log.
@@ -141,10 +144,4 @@ Whole jobs have also run against the API:
 | `uv run python scripts/lint_json.py <files>` | Check JSON syntax |
 | `uv run python scripts/lint_docs.py <files>` | Check the limits of the Markdown pages |
 | `uv run pre-commit install` | Run the checks above before each commit. It does not run tests. |
-
-The schema is defined by the Alembic migrations in `migrations/`. Print the
-SQL without a database:
-
-```sh
-DATABASE_URL=postgresql://user:pass@host/db uv run alembic upgrade head --sql
-```
+| `uv run alembic upgrade head --sql` | Print the schema's SQL from `migrations/`. Needs `DATABASE_URL` set, not a database. |

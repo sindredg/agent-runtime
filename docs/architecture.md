@@ -18,7 +18,7 @@ flowchart LR
     P -.-> CL[Claude API]
     W1 --> WS[/workspace volume/]
     W2 --> WS
-    W1 -->|create_issue| T[fake-tracker]
+    W1 -->|create_issue| T[fake-tracker,<br/>or Gitea in the lab]
     W2 --> T
     W1 -->|Docker socket| D[Docker]
     D --> C[tool container, one per call]
@@ -34,8 +34,9 @@ flowchart LR
 | `migrate` | `migrations/`, `src/runtime/store/migrate.py` | Runs the migrations as the owner, sets the login of the [app role](database-roles.md), and exits. `api` and `worker` start after it. |
 | `fake-provider` | `services/fake_provider/` | Answers `POST /v1/messages` from scenario files and logs each request. |
 | `fake-tracker` | `services/fake_tracker/` | A stand-in issue tracker. Keeps each issue with its operation id. |
+| `gitea` | `docker-compose.lab.yml` | A real issue tracker for the [lab demo](lab-demo.md). Not in `make up`. |
 | Provider client | `src/runtime/provider/` | The worker's one way to call a model: the official SDK behind a `Provider` interface. |
-| Tools | `src/runtime/tools/` | `run_shell` and `list_dir` run in a container per call. `read_file` and `create_issue` run in the worker. |
+| Tools | `src/runtime/tools/` | `run_shell` and `list_dir` run in a container per call. `read_file` and `create_issue` run in the worker; `trackers.py` holds the two trackers. |
 | Sandbox | `src/runtime/sandbox/` | Starts, reads and removes the container of each sandboxed call. A scoped call also gets a guard container. |
 | CLI | `src/runtime/cli.py`, `src/runtime/verify.py` | `runtime submit`, `status`, `logs`, `approve`, `deny`, `cancel` talk to the API. `runtime verify` reads the database. |
 

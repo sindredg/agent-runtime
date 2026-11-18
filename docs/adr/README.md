@@ -24,6 +24,7 @@ flowchart LR
     A13 --> A15[0015 the chain's<br/>trigger, owner only]
     A13 --> A16[0016 verify reads<br/>the database]
     A14 --> A17[0017 bounded walk]
+    A5 --> A19[0019 Gitea check:<br/>a marker line]
     A3[0003 SDK and<br/>a fake provider]
 ```
 
@@ -49,6 +50,7 @@ An arrow means the later record builds on, or follows from, the earlier one.
 | [0016](0016-verify-reads-the-database-not-the-api.md) | `runtime verify` reads the database, not the API | Yes |
 | [0017](0017-bound-the-workspace-walk-and-state-what-it-cannot-see.md) | Bound the workspace walk, and state what it cannot see | Yes |
 | [0018](0018-wait-out-a-busy-provider-in-the-waiting-status.md) | Wait out a busy provider in the `waiting` status | [Yes](../backoff.md), for one worker. No shared limiter |
+| [0019](0019-find-a-gitea-issue-by-a-marker-line-not-by-search.md) | Find a Gitea issue by a marker line, not by search | [Yes](../lab-demo.md), in the lab demo |
 
 Each record states what was built at the time it was written. What is built
 now is described in [Architecture](../architecture.md).

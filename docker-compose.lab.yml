@@ -1,0 +1,71 @@
+# The lab demo: create_issue against Gitea, a real issue tracker in a
+# container, and a worker that stops itself in the middle of the call. Used
+# on top of docker-compose.yml:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.lab.yml up --wait
+#
+# `make lab` builds it and runs tests/lab, which sets Gitea up first: the
+# workers need the token it makes. The workers stay on the fake provider.
+# `make up` afterwards brings the normal stack back.
+name: agent-runtime
+
+services:
+  gitea:
+    # Rootless: Gitea runs as uid 1000, with its built-in SSH server off.
+    # yamllint disable-line rule:line-length
+    image: docker.gitea.com/gitea:28.4.0-rootless@sha256:15ab7fadb44981a2b781f40c712cad07066197f395100ea1c6326e14e5bb073a
+    environment:
+      GITEA__security__INSTALL_LOCK: "true"
+      GITEA__database__DB_TYPE: sqlite3
+      GITEA__server__ROOT_URL: http://127.0.0.1:${LAB_GITEA_PORT:-3000}/
+      GITEA__server__DISABLE_SSH: "true"
+      GITEA__server__START_SSH_SERVER: "false"
+      # Users are made by tests/lab, not by sign-up.
+      GITEA__service__DISABLE_REGISTRATION: "true"
+    volumes:
+      - lab-gitea-data:/var/lib/gitea
+      - lab-gitea-config:/etc/gitea
+    ports:
+      # Published on localhost only, so the issues can be read in a browser.
+      - "127.0.0.1:${LAB_GITEA_PORT:-3000}:3000"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, http://127.0.0.1:3000/api/healthz]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  worker:
+    # Two workers: the job goes on in the other one, or in the one that comes back.
+    deploy:
+      replicas: 2
+    # A worker that stopped at the failpoint comes back.
+    restart: on-failure
+    environment:
+      TRACKER_KIND: gitea
+      TRACKER_URL: http://gitea:3000
+      TRACKER_REPO: lab-admin/shop
+      # Made by tests/lab for each run, for lab-bot. It can write issues and
+      # read its own user, nothing else.
+      TRACKER_TOKEN: ${LAB_GITEA_TOKEN:-}
+      # A short lease, so the takeover after a stop is seconds away.
+      LEASE_SECONDS: "6"
+      HEARTBEAT_SECONDS: "2"
+      POLL_INTERVAL_SECONDS: "0.2"
+      # Where the worker stops itself; tests/lab sets it for each case.
+      FAILPOINT: ${FAILPOINT:-}
+      FAILPOINT_TOOL: create_issue
+    depends_on:
+      gitea:
+        condition: service_healthy
+
+volumes:
+  lab-gitea-data:
+  lab-gitea-config:

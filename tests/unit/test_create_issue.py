@@ -10,6 +10,7 @@ import pytest
 from runtime.tools import default_tools
 from runtime.tools.base import CheckOutcome, ToolCall, ToolResult
 from runtime.tools.create_issue import create_issue_tool
+from runtime.tools.trackers import FakeTracker
 
 URL = "http://tracker.test"
 CALL = ToolCall(
@@ -55,7 +56,7 @@ def tracker() -> Tracker:
 
 
 def tool(tracker: Tracker) -> Any:
-    return create_issue_tool(URL, transport=httpx2.MockTransport(tracker))
+    return create_issue_tool(FakeTracker(URL), transport=httpx2.MockTransport(tracker))
 
 
 def test_it_creates_an_issue_and_sends_the_operation_id(tracker: Tracker) -> None:
@@ -158,12 +159,31 @@ def test_a_tracker_that_cannot_be_asked_either_is_an_error_that_says_the_issue_m
     assert [request.method for request in tracker.requests] == ["POST", "GET"]
 
 
-def test_a_tracker_that_answers_with_an_error_is_not_asked_again(tracker: Tracker) -> None:
-    """An answer arrived. The tool reports it and looks nothing up."""
-    tracker.answer = httpx2.Response(500, text="boom")
+def test_a_tracker_that_refuses_the_request_is_not_asked_again(tracker: Tracker) -> None:
+    """A 4xx says no issue was made. The tool reports it and looks nothing up."""
+    tracker.answer = httpx2.Response(422, json={"detail": "no"})
     result = tool(tracker).run(CALL)
-    assert result == ToolResult("the tracker answered 500", is_error=True)
+    assert result == ToolResult("the tracker answered 422", is_error=True)
     assert [request.method for request in tracker.requests] == ["POST"]
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [httpx2.Response(502, text="bad gateway"), httpx2.Response(201, text="cut off")],
+    ids=["5xx", "malformed-201"],
+)
+def test_an_issue_stored_before_an_unclear_answer_is_reported_as_created(
+    tracker: Tracker, answer: httpx2.Response
+) -> None:
+    """A server error or a broken answer can come after the issue was stored."""
+
+    def store_then_answer(request: httpx2.Request) -> httpx2.Response:
+        stored = tracker(request)
+        return answer if request.method == "POST" else stored
+
+    built = create_issue_tool(FakeTracker(URL), transport=httpx2.MockTransport(store_then_answer))
+    assert built.run(CALL) == ToolResult("created issue 1: CI is red")
+    assert [request.method for request in tracker.requests] == ["POST", "GET"]
 
 
 # The check: did this call already create its issue?
@@ -211,5 +231,32 @@ def test_the_check_answers_unknown_when_the_tracker_cannot_be_asked(
 
 def test_the_tool_is_offered_only_when_a_tracker_is_configured() -> None:
     assert default_tools().get("create_issue") is None
-    assert default_tools(tracker_url=URL).get("create_issue") is not None
-    assert default_tools(tracker_url=URL).get("read_file") is not None
+    assert default_tools(tracker=FakeTracker(URL)).get("create_issue") is not None
+    assert default_tools(tracker=FakeTracker(URL)).get("read_file") is not None
+
+
+@pytest.mark.parametrize(
+    "operation",
+    ["job-1:toolu_1 ", "job-1:a\nagent-runtime operation-id: job-1:b", "job-1:\u00e9", ""],
+    ids=["trailing-space", "line-break", "not-ascii", "empty"],
+)
+def test_an_id_a_tracker_cannot_match_is_never_sent(tracker: Tracker, operation: str) -> None:
+    """Found by its id later, such an issue could answer for another call."""
+    built = tool(tracker)
+    result = built.run(ToolCall(Path("unused"), CALL.input, operation, 1))
+    assert result.is_error
+    assert built.check(ToolCall(Path("unused"), CALL.input, operation, 1)) is CheckOutcome.UNKNOWN
+    assert tracker.requests == []
+
+
+@pytest.mark.parametrize("status", [200, 202, 302])
+def test_an_answer_that_is_neither_created_nor_refused_is_looked_up(
+    tracker: Tracker, status: int
+) -> None:
+    def store_then_answer(request: httpx2.Request) -> httpx2.Response:
+        stored = tracker(request)
+        return httpx2.Response(status, text="?") if request.method == "POST" else stored
+
+    built = create_issue_tool(FakeTracker(URL), transport=httpx2.MockTransport(store_then_answer))
+    assert built.run(CALL) == ToolResult("created issue 1: CI is red")
+    assert [request.method for request in tracker.requests] == ["POST", "GET"]

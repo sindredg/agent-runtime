@@ -103,7 +103,7 @@ listed here is refused.
 | `read_file` | Reads a text file of up to 64 KiB from the workspace | Always |
 | `list_dir` | Lists a directory of the workspace, in a container | `SANDBOX_IMAGE` is set |
 | `run_shell` | Runs a command with `/bin/sh` in the workspace, in a container | `SANDBOX_IMAGE` is set |
-| `create_issue` | Opens an issue in the tracker at `TRACKER_URL` | `TRACKER_URL` is set |
+| `create_issue` | Opens an issue in the fake tracker or in Gitea, at `TRACKER_URL` | `TRACKER_URL` is set |
 
 The stack sets both.
 

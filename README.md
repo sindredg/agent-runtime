@@ -123,11 +123,12 @@ uv installs the pinned Python and tools into `.venv`.
 | `make up-claude` | The same stack with the worker on the Claude API. Every job costs money. |
 | `make logs` | Follow the service logs |
 | `make down` | Stop the services, keep the database volume |
-| `make clean` | Stop the services, delete the database volume |
+| `make clean` | Stop the services, delete the database volume and the lab's Gitea data |
 | `make test` | Unit tests |
 | `make integration` | Integration tests. Needs the stack from `make up`. |
 | `make escape` | Escape tests: tries to get out of the sandbox. Needs no stack. |
 | `make chaos` | Chaos tests: kills, pauses and crashes workers. Run `make up` afterwards. |
+| `make lab` | [Lab demo](docs/lab-demo.md): a worker stopped in a call to Gitea. Run `make up` afterwards. |
 
 Suites, failure switches and the lint commands are in
 [Testing](docs/testing.md). Ports and environment variables are in

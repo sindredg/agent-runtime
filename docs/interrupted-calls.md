@@ -49,7 +49,7 @@ the system behind it whether the call already happened.
 |---|---|---|
 | `read_file` | Yes | |
 | `list_dir` | Yes | |
-| `create_issue` | No | Asks the tracker for an issue with the operation id |
+| `create_issue` | No | Asks the tracker for the issue of the operation id. On Gitea it lists the bot user's issues ([ADR 0019](adr/0019-find-a-gitea-issue-by-a-marker-line-not-by-search.md)). |
 | `run_shell` | No | None: an interrupted command needs a person |
 | `crash_worker` (failure tests only) | Yes, on purpose | |
 
@@ -94,8 +94,9 @@ request, or a Docker daemon that acts on a request late. See
 
 ## When `create_issue` gets no answer
 
-`create_issue` uses the same lookup when its own request times out or the
-connection breaks.
+`create_issue` uses the same lookup when its own request times out, the
+connection breaks, the tracker answers with a 5xx, or the answer is not an
+issue. A 4xx is a refusal and is reported as it is.
 
 | The lookup finds | The result |
 |---|---|

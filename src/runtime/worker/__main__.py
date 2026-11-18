@@ -15,6 +15,7 @@ from runtime.sandbox.runner import Sandbox, check_host, deny_list
 from runtime.store.engine import create_engine
 from runtime.store.roles import wait_for_app_role
 from runtime.tools import default_tools
+from runtime.tools.trackers import tracker_for
 from runtime.worker.agent import AgentSettings
 from runtime.worker.loop import keep_alive, keep_failing_overdue, work
 from runtime.worker.sweep import keep_sweeping
@@ -92,7 +93,7 @@ async def run(config: WorkerConfig) -> None:
                     engine,
                     provider,
                     default_tools(
-                        tracker_url=config.tracker_url,
+                        tracker=tracker_for(config.tracker) if config.tracker else None,
                         chaos_log_dir=config.chaos_log_dir,
                         sandbox=sandbox,
                     ),
