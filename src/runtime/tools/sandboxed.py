@@ -17,7 +17,7 @@ from typing import Any, Protocol
 from uuid import UUID
 
 from runtime.sandbox.docker import SandboxError
-from runtime.sandbox.runner import MEASURE_WITHIN, NotStarted, Run, SandboxSettings
+from runtime.sandbox.runner import NotStarted, Run, SandboxSettings, measure_within
 from runtime.sandbox.workspace import Bounds, OverLimit, Unmeasurable, workspace_size
 from runtime.scope import Resolved
 from runtime.tools.base import ToolCall, ToolResult, tool_definition
@@ -78,22 +78,29 @@ def describe(run: Run, *, timeout: float, limit: int) -> ToolResult:
     )
 
 
-def _bounds(settings: SandboxSettings, limit: int) -> Bounds:
-    deadline = time.monotonic() + MEASURE_WITHIN
-    return Bounds(size=limit, entries=settings.workspace_entries, deadline=deadline)
-
-
 async def _over(workspace: Path, settings: SandboxSettings, limit: int) -> str | None:
     """Why the workspace is over its limits, or None while it is within them.
 
-    The walk is bounded by MEASURE_WITHIN, so this ends in about that time.
+    Returns within `measure_within`, the part of the call's bound kept for it,
+    also when the walk's thread waits for the executor or a slow file system.
+    Past it, or when cancelled, the walk is told to stop and ends on its own.
     """
+    within = measure_within(settings)
+    bounds = Bounds(
+        size=limit, entries=settings.workspace_entries, deadline=time.monotonic() + within
+    )
     try:
-        await asyncio.to_thread(workspace_size, workspace, _bounds(settings, limit))
+        async with asyncio.timeout(within):
+            await asyncio.to_thread(workspace_size, workspace, bounds)
     except OverLimit as error:
         return f"the job's workspace {error}"
     except Unmeasurable as error:
         return f"the job's workspace cannot be measured ({error})"
+    except TimeoutError:
+        # workspace_size turns its own OSErrors into Unmeasurable: this is the timeout.
+        return f"the job's workspace cannot be measured (the walk took more than {within:g} s)"
+    finally:
+        bounds.stop.set()
     return None
 
 
@@ -123,7 +130,7 @@ async def _watched(
                 return reason
     finally:
         if measuring is not None and not measuring.done():
-            # The walk's thread ends by its own deadline.
+            # Its walk is told to stop: the next call does not walk beside it.
             measuring.cancel()
         if not task.done():
             task.cancel()

@@ -142,11 +142,12 @@ def ends_within(settings: SandboxSettings) -> float:
     """Seconds after a call began by which its container has ended, whatever the worker did.
 
     With a workspace limit, the workspace is measured first, within
-    MEASURE_WITHIN. The worker does not ask Docker to start the command after
-    `start_within`, and that request ends within its own timeout. From the
-    start the command has the timeout inside the container. Not covered: a worker that is
-    paused between the start of the call and the start request, and a
-    daemon that acts on a request after the worker gave up on it.
+    MEASURE_WITHIN. The worker does not ask Docker to start the command
+    after `start_within`, and that request ends within its own timeout. From
+    the start the command has the timeout inside the container. Not covered:
+    a worker that is paused between the start of the call and the start
+    request, and a daemon that acts on a request after the worker gave up on
+    it.
     """
     return (
         measure_within(settings)

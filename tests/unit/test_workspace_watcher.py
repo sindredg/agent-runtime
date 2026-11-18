@@ -4,6 +4,8 @@ The integration tests in `test_sandbox.py` run it against Docker.
 """
 
 import asyncio
+import dataclasses
+import errno
 import os
 import time
 import uuid
@@ -12,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from runtime.sandbox import runner
 from runtime.sandbox.runner import MIB, Run, SandboxSettings
 from runtime.sandbox.workspace import MAX_DEPTH, Bounds, OverLimit, Unmeasurable, workspace_size
 from runtime.scope import Resolved
@@ -119,6 +122,33 @@ def test_a_walk_past_its_deadline_cannot_be_measured(tmp_path: Path) -> None:
         (tmp_path / f"f{n}").touch()
     with pytest.raises(Unmeasurable, match="took too long"):
         size(tmp_path, seconds=-1)
+
+
+def test_a_walk_told_to_stop_cannot_be_measured(tmp_path: Path) -> None:
+    for n in range(3000):
+        (tmp_path / f"f{n}").touch()
+    bounds = Bounds(2**40, 10**9, time.monotonic() + 60)
+    bounds.stop.set()
+    with pytest.raises(Unmeasurable, match="was stopped"):
+        workspace_size(tmp_path, bounds)
+
+
+@pytest.mark.parametrize("code", [errno.ENOENT, errno.ENOTDIR, errno.ELOOP])
+def test_a_directory_replaced_since_the_listing_is_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, code: int
+) -> None:
+    """Deleted, or swapped for a file or a link: what a busy command does, not an error."""
+    (tmp_path / "d").mkdir()
+    (tmp_path / "d" / "f").write_bytes(b"x" * 100_000)
+    real_open = os.open
+
+    def swapped(path: str, flags: int, mode: int = 0o777, *, dir_fd: int | None = None) -> int:
+        if dir_fd is not None and path == "d":
+            raise OSError(code, os.strerror(code))
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "open", swapped)
+    assert size(tmp_path) == blocks(tmp_path) + blocks(tmp_path / "d")
 
 
 def test_any_error_of_the_file_system_cannot_be_measured(
@@ -254,13 +284,18 @@ def test_without_a_limit_nothing_is_measured(tmp_path: Path) -> None:
     assert run(sandbox) == ToolResult("wrote it all\n[exit status 0]")
 
 
-def test_a_measurement_past_its_time_box_starts_no_command(
+def test_a_walk_past_its_own_deadline_starts_no_command(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The time box is part of `ends_within`: a slow walk must not delay the start."""
     for n in range(3000):
         (workspace / f"f{n}").touch()
-    monkeypatch.setattr(sandboxed, "MEASURE_WITHIN", -1.0)
+    real_size = workspace_size
+
+    def late(root: Path, bounds: Bounds) -> int:
+        # The walk's own deadline passed: only it, not the event loop's clock.
+        return real_size(root, dataclasses.replace(bounds, deadline=-1.0))
+
+    monkeypatch.setattr(sandboxed, "workspace_size", late)
     sandbox = WritingSandbox(workspace, 64 * MIB, times=1, chunk=1)
 
     result = run(sandbox)
@@ -270,17 +305,45 @@ def test_a_measurement_past_its_time_box_starts_no_command(
     assert sandbox.calls == 0
 
 
+def test_a_walk_that_hangs_past_its_time_box_starts_no_command(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The time box is part of `ends_within`: a walk the file system holds up must not delay
+    the start, and is told to stop."""
+    stopped: list[bool] = []
+
+    def hangs(root: Path, bounds: Bounds) -> int:
+        # As a walk blocked in a system call, or waiting for a thread.
+        stopped.append(bounds.stop.wait(5))
+        return 0
+
+    monkeypatch.setattr(sandboxed, "workspace_size", hangs)
+    monkeypatch.setattr(runner, "MEASURE_WITHIN", 0.3)
+    sandbox = WritingSandbox(workspace, 64 * MIB, times=1, chunk=1)
+
+    started = time.monotonic()
+    result = run(sandbox)
+    took = time.monotonic() - started
+
+    assert result.is_error
+    assert "cannot be measured (the walk took more than 0.3 s)" in result.content
+    assert sandbox.calls == 0
+    assert took < 1.0
+    assert stopped == [True]
+
+
 def test_a_run_that_ends_does_not_wait_for_a_measurement(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     measured = 0
+    stopped: list[bool] = []
 
     def slow(root: Path, bounds: Bounds) -> int:
         nonlocal measured
         measured += 1
         if measured > 1:
-            # Every measurement during the call takes 2 s.
-            time.sleep(2)
+            # Every measurement during the call takes 2 s, unless told to stop.
+            stopped.append(bounds.stop.wait(2))
         return 0
 
     monkeypatch.setattr(sandboxed, "workspace_size", slow)
@@ -293,11 +356,16 @@ def test_a_run_that_ends_does_not_wait_for_a_measurement(
         # Timed in the loop: closing it waits for the walk's thread.
         return result, time.monotonic() - started
 
+    started = time.monotonic()
     result, took = asyncio.run(body())
+    closed = time.monotonic() - started
 
     assert result == ToolResult("wrote it all\n[exit status 0]")
     assert measured >= 2
     assert took < 1.5
+    # The walk under way when the run ended was told to stop: it did not run on.
+    assert stopped[-1] is True
+    assert closed < 1.5
 
 
 class SlowRemoval(WritingSandbox):

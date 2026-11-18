@@ -67,7 +67,8 @@ sequenceDiagram
 - The walk stops at 100,000 files and directories, 256 levels and 3 s
   ([ADR 0017](adr/0017-bound-the-workspace-walk-and-state-what-it-cannot-see.md)).
   Past the first two the workspace is over its limit; a directory it cannot
-  read or a walk that takes too long counts the same.
+  read or a walk that takes too long counts the same. An entry deleted or
+  replaced during the walk is skipped.
 - The limit is soft. A command writes on for up to one interval, plus the
   time a measurement and the kill take.
 - The walk does not see a file deleted while a process holds it open, space

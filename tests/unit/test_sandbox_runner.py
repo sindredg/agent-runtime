@@ -16,6 +16,7 @@ import pytest
 from runtime.sandbox import runner
 from runtime.sandbox.docker import REQUEST_TIMEOUT, DockerError, SandboxError
 from runtime.sandbox.runner import (
+    DEFAULT_WORKSPACE_LIMIT_MIB,
     EPOCH_LABEL,
     JOB_LABEL,
     LABEL,
@@ -238,8 +239,11 @@ def timed_run(sandbox: Sandbox, scope: Resolved | None = None) -> tuple[float, R
 
 def test_a_whole_call_is_bounded_by_the_containers_bound_plus_one_request() -> None:
     assert call_within(settings()) == ends_within(settings()) + REQUEST_TIMEOUT
-    # The defaults: 15 + 10 + 30 + 2 + 10.
+    # Without a workspace limit: 15 + 10 + 30 + 2 + 10.
     assert call_within(settings()) == 67
+    # The worker's config always sets one: 3 s more for measuring it.
+    limited = settings(workspace_limit=DEFAULT_WORKSPACE_LIMIT_MIB * MIB)
+    assert call_within(limited) == 70
 
 
 def test_a_daemon_that_answers_every_request_late_ends_the_call_within_its_bound(

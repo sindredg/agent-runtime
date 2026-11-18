@@ -43,9 +43,11 @@ are left to [issue 78](https://github.com/sindredg/agent-runtime/issues/78).
 - The walk stops at a limit on files and directories (setting, 100,000), at
   256 levels, and at 3 s. Past the first two the workspace is over its
   limit. Too deep, too slow, or any file system error counts as over too.
+  An entry deleted or replaced since its directory was listed is skipped.
 - The walk also stops as soon as the size is passed.
-- The 3 s are part of `ends_within` and `call_within`, before the start
-  bound. With the defaults the call ends within 70 s, which fits the 75 s
+- The worker waits at most 3 s for a walk, also one held up by the file
+  system, and then tells it to stop. The 3 s are part of `ends_within` and
+  `call_within`, before the start bound. With the defaults the call ends within 70 s, which fits the 75 s
   stop grace with its 5 s margin.
 - A command that ends while a walk runs is not held up by the walk.
 
