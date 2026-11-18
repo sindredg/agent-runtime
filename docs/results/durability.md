@@ -54,7 +54,7 @@ With the mechanism off:
 
 | Removed | Outcome |
 |---|---|
-| The intent write | The two failpoint tests around the tool call fail: the log held no intent for the call. |
+| The intent write | The two failpoint tests around the tool call fail. Stopped after the tool ran: two issues for one operation id. |
 | The tools' own idempotency flags: every tool idempotent | Stopped after the tool ran: two issues for one operation id |
 | The Gitea check, forced to "not done" | Stopped after the call ran: two issues in Gitea |
 | The marker line in the issue body | Two issues in Gitea in one case, an issue without its marker in the other |
@@ -101,8 +101,8 @@ With the mechanism off:
 
 | Removed | Outcome |
 |---|---|
-| The refusal triggers | 4 tests fail: the owner's UPDATE, DELETE and TRUNCATE went through |
-| The hash comparison in verify | 15 tests fail: no change was found |
+| The refusal triggers | The owner's UPDATE, DELETE and TRUNCATE went through: 3 tests fail, and the downgrade test |
+| The hash comparison in verify | 15 tests fail. The 3 changes in place went unfound, and 4 more cases were flagged only by the order or head check. |
 
 ## Also tested
 

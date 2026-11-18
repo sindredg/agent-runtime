@@ -96,8 +96,9 @@ log. See [Testing](../testing.md#records-a-test-trusts).
   Gitea in a container, in the lab. The contract test against the Claude API
   was not part of this run ([The contract test](../contract-test.md)), and
   eight jobs ran against the API separately ([Runs against the Claude API](api.md)).
-- The chaos run's worker logs hold no error line. An earlier run's lease
-  renewals that timed out are not explained
+- The chaos run's worker logs, 10,484 lines, hold no error-level line and
+  no failed lease renewal. An earlier run's lease renewals that timed out are
+  not explained
   ([issue 69](https://github.com/sindredg/agent-runtime/issues/69)).
 - Everything ran on one host with one clock. A lost network between a worker
   and the database is covered by an integration test that cuts the database
