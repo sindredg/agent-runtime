@@ -19,7 +19,7 @@ from runtime.store.steps import StepKind, read_steps
 from runtime.tools import default_tools
 from runtime.worker.agent import run_job
 
-from .conftest import Stack
+from .conftest import Stack, database_now
 
 # The pass line of G7.
 WITHIN = 5.0
@@ -91,9 +91,10 @@ def test_the_deadline_stops_a_job_in_the_middle_of_a_model_call(stack: Stack) ->
         status = await asyncio.wait_for(
             run_job(engine, provider, default_tools(), job, stack.settings()), 30
         )
-        late = (datetime.now(UTC) - job.deadline).total_seconds()
         assert status is JobStatus.FAILED
         async with engine.connect() as conn:
+            # By the clock the worker checks the deadline against.
+            late = (await database_now(conn) - job.deadline).total_seconds()
             final = await get_job(conn, job.id)
             steps = await read_steps(conn, job.id)
         assert final is not None

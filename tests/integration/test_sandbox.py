@@ -46,7 +46,7 @@ from runtime.tools.run_shell import run_shell_tool
 from runtime.tools.sandboxed import SandboxTool
 from runtime.worker.agent import run_job
 
-from .conftest import Ran, Stack, expire_lease
+from .conftest import Ran, Stack, database_now, expire_lease
 from .test_resume import PARKED
 
 SOCKET = os.environ.get("DOCKER_SOCKET", "/var/run/docker.sock")
@@ -746,12 +746,13 @@ def halted_during_a_call(
             async with engine.begin() as conn:
                 await cancel_job(conn, claimed.id)
         status = await asyncio.wait_for(run, 60)
+        if cancel:
+            took = time.monotonic() - started
+        else:
+            # By the clock the worker checks the deadline against.
+            async with engine.connect() as conn:
+                took = (await database_now(conn) - claimed.deadline).total_seconds()
         left = await asyncio.to_thread(our_containers, volume)
-        took = (
-            time.monotonic() - started
-            if cancel
-            else (datetime.now(UTC) - claimed.deadline).total_seconds()
-        )
         async with engine.connect() as conn:
             job = await get_job(conn, claimed.id)
             steps = await read_steps(conn, claimed.id)
