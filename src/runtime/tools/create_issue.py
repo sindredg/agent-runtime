@@ -10,10 +10,16 @@ have stored the issue by then, and a model that is told the call failed may
 make it again: a new call, which no operation id connects to the first.
 """
 
+import re
+
 import httpx2
 
 from runtime.tools.base import CheckAnswer, CheckOutcome, Tool, ToolCall, ToolResult
 from runtime.tools.trackers import Issue, Refused, Tracker
+
+# The characters an operation id may have here. A tracker finds the issue by
+# the id, so an id with a space or a line break could match another call's.
+_SENDABLE_ID = re.compile(r"[A-Za-z0-9_.:-]{1,200}")
 
 
 def _created(issue: Issue) -> ToolResult:
@@ -29,14 +35,17 @@ def create_issue_tool(tracker: Tracker, *, transport: httpx2.BaseTransport | Non
             return ToolResult(
                 "input must have a non-empty string `title` and a string `body`", True
             )
+        if not _SENDABLE_ID.fullmatch(call.operation_id):
+            return ToolResult("the call's id has characters a tracker cannot match", True)
         try:
             with tracker.client(transport) as http:
                 return _created(tracker.create(http, title, body, call.operation_id))
         except Refused as error:
-            if error.status < 500:
+            if 400 <= error.status < 500:
                 # The tracker refused the request: no issue.
                 return ToolResult(str(error), is_error=True)
-            # A server error can come after the issue was stored.
+            # Any other answer, a server error above all, can come after
+            # the issue was stored.
             return look_up(call, str(error))
         except httpx2.HTTPError as error:
             return look_up(call, f"the tracker could not be reached: {error!r}")
@@ -63,6 +72,9 @@ def create_issue_tool(tracker: Tracker, *, transport: httpx2.BaseTransport | Non
         answer without such an issue: not done. Anything else is unknown,
         and a person is asked.
         """
+        if not _SENDABLE_ID.fullmatch(call.operation_id):
+            # The run sent nothing for such an id, but say so only to a person.
+            return CheckOutcome.UNKNOWN
         try:
             with tracker.client(transport) as http:
                 found = tracker.find(http, call.operation_id)

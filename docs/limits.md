@@ -48,8 +48,11 @@ refused, but the tool ran. An idempotency key on the other side closes this.
 
 - "Not done" from a tool's check is the tool author's claim. A check that
   cannot rule out a request still on its way has to answer unknown.
+  `create_issue` does not wait out a stalled request of an in-process call
+  ([issue 103](https://github.com/sindredg/agent-runtime/issues/103)).
 - On Gitea, the `create_issue` check misses an issue whose marker line a
-  person edited or wrote below. It answers unknown past 1,000 issues by its user
+  person edited or wrote below, and is fooled by a bot issue edited to end
+  with another call's marker. It answers unknown past 1,000 issues by its user
   ([ADR 0019](adr/0019-find-a-gitea-issue-by-a-marker-line-not-by-search.md)).
 - The operation id protects a call the runtime runs again. A model that is
   told a call failed and asks again makes a new call with a new id.

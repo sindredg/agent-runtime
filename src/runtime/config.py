@@ -70,9 +70,12 @@ def _http_url(env: Mapping[str, str], name: str) -> str | None:
     value = env.get(name, "")
     if not value:
         return None
-    parts = urlsplit(value)
-    if "@" in parts.netloc:
+    if "@" in value:
         raise ConfigError(f"{name} must not hold a user name or password")
+    try:
+        parts = urlsplit(value)
+    except ValueError as error:
+        raise ConfigError(f"{name} is not a URL: {error}") from error
     if parts.scheme not in ("http", "https") or not parts.netloc or "?" in value or "#" in value:
         raise ConfigError(f"{name} must be an http or https URL without a query, got {value!r}")
     return value.rstrip("/")

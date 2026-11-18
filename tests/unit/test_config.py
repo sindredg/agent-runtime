@@ -137,6 +137,9 @@ def test_the_heartbeat_must_be_shorter_than_the_lease(env: dict[str, str]) -> No
         "http://gitea:3000/?x=",
         "http://gitea:3000#",
         "http://user:pw@gitea:3000",
+        "http:user:pw@gitea",
+        "https:/user:pw@gitea",
+        "http://[::1",
     ],
 )
 def test_the_tracker_url_must_be_a_plain_http_or_https_url(value: str) -> None:

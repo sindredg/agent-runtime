@@ -28,7 +28,11 @@ call still has to tell "done" from "not done" without guessing.
 A trial on Gitea 28.4.0: the `q=` search goes through a full-text index. It
 did not find an exact operation id right after the issue was created. A
 plain list of issues, filtered by author, showed each new issue at once (20
-of 20). It is sorted by creation; an edit or a comment does not move an issue.
+of 20).
+
+The list is sorted by creation, newest first; an edit or a comment does not
+move an issue. 130 issues made within 4 seconds were each read once, in
+issue number order, so ties are broken by id (on SQLite).
 
 ## Options
 
@@ -43,8 +47,9 @@ of 20). It is sorted by creation; an edit or a comment does not move an issue.
 List and match.
 
 - The tool appends `agent-runtime operation-id: <id>` as the body's last
-  line. Only a body that ends with that line counts. The model's text comes
-  before it, so a marker the model wrote cannot answer for another call.
+  line. Only a body that ends with that line counts. The model's text
+  comes before it, so a marker the model wrote cannot answer for another
+  call. An id with a space or a line break is never sent.
 - The check asks Gitea for the token's user (`GET /user`) and lists only
   that user's issues. No setting can name a different user than the one
   that opened the issues. Another author in that list gives "unknown".
@@ -60,6 +65,10 @@ List and match.
 - A deletion moves later issues up past the page being read. It also lowers
   the count, so it gives "unknown". So does a new issue by the same user.
 - A person who edits the marker line, or writes below it, makes the check
-  miss the issue. A rerun then opens a second issue.
-- A request still on its way to Gitea when the check runs is not seen. The
-  same holds for the fake tracker. A takeover comes a lease after the kill.
+  miss the issue. A rerun then opens a second issue. One who makes a bot
+  issue end with another call's marker makes that call look done.
+- A request still on its way to Gitea when the check runs is not seen. A
+  killed worker's request dies with it. A stalled one does not
+  ([issue 103](https://github.com/sindredg/agent-runtime/issues/103)).
+- The check asks the tracker the worker has now, not the one the call went
+  to ([issue 104](https://github.com/sindredg/agent-runtime/issues/104)).
