@@ -114,6 +114,16 @@ async def expire_lease(conn: AsyncConnection, job_id: UUID) -> None:
     )
 
 
+async def database_now(conn: AsyncConnection) -> datetime:
+    """The database clock, which decides every deadline, lease and wait.
+
+    A test that measures against one of those reads this, not the host clock.
+    Here the two share a kernel; against a remote database they would not.
+    """
+    now: datetime = (await conn.execute(text("SELECT clock_timestamp()"))).scalar_one()
+    return now
+
+
 type Connection = asyncpg.Connection[asyncpg.Record]
 
 

@@ -19,7 +19,7 @@ from runtime.store.steps import StepKind, read_steps
 from runtime.tools import default_tools
 from runtime.worker.agent import run_job
 
-from .conftest import Stack
+from .conftest import Stack, database_now
 
 # The pass line of G7.
 WITHIN = 5.0
@@ -88,10 +88,16 @@ def test_the_deadline_stops_a_job_in_the_middle_of_a_model_call(stack: Stack) ->
 
     async def body(engine: AsyncEngine, _: AnthropicProvider) -> tuple[float, Job, list[str]]:
         job = await start(engine, stack, timedelta(seconds=2))
+        # Measured as the worker keeps the deadline: the time left read once
+        # from the database clock, then counted on the monotonic clock. The
+        # wall clock can be stepped during the wait, by an NTP or VM time sync.
+        async with engine.connect() as conn:
+            left = (job.deadline - await database_now(conn)).total_seconds()
+        started = time.monotonic()
         status = await asyncio.wait_for(
             run_job(engine, provider, default_tools(), job, stack.settings()), 30
         )
-        late = (datetime.now(UTC) - job.deadline).total_seconds()
+        late = time.monotonic() - started - left
         assert status is JobStatus.FAILED
         async with engine.connect() as conn:
             final = await get_job(conn, job.id)

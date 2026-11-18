@@ -36,7 +36,7 @@ from runtime.store.status import JobStatus
 from runtime.store.steps import StepKind, read_steps
 from runtime.worker.loop import keep_failing_overdue
 
-from .conftest import expire_lease, with_engine
+from .conftest import database_now, expire_lease, with_engine
 
 S = JobStatus
 LATER = timedelta(hours=1)
@@ -207,9 +207,10 @@ def test_the_workers_timer_fails_a_parked_job_within_seconds_of_its_deadline(
             while True:
                 async with engine.connect() as conn:
                     found = await get_job(conn, job.id)
+                    now = await database_now(conn)
                 assert found is not None
                 if found.status is S.FAILED:
-                    return (datetime.now(UTC) - job.deadline).total_seconds()
+                    return (now - job.deadline).total_seconds()
                 await asyncio.sleep(0.05)
         finally:
             stop.set()
