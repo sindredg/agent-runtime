@@ -727,6 +727,12 @@ def halted_during_a_call(
             )
             claimed = await claim_job(conn, worker_id="w1")
         assert claimed is not None
+        # The deadline is measured as the worker keeps it: the time left read
+        # once from the database clock, then counted on the monotonic clock.
+        # The wall clock can be stepped during the wait.
+        async with engine.connect() as conn:
+            time_left = (claimed.deadline - await database_now(conn)).total_seconds()
+        started = time.monotonic()
         run = asyncio.create_task(
             run_job(
                 engine,
@@ -746,12 +752,9 @@ def halted_during_a_call(
             async with engine.begin() as conn:
                 await cancel_job(conn, claimed.id)
         status = await asyncio.wait_for(run, 60)
-        if cancel:
-            took = time.monotonic() - started
-        else:
-            # By the clock the worker checks the deadline against.
-            async with engine.connect() as conn:
-                took = (await database_now(conn) - claimed.deadline).total_seconds()
+        took = time.monotonic() - started
+        if not cancel:
+            took -= time_left
         left = await asyncio.to_thread(our_containers, volume)
         async with engine.connect() as conn:
             job = await get_job(conn, claimed.id)
