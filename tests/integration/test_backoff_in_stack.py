@@ -1,13 +1,13 @@
 """G5 for one job, through the whole stack: a rate limit slows the job, it does not fail it.
 
-The pass line is fixed before the run (2b task 8): the fake answers 429 with
+The pass line, fixed before the run: the fake answers 429 with
 `retry-after: 5` for 60 s, starting before one `ci-triage` job is submitted.
 The job ends `succeeded` with the tool calls of a healthy run, it was in
 `waiting` with `not_before` set, no request of it reaches the fake earlier
 than 5 s after a 429 to it, and the fake refuses at most 6 of its requests.
 
-The fake's request log is the record of what the worker sent. The shared
-limiter across workers and the 50-job run stay with G5 in milestone 3.
+The fake's request log is the record of what the worker sent. A limiter
+shared by workers, and a run of many jobs, are not part of this test.
 """
 
 import asyncio
