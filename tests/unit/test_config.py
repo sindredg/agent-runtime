@@ -127,10 +127,23 @@ def test_the_heartbeat_must_be_shorter_than_the_lease(env: dict[str, str]) -> No
         WorkerConfig.from_env({**WORKER_ENV, **env})
 
 
-@pytest.mark.parametrize("value", ["fake-tracker:8000", "ftp://tracker", "file:///etc/passwd"])
-def test_the_tracker_url_must_be_http_or_https(value: str) -> None:
-    with pytest.raises(ConfigError, match="TRACKER_URL"):
+@pytest.mark.parametrize(
+    "value",
+    [
+        "fake-tracker:8000",
+        "ftp://tracker",
+        "file:///etc/passwd",
+        "http://",
+        "http://gitea:3000/?x=",
+        "http://gitea:3000#",
+        "http://user:pw@gitea:3000",
+    ],
+)
+def test_the_tracker_url_must_be_a_plain_http_or_https_url(value: str) -> None:
+    with pytest.raises(ConfigError, match="TRACKER_URL") as raised:
         WorkerConfig.from_env({**WORKER_ENV, "TRACKER_URL": value})
+    # A password in the URL is not repeated.
+    assert "pw" not in str(raised.value)
 
 
 GITEA_ENV = {

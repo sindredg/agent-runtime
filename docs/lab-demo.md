@@ -17,7 +17,7 @@ sequenceDiagram
     Note over W2: the lease runs out (6 s)
     W2->>D: claim: takeover, lease epoch 2
     W2->>D: read the log: an intent without a result
-    W2->>G: list lab-bot's issues
+    W2->>G: whose token is this? list that user's issues
     G-->>W2: issue 3 names the operation id
     W2->>D: tool_result, marked recovered
     W2->>D: job succeeded

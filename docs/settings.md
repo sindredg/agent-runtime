@@ -69,9 +69,9 @@ flowchart LR
 | `TRACKER_REPO` | unset | Gitea only: the repository, as `owner/name` |
 | `TRACKER_TOKEN` | unset | Gitea only: a token with `write:issue` and `read:user`. The check counts only its user's issues. |
 
-The [lab demo](lab-demo.md) sets these for Gitea. It also reads
-`LAB_GITEA_PORT` (3000) and `LAB_GITEA_PASSWORD` (`lab-admin-dev`) for the
-Gitea container and its admin user.
+The [lab demo](lab-demo.md) sets these for Gitea. `tests/lab` reads
+`LAB_GITEA_PORT` (3000) and `LAB_GITEA_PASSWORD` (`lab-admin-dev`, Gitea's
+admin) from the shell, and compose reads the port from `.env` too.
 
 ## Worker: workspace and sandbox
 

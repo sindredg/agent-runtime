@@ -64,7 +64,6 @@ class Lab:
         self.gitea = httpx2.Client(
             base_url=f"{GITEA_URL}/api/v1", auth=(ADMIN, ADMIN_PASSWORD), timeout=10
         )
-        self.token = ""
 
     # Setup
 
@@ -108,12 +107,14 @@ class Lab:
         bot_password = secrets.token_urlsafe(24)
         self.user(BOT, bot_password, admin=False)
         self.repository()
-        self.token = self.new_token(bot_password)
+        # In the process environment, which compose inherits. Never an
+        # argument of run(): pytest prints a failing call's arguments.
+        os.environ["LAB_GITEA_TOKEN"] = self.new_token(bot_password)
 
     def workers_up(self, failpoint: str = "") -> None:
         """The whole stack, with the workers stopping at `failpoint`. Matching containers stay."""
         run(*COMPOSE, "up", "--detach", "--wait", "--no-build", "--scale", f"worker={WORKERS}",
-            env={"LAB_GITEA_TOKEN": self.token, "FAILPOINT": failpoint})  # fmt: skip
+            env={"FAILPOINT": failpoint})  # fmt: skip
         for container in run(*COMPOSE, "ps", "--quiet", "worker").split():
             provider = run("docker", "exec", container, "printenv", "ANTHROPIC_BASE_URL").strip()
             if provider != "http://fake-provider:8000":

@@ -6,6 +6,7 @@ import socket
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from runtime.failpoints import NAMES as FAILPOINT_NAMES
 from runtime.sandbox.runner import (
@@ -61,12 +62,19 @@ def _positive_float(env: Mapping[str, str], name: str, default: float) -> float:
 
 
 def _http_url(env: Mapping[str, str], name: str) -> str | None:
-    """An optional http or https URL, without a trailing slash."""
+    """An optional http or https URL, without a trailing slash.
+
+    Paths are appended to it, so a query or a fragment would swallow them.
+    A login part is refused too, and not repeated: it may hold a password.
+    """
     value = env.get(name, "")
     if not value:
         return None
-    if not value.startswith(("http://", "https://")):
-        raise ConfigError(f"{name} must be an http or https URL, got {value!r}")
+    parts = urlsplit(value)
+    if "@" in parts.netloc:
+        raise ConfigError(f"{name} must not hold a user name or password")
+    if parts.scheme not in ("http", "https") or not parts.netloc or "?" in value or "#" in value:
+        raise ConfigError(f"{name} must be an http or https URL without a query, got {value!r}")
     return value.rstrip("/")
 
 
