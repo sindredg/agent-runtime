@@ -28,11 +28,50 @@ the command's arguments, never an image, a mount or a flag.
 | User | uid 10001, not root |
 | CPU, memory, processes | 1 CPU, 256 MiB with no swap, 64 processes |
 | Mount | Only the job's directory of the workspace volume, by `volume-subpath` |
+| Workspace size | 1 GiB, soft: see [below](#workspace-size) |
 | Labels | The job id and the lease epoch |
 | Log driver | None |
 
 `run_shell` and `list_dir` are offered only when `SANDBOX_IMAGE` is set, as
 it is in the stack. `read_file` and `create_issue` run in the worker process.
+
+## Workspace size
+
+The job's workspace is on the disk that holds Postgres too. The worker
+measures it and stops a command that makes it too big
+([ADR 0014](adr/0014-limit-a-jobs-workspace-with-a-watcher.md)).
+
+```mermaid
+sequenceDiagram
+    participant W as worker
+    participant V as job workspace
+    participant C as tool container
+    W->>V: measure
+    alt over the limit, or not measurable
+        Note over W: error result, no container
+    else within
+        W->>C: run the command
+        loop every poll interval
+            W->>V: measure
+        end
+        opt over the limit
+            W->>C: kill and remove
+            Note over W: error result, the files stay
+        end
+    end
+```
+
+- The size is the blocks the files and directories take, measured from the
+  worker's mount (`src/runtime/sandbox/workspace.py`). Links are not
+  followed. A sparse file counts what it uses.
+- A directory the worker cannot read, or nesting too deep to walk, counts as
+  over the limit. The command runs as the worker's uid and could hide files
+  with `chmod`.
+- The limit is soft. A command writes on for up to one interval, plus the
+  time a measurement and the kill take. The test writes about 20 MiB/s
+  with an 8 MiB limit and a 0.2 s interval, and allows up to 16 MiB.
+- A job over its limit cannot shrink: `run_shell` does not start. It goes on
+  without sandboxed tools. The number of files is not limited.
 
 ## Time bounds
 
