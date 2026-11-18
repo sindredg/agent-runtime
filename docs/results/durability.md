@@ -1,15 +1,15 @@
 # Results: durability
 
-The evidence for the four durability guarantees, from the chaos run at
-`e656fd8`. Its conditions, and the runs with a mechanism switched off, are
+The evidence for the durability guarantees and the step log, from the run at
+`1f57ee4`. Its conditions, and the runs with a mechanism switched off, are
 on the [Results](README.md) page. The mechanisms are in
-[Durability](../durability.md).
+[Durability](../durability.md) and [Hash chain](../step-log-chain.md).
 
 ```mermaid
 pie showData title 200 kill runs, by what the kill hit
-    "Job taken over in the middle" : 130
-    "Kill sent, no takeover needed" : 46
-    "No worker held the job at the kill time" : 24
+    "Job taken over in the middle" : 134
+    "Kill sent, no takeover needed" : 37
+    "No worker held the job at the kill time" : 29
 ```
 
 ## A job survives a worker stopping
@@ -17,22 +17,19 @@ pie showData title 200 kill runs, by what the kill hit
 Tested. `tests/chaos/test_kills.py`, 200 runs.
 
 - In each run a job was submitted, and the worker holding it was killed with
-  `docker kill` at a random time from a seed. 176 kills were sent.
+  `docker kill` at a random time from a seed. 171 kills were sent.
 - 200 of 200 jobs succeeded, each with the same final conversation as a job
   nobody interrupted. The provider was never asked an earlier turn again.
-- 130 jobs were taken over in the middle, one of them twice: 131 takeovers.
-  The second takeover followed a lease renewal that timed out, not a kill
-  ([issue 69](https://github.com/sindredg/agent-runtime/issues/69)).
-- At 24 kill times no worker held the job, before the claim or after the
-  end.
-- 46 kills reached the holder and no takeover followed. Their kill times are
-  late (1.12 to 1.91 s), so the job most likely ended before the kill.
+- 134 jobs were taken over in the middle, each once.
+- At 29 kill times no worker held the job, before the claim or after the end.
+- Every takeover followed a kill at 1.45 s or earlier. The runs with no
+  takeover had kill times of 0.04 to 0.10 s or 1.28 s and later.
 - One more run per failpoint, with the worker ending its own process: 6 of
   6, each resumed with one takeover and one issue.
 
 With the mechanism off: with resume switched off, so that the log is not
-replayed, 10 of 20 short runs failed. The provider was asked turns 0, 1, 2,
-0, 1, 2, and the tracker held two issues for one operation id.
+replayed, 13 of 20 short runs failed. The provider was asked turns 0, 1, 0,
+1, 2.
 
 ## An unsafe tool call does not run twice without approval
 
@@ -49,12 +46,18 @@ for a worker paused at the wrong instant.
   waits in `needs_approval`. After the approval the tracker holds two issues
   for one approval.
 
+Against a real tracker, Gitea in a container (`make lab`,
+[Lab demo](../lab-demo.md)): 2 of 2 cases. In each the worker stopped
+itself in the call, another took over, and Gitea held exactly one issue.
+
 With the mechanism off:
 
 | Removed | Outcome |
 |---|---|
-| The intent write | The two failpoint tests around the tool call fail. Stopped after the tool ran: two issues for one operation id. |
+| The intent write | The two failpoint tests around the tool call fail: the log held no intent for the call. |
 | The tools' own idempotency flags: every tool idempotent | Stopped after the tool ran: two issues for one operation id |
+| The Gitea check, forced to "not done" | Stopped after the call ran: two issues in Gitea |
+| The marker line in the issue body | Two issues in Gitea in one case, an issue without its marker in the other |
 
 ## A stale worker cannot corrupt a job
 
@@ -62,16 +65,13 @@ Tested. `tests/chaos/test_stale_worker.py`.
 
 - A worker waiting for a model answer was paused with `docker pause` for 45
   s under the default 30 s lease.
-- Another worker took the job over after 29.3 s.
+- Another worker took the job over after 29.8 s.
 - The first was woken while the second was in the middle of the job. It
   wrote no step after the takeover, sent no further request to the provider
-  and opened no issue.
-- The job succeeded with one takeover and one issue.
+  and opened no issue. The job succeeded with one issue.
 
-With the mechanism off, at `317a0b3` on 2026-11-17: with the epoch check
-removed from the fence, the woken worker wrote an `error` step with its old
-epoch after the takeover, and the job ended `failed`. The test now checks
-what the stale worker wrote first, and fails on that step.
+With the mechanism off: with the epoch check removed from the fence, the
+woken worker wrote an `error` step with its old epoch after the takeover.
 
 ## A job that crashes its worker does not loop forever
 
@@ -83,12 +83,33 @@ Tested. `tests/chaos/test_crash_loop.py`.
 With the mechanism off: with the limit removed, the job was still running
 after 180 s and had been taken over 29 times.
 
+## The step log cannot be changed without detection
+
+Tested, with [stated limits](../step-log-chain.md#what-it-does-not-catch). Integration suite:
+`test_step_log_chain.py`, `test_verify_command.py`, `test_roles.py`.
+
+- The app role is refused UPDATE, DELETE and TRUNCATE on steps, and
+  `DISABLE TRIGGER`, `DROP TABLE` and `session_replication_role`. The owner
+  is refused the first three while the triggers are on.
+- With the triggers off, the owner changed, deleted, reordered, inserted and
+  rehashed steps, moved the head and cut the tail. Verify named each of the
+  9 cases. The owner cutting the tail and setting the head back is not found.
+- After the chaos run, `runtime verify --all` checked every job in the
+  database, 421, the chaos run's among them: 0 mismatches.
+
+With the mechanism off:
+
+| Removed | Outcome |
+|---|---|
+| The refusal triggers | 4 tests fail: the owner's UPDATE, DELETE and TRUNCATE went through |
+| The hash comparison in verify | 15 tests fail: no change was found |
+
 ## Also tested
 
 - **A graceful stop.** A worker stopped with `docker stop` (SIGTERM) handed
-  its job back and ended in 2.9 s. The job finished on another worker with no
+  its job back and ended in 1.2 s. The job finished on another worker with no
   takeover counted.
 - **A kill during a sandboxed call.** The next worker removed the killed
-  worker's container and asked a person only once the call's bound (37 s)
+  worker's container and asked a person only once the call's bound (40 s)
   had passed. After one approval the command ran again and the job
   succeeded.

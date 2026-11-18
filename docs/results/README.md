@@ -7,10 +7,10 @@ The table with one line per guarantee is in the
 [README](../../README.md#results). The evidence is on three pages:
 
 - [Durability](durability.md): surviving a lost worker, unsafe tool
-  calls, stale workers, crash loops.
+  calls, stale workers, crash loops, the step log.
 - [Scope and sandbox](sandbox.md): what a tool can reach.
-- [Budget, approval and tool output](controls.md): what a job may spend
-  and do.
+- [Budget, approval, backoff and tool output](controls.md): what a job may
+  spend and do.
 
 Jobs that ran with a real model, which are not the evidence for a guarantee:
 [Runs against the Claude API](api.md).
@@ -25,18 +25,19 @@ with no other test run, in this order:
 
 ```mermaid
 flowchart LR
-    S1[make up,<br/>pre-commit,<br/>unit, integration] --> S2[make escape,<br/>then its two switches]
-    S2 --> S3[CHAOS_RUNS=200<br/>make chaos]
-    S3 --> S4[make up]
-    S4 --> S5[one run per<br/>switched-off mechanism]
+    S1[make clean, make up,<br/>pre-commit,<br/>unit, integration] --> S2[make escape,<br/>then its two switches]
+    S2 --> S3[CHAOS_RUNS=200<br/>make chaos,<br/>runtime verify --all]
+    S3 --> S4[make lab]
+    S4 --> S5[make up]
+    S5 --> S6[one run per<br/>switched-off mechanism]
 ```
 
 | | |
 |---|---|
-| Commit | `e656fd8`, 2026-11-16, 21:27 to 22:40 UTC |
+| Commit | `1f57ee4`, 2026-11-18, 21:38 to 23:17 UTC. The clock was steady for 120 s before the start. |
 | Runs and seed | 200 random kill times for the lost-worker test, 200 for the approval test, seed `20261113`. Every other test: 1 run. |
-| Workers | 3 in the chaos stack, 1 in the normal stack |
-| Provider | The fake provider. The issue tracker is a fake too. |
+| Workers | 3 in the chaos stack, 2 in the lab, 1 in the normal stack |
+| Provider | The fake provider. The issue tracker is a fake, except Gitea in the lab. |
 | Where | Docker Compose on one machine: Linux aarch64 under WSL2, 8 CPUs, Docker 29.1.3 |
 
 | Chaos tests | Lease | Scenario |
@@ -50,21 +51,25 @@ flowchart LR
 | Suite | Command | Result |
 |---|---|---|
 | Lint, format, types, docs limits | `uv run --frozen pre-commit run --all-files` | Passed |
-| Unit | `make test` | 836 passed |
-| Integration | `make integration` | 410 passed |
-| Escape | `make escape` | 22 passed |
-| Chaos | `CHAOS_RUNS=200 make chaos` | 16 passed in 37 min |
+| Unit | `make test` | 1012 passed |
+| Integration | `make integration` | 536 passed |
+| Escape | `make escape` | 23 passed |
+| Chaos | `CHAOS_RUNS=200 make chaos` | 16 passed in 35 min |
+| Step log | `uv run runtime verify --all`, after the chaos run | 421 jobs, 0 mismatches |
+| Lab | `make lab` | 2 passed |
 
 ## Runs with a mechanism switched off
 
 Each switch is a change to the source, made for one run and then restored.
-The outcome of each is on the guarantee's page. The output of these runs is
-kept on the machine that ran them, not in the repository.
+30 switches, 33 runs, all at `1f57ee4`: each made its tests fail. The outcome
+of each is on the guarantee's page. The output is kept on the machine that
+ran them, not in the repository.
 
-The chaos switches used the short run: 20 random kills. One more switch, the
-cut of a tool result, ran after the others on the same code. It showed that a
-property test seldom reaches that cut
-([issue 61](https://github.com/sindredg/agent-runtime/issues/61)).
+Each switch was built into the stack its tests use, so the stack's worker
+ran the changed code too. The chaos switches used the short run: 20 random kills. A property test
+seldom reaches the cut of a tool result
+([issue 61](https://github.com/sindredg/agent-runtime/issues/61)); a
+sandbox test covers it.
 
 ## How a kill run works
 
@@ -87,12 +92,12 @@ log. See [Testing](../testing.md#records-a-test-trusts).
 
 ## What these results do not show
 
-- Nothing ran against a real model provider or a real issue tracker. The
-  contract test against the Claude API was not part of this run. It is run
-  by hand ([The contract test](../contract-test.md)), and eight jobs ran
-  against the API separately ([Runs against the Claude API](api.md)).
-- The worker logs of the run hold lease renewals that timed out. Not all of
-  them are explained
+- Nothing ran against a real model provider. The one real issue tracker is
+  Gitea in a container, in the lab. The contract test against the Claude API
+  was not part of this run ([The contract test](../contract-test.md)), and
+  eight jobs ran against the API separately ([Runs against the Claude API](api.md)).
+- The chaos run's worker logs hold no error line. An earlier run's lease
+  renewals that timed out are not explained
   ([issue 69](https://github.com/sindredg/agent-runtime/issues/69)).
 - Everything ran on one host with one clock. A lost network between a worker
   and the database is covered by an integration test that cuts the database
