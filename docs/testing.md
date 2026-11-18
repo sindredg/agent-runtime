@@ -80,7 +80,7 @@ These exist for `tests/chaos` and do nothing unless switched on.
 | Workers | Three, restarted when they end themselves |
 | Lease | 2 s, renewed every 0.5 s. The failpoint tests use 6 s and 2 s. |
 | Poll | 0.2 s |
-| Sandbox timeout | 10 s, so a takeover during a sandboxed call waits 37 s, not 57 s |
+| Sandbox timeout | 10 s, so a takeover during a sandboxed call waits 40 s, not 60 s |
 | `CHAOS_LOG_DIR` | `/chaos` in the worker, mounted from `./.chaos` on the host |
 
 The tests that pause or stop a worker use the default 30 s lease. Each chaos

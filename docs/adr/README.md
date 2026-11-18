@@ -21,6 +21,9 @@ flowchart LR
     A5 --> A12
     A4 --> A13[0013 hash chain<br/>and two roles]
     A8 --> A14[0014 workspace<br/>limit]
+    A13 --> A15[0015 the chain's<br/>trigger, owner only]
+    A13 --> A16[0016 verify reads<br/>the database]
+    A14 --> A17[0017 bounded walk]
     A3[0003 SDK and<br/>a fake provider]
 ```
 
@@ -44,6 +47,7 @@ An arrow means the later record builds on, or follows from, the earlier one.
 | [0014](0014-limit-a-jobs-workspace-with-a-watcher.md) | Limit a job's workspace with a watcher, and accept an overshoot | [Yes](../sandbox.md#workspace-size) |
 | [0015](0015-keep-the-chains-trigger-to-the-owner-and-the-steps-table.md) | Keep the chain's trigger to the owner and the steps table | Yes |
 | [0016](0016-verify-reads-the-database-not-the-api.md) | `runtime verify` reads the database, not the API | Yes |
+| [0017](0017-bound-the-workspace-walk-and-state-what-it-cannot-see.md) | Bound the workspace walk, and state what it cannot see | Yes |
 
 Each record states what was built at the time it was written. What is built
 now is described in [Architecture](../architecture.md).

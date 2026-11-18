@@ -64,32 +64,38 @@ sequenceDiagram
 - The size is the blocks the files and directories take, measured from the
   worker's mount (`src/runtime/sandbox/workspace.py`). Links are not
   followed. A sparse file counts what it uses.
-- A directory the worker cannot read, or nesting too deep to walk, counts as
-  over the limit. The command runs as the worker's uid and could hide files
-  with `chmod`.
+- The walk stops at 100,000 files and directories, 256 levels and 3 s
+  ([ADR 0017](adr/0017-bound-the-workspace-walk-and-state-what-it-cannot-see.md)).
+  Past the first two the workspace is over its limit; a directory it cannot
+  read or a walk that takes too long counts the same.
 - The limit is soft. A command writes on for up to one interval, plus the
-  time a measurement and the kill take. The test writes about 20 MiB/s
-  with an 8 MiB limit and a 0.2 s interval, and allows up to 16 MiB.
+  time a measurement and the kill take.
+- The walk does not see a file deleted while a process holds it open, space
+  reserved with `fallocate` in one burst, or a file moved behind the walk.
+  None of these is bounded per call. The hard limit is
+  [issue 78](https://github.com/sindredg/agent-runtime/issues/78).
 - A job over its limit cannot shrink: `run_shell` does not start. It goes on
-  without sandboxed tools. The number of files is not limited.
+  without sandboxed tools.
 
 ## Time bounds
 
 ```mermaid
 flowchart LR
-    A[start<br/>15 s bound<br/>+ 10 s request] --> B[command<br/>30 s timeout<br/>+ 2 s margin]
-    B -->|ends_within<br/>57 s| C[removal<br/>10 s]
-    C -->|call_within<br/>67 s| D[steps and<br/>release<br/>5 s]
-    D -->|72 s| E([STOP_GRACE_SECONDS<br/>75 s])
+    M[measure the<br/>workspace<br/>3 s] --> A[start<br/>15 s bound<br/>+ 10 s request]
+    A --> B[command<br/>30 s timeout<br/>+ 2 s margin]
+    B -->|ends_within<br/>60 s| C[removal<br/>10 s]
+    C -->|call_within<br/>70 s| D[steps and<br/>release<br/>5 s]
+    D -->|75 s| E([STOP_GRACE_SECONDS<br/>75 s])
 ```
 
 | Bound | With the defaults | Means |
 |---|---|---|
+| Measurement | 3 s | The walk of the workspace before the call. Only with a workspace limit. |
 | `SANDBOX_TIMEOUT_SECONDS` | 30 s | The command's time, from the start request to the exit status. Then the container is killed. |
 | Start bound | 15 s | Docker is not asked to start the command later than this after the call began |
 | Start request | 10 s | One Docker request's timeout |
-| `ends_within` | 57 s | By then the container has ended, also when its worker is gone. Two cases are [not covered](limits.md#tool-calls). |
-| `call_within` | 67 s | By then the whole call has returned, removal included |
+| `ends_within` | 60 s | By then the container has ended, also when its worker is gone. Two cases are [not covered](limits.md#tool-calls). |
+| `call_within` | 70 s | By then the whole call has returned, removal included |
 | Stop margin | 5 s | For the steps before and after the call, and for handing the job back |
 
 - The command also runs under `timeout` inside the container, at the timeout
