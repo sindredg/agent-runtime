@@ -296,6 +296,10 @@ async def update_status(
     itself, so a job whose status changed in the meantime is not overwritten.
     Raises InvalidTransition when no row was updated.
 
+    It writes no `status_changed` step, so it is not for a cancel or a
+    park: those go through `cancel_job`, the claim, or the worker's
+    `leave_running`. Only tests call it.
+
     A `running` job is never moved here. Only the worker that holds it moves
     it, through `leave_running` or `fail` in `runtime.store.held`, which check
     the lease epoch. A job becomes `running` only through `claim_job`.
