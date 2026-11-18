@@ -79,6 +79,10 @@ class SandboxSettings:
     network: str | None = None
     # Addresses no scope can open. Always holds FIXED_DENY.
     deny: tuple[Network, ...] = FIXED_DENY
+    # The soft size limit of a job's workspace (ADR 0014), in bytes, and the
+    # seconds between two measurements while a command runs. None: no limit.
+    workspace_limit: int | None = None
+    watch_interval: float = 1.0
 
     def __post_init__(self) -> None:
         if not self.image:
@@ -108,6 +112,13 @@ class SandboxSettings:
             raise ValueError("guard_image and network are set together or not at all")
         if not set(FIXED_DENY) <= set(self.deny):
             raise ValueError("deny must hold the fixed deny list")
+        if self.workspace_limit is not None and self.workspace_limit < 1:
+            raise ValueError(f"workspace_limit must be at least 1, got {self.workspace_limit!r}")
+        if not 0 < self.watch_interval <= MAX_SECONDS:
+            raise ValueError(
+                f"watch_interval must be above 0 and at most {MAX_SECONDS:g},"
+                f" got {self.watch_interval!r}"
+            )
         for name in ("memory", "pids"):
             if getattr(self, name) < 1:
                 raise ValueError(f"{name} must be at least 1, got {getattr(self, name)!r}")

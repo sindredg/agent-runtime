@@ -26,12 +26,16 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from runtime.provider.base import ModelRequest, ModelResponse
 from runtime.provider.messages import AnthropicProvider
 from runtime.sandbox.docker import Docker
-from runtime.sandbox.runner import LABEL, Run, Sandbox, SandboxSettings, ends_within
+from runtime.sandbox.runner import LABEL, MIB, Run, Sandbox, SandboxSettings, ends_within
+from runtime.sandbox.workspace import workspace_size
 from runtime.scope import FIXED_DENY, Resolved
 from runtime.store.jobs import DEADLINE_ERROR, Job, cancel_job, claim_job, create_job, get_job
 from runtime.store.status import JobStatus
 from runtime.store.steps import Step, StepKind, read_steps
 from runtime.tools import default_tools
+from runtime.tools.base import ToolCall, ToolResult
+from runtime.tools.run_shell import run_shell_tool
+from runtime.tools.sandboxed import SandboxTool
 from runtime.worker.agent import run_job
 
 from .conftest import Ran, Stack, expire_lease
@@ -822,3 +826,58 @@ def test_a_lost_lease_kills_a_running_command(
     assert status is None
     assert took < 5.0
     assert our_containers(volume) == []
+
+
+# The workspace watcher (ADR 0014)
+
+# Writes 1 MiB every 0.05 s, 200 times: 200 MiB in about 10 s if nothing stops it.
+WRITER = (
+    "i=0; while [ $i -lt 200 ]; do head -c 1048576 /dev/zero > part-$i;"
+    " i=$((i+1)); sleep 0.05; done; echo wrote it all"
+)
+
+
+def tool_call(tool: SandboxTool, root: Path, job_id: uuid.UUID, command: str) -> ToolResult:
+    call = ToolCall(root / str(job_id), {"command": command}, f"{job_id}:toolu_1", 1)
+    return asyncio.run(tool.run(call))
+
+
+def test_a_command_that_writes_past_the_workspace_limit_is_stopped(
+    settings: SandboxSettings, workspace_volume: tuple[Path, str]
+) -> None:
+    """Soft: the overshoot is what the command writes in one interval plus the kill."""
+    root, volume = workspace_volume
+    job_id = new_workspace(root)
+    limit = dataclasses.replace(settings, workspace_limit=8 * MIB, watch_interval=0.2)
+    tool = run_shell_tool(OwnClientSandbox(limit))
+
+    started = time.monotonic()
+    result = tool_call(tool, root, job_id, WRITER)
+    took = time.monotonic() - started
+    size = workspace_size(root / str(job_id))
+
+    assert result.is_error
+    assert result.content.startswith("[stopped: the job's workspace holds ")
+    assert "over its limit of 8.0 MiB" in result.content
+    # Stopped long before the command's 10 s, and close to the limit.
+    assert took < 5
+    assert 8 * MIB < size < 16 * MIB
+    # The container is gone: nothing writes on.
+    assert our_containers(volume) == []
+    time.sleep(0.5)
+    assert workspace_size(root / str(job_id)) == size
+
+
+def test_a_workspace_over_its_limit_runs_no_command(
+    settings: SandboxSettings, workspace_volume: tuple[Path, str]
+) -> None:
+    root = workspace_volume[0]
+    job_id = new_workspace(root)
+    (root / str(job_id) / "big").write_bytes(b"b" * (2 * MIB))
+    limit = dataclasses.replace(settings, workspace_limit=MIB)
+
+    result = tool_call(run_shell_tool(OwnClientSandbox(limit)), root, job_id, "touch ran")
+
+    assert result.is_error
+    assert result.content.endswith("over its limit of 1.0 MiB. The command did not start.")
+    assert not (root / str(job_id) / "ran").exists()

@@ -2,15 +2,23 @@
 
 A sandboxed tool only turns the model's input into the command's arguments.
 Everything else about the container is fixed by the sandbox's settings.
+
+With a workspace limit set, the worker measures the job's workspace before
+the call and while it runs (ADR 0014). Over the limit, the command does not
+start, or is stopped. A workspace that cannot be measured counts as over.
 """
 
-from collections.abc import Callable, Sequence
+import asyncio
+import contextlib
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol
 from uuid import UUID
 
 from runtime.sandbox.docker import SandboxError
-from runtime.sandbox.runner import NotStarted, Run, SandboxSettings
+from runtime.sandbox.runner import MIB, NotStarted, Run, SandboxSettings
+from runtime.sandbox.workspace import Unmeasurable, workspace_size
 from runtime.scope import Resolved
 from runtime.tools.base import ToolCall, ToolResult, tool_definition
 
@@ -70,6 +78,44 @@ def describe(run: Run, *, timeout: float, limit: int) -> ToolResult:
     )
 
 
+def _mib(size: int) -> str:
+    return f"{size / MIB:.1f} MiB"
+
+
+async def _over(workspace: Path, limit: int) -> str | None:
+    """Why the workspace is over `limit`, or None while it is within it."""
+    try:
+        size = await asyncio.to_thread(workspace_size, workspace)
+    except Unmeasurable as error:
+        return f"the job's workspace cannot be measured ({error})"
+    if size > limit:
+        return f"the job's workspace holds {_mib(size)}, over its limit of {_mib(limit)}"
+    return None
+
+
+async def _watched(run: Awaitable[Run], workspace: Path, limit: int, interval: float) -> Run | str:
+    """Await `run` while measuring the workspace every `interval` seconds.
+
+    Returns why it was stopped instead, once the workspace is over `limit`.
+    Stopping cancels the run, and the sandbox kills and removes the
+    container before the cancel completes.
+    """
+    task = asyncio.ensure_future(run)
+    try:
+        while True:
+            done, _ = await asyncio.wait({task}, timeout=interval)
+            if done:
+                return task.result()
+            reason = await _over(workspace, limit)
+            if reason is not None:
+                return reason
+    finally:
+        if not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, SandboxError):
+                await task
+
+
 @dataclass(frozen=True, slots=True)
 class SandboxTool:
     name: str
@@ -98,13 +144,26 @@ class SandboxTool:
             job_id = UUID(call.workspace.name)
         except ValueError:
             return ToolResult("the workspace is not a job's workspace", is_error=True)
+        settings = self.sandbox.settings
+        limit = settings.workspace_limit
+        if limit is not None and (reason := await _over(call.workspace, limit)) is not None:
+            return ToolResult(f"{reason}. The command did not start.", is_error=True)
         try:
             scope = call.scope if self.networked else None
-            run = await self.sandbox.run(job_id, call.lease_epoch, argv, scope)
+            started = self.sandbox.run(job_id, call.lease_epoch, argv, scope)
+            if limit is None:
+                run = await started
+            else:
+                watched = await _watched(started, call.workspace, limit, settings.watch_interval)
+                if isinstance(watched, str):
+                    return ToolResult(
+                        f"[stopped: {watched}. The files it wrote stay; its output is lost.]",
+                        is_error=True,
+                    )
+                run = watched
         except NotStarted as error:
             return ToolResult(f"the sandbox could not start the command: {error}", True)
         except SandboxError as error:
             # Docker may have started the command before it failed.
             return ToolResult(f"the sandbox failed: {error}. The command may have run.", True)
-        settings = self.sandbox.settings
         return describe(run, timeout=settings.timeout, limit=settings.output_limit)

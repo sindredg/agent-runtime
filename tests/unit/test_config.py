@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from runtime.config import ApiConfig, ConfigError, ProviderConfig, WorkerConfig
-from runtime.sandbox.runner import SandboxSettings
+from runtime.sandbox.runner import MIB, SandboxSettings
 
 ENV = {"ANTHROPIC_API_KEY": "k", "MODEL": "some-model"}
 
@@ -139,7 +139,9 @@ def test_the_sandbox_is_on_when_an_image_is_named() -> None:
     )
     assert config.sandbox is not None
     assert config.sandbox.docker_socket == "/var/run/docker.sock"
-    assert config.sandbox.settings == SandboxSettings(image="sandbox:dev", volume="workspaces")
+    assert config.sandbox.settings == SandboxSettings(
+        image="sandbox:dev", volume="workspaces", workspace_limit=1024 * MIB, watch_interval=1.0
+    )
 
 
 def test_sandbox_settings_are_read() -> None:
@@ -150,11 +152,30 @@ def test_sandbox_settings_are_read() -> None:
             "SANDBOX_VOLUME": "workspaces",
             "DOCKER_SOCKET": "/run/docker.sock",
             "SANDBOX_TIMEOUT_SECONDS": "2.5",
+            "SANDBOX_WORKSPACE_LIMIT_MIB": "16",
+            "SANDBOX_WORKSPACE_POLL_SECONDS": "0.25",
         }
     )
     assert config.sandbox is not None
     assert config.sandbox.docker_socket == "/run/docker.sock"
     assert config.sandbox.settings.timeout == 2.5
+    assert config.sandbox.settings.workspace_limit == 16 * MIB
+    assert config.sandbox.settings.watch_interval == 0.25
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("SANDBOX_WORKSPACE_LIMIT_MIB", "0"),
+        ("SANDBOX_WORKSPACE_LIMIT_MIB", "1.5"),
+        ("SANDBOX_WORKSPACE_POLL_SECONDS", "0"),
+        ("SANDBOX_WORKSPACE_POLL_SECONDS", "nan"),
+    ],
+)
+def test_the_workspace_limit_and_its_interval_must_be_positive(name: str, value: str) -> None:
+    env = {"SANDBOX_IMAGE": "i", "SANDBOX_VOLUME": "v", name: value}
+    with pytest.raises(ConfigError, match=name):
+        WorkerConfig.from_env({**WORKER_ENV, **env})
 
 
 def test_the_sandbox_needs_the_workspace_volume() -> None:
