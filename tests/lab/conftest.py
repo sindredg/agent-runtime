@@ -149,9 +149,10 @@ class Lab:
             time.sleep(0.2)
         return job
 
-    def issues_naming(self, operation_id: str) -> list[dict[str, Any]]:
-        """Every issue in the repository whose body holds the operation id, by anyone."""
-        found, page = [], 1
+    def issues(self) -> list[dict[str, Any]]:
+        """Every issue in the repository, by anyone, newest first."""
+        found: list[dict[str, Any]] = []
+        page = 1
         while True:
             params: dict[str, str | int] = {
                 "state": "all",
@@ -161,10 +162,17 @@ class Lab:
             }
             response = self.gitea.get(f"/repos/{ADMIN}/{REPO}/issues", params=params)
             entries = response.raise_for_status().json()
-            found += [e for e in entries if operation_id in (e.get("body") or "")]
+            found += entries
             if len(entries) < 50:
                 return found
             page += 1
+
+    def last_issue_number(self) -> int:
+        return max((issue["number"] for issue in self.issues()), default=0)
+
+    def issues_after(self, number: int) -> list[dict[str, Any]]:
+        """The issues opened after issue `number`. Read without the marker the tool writes."""
+        return [issue for issue in self.issues() if issue["number"] > number]
 
 
 @pytest.fixture(scope="session")

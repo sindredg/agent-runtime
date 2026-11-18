@@ -45,8 +45,8 @@ A case passes when all of these hold:
 
 - The failpoint fired once, and the job has a takeover.
 - The job ends `succeeded`.
-- Gitea's own list, read with the admin login, holds exactly one issue that
-  names the call's operation id.
+- Gitea's own list, read with the admin login, has exactly one new issue,
+  and it names the call's operation id.
 - `runtime verify` finds the job's step log intact.
 
 ## The setup

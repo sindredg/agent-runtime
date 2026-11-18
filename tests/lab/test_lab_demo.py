@@ -34,7 +34,7 @@ def test_a_worker_stopped_in_a_call_to_gitea_leaves_exactly_one_issue(
 ) -> None:
     print(f"\n\nCase {failpoint}: the worker stops where {CASES[failpoint]}.", flush=True)
     lab.workers_up(failpoint)
-    started = datetime.now(UTC)
+    started, before = datetime.now(UTC), lab.last_issue_number()
     job_id = lab.submit(JOB)
     say(f"submitted job {job_id} (ci-triage, fake provider)")
     job = lab.finish(job_id)
@@ -52,14 +52,12 @@ def test_a_worker_stopped_in_a_call_to_gitea_leaves_exactly_one_issue(
         s for s in steps if s["kind"] == "tool_result" and s["payload"]["tool_use_id"] == call
     ]
     for result in results:
-        how = (
-            "from the check, the tool did not run"
-            if result["payload"].get("recovered")
-            else ("the tool ran")
-        )
+        recovered = result["payload"].get("recovered")
+        how = "from the check, the tool did not run" if recovered else "the tool ran"
         say(f"epoch {result['lease_epoch']}: {result['payload']['content']!r} ({how})")
-    issues = lab.issues_naming(operation)
-    say(f"Gitea holds {len(issues)} issue(s) for {operation}: {[i['number'] for i in issues]}")
+    # Every issue opened during the case, read without the tool's marker.
+    issues = lab.issues_after(before)
+    say(f"Gitea got {len(issues)} new issue(s) for {operation}: {[i['number'] for i in issues]}")
     out, err = io.StringIO(), io.StringIO()
     verified = runtime_cli(["verify", "--database-url", DATABASE_URL, job_id], out=out, err=err)
     say(f"runtime verify: exit {verified}, {out.getvalue().strip() or err.getvalue().strip()}")
@@ -69,7 +67,8 @@ def test_a_worker_stopped_in_a_call_to_gitea_leaves_exactly_one_issue(
     assert fired == 1, f"the failpoint fired {fired} times"
     assert job["takeovers"] >= 1
     assert job["status"] == "succeeded"
-    assert len(issues) == 1, f"Gitea holds {len(issues)} issues for {operation}"
+    assert len(issues) == 1, f"Gitea got {len(issues)} new issues for {operation}"
+    assert operation in issues[0]["body"]
     assert len(results) == 1
     recovered = results[0]["payload"].get("recovered") is True
     assert recovered is (failpoint == "after_tool_ran")
