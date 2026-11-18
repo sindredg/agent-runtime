@@ -28,6 +28,14 @@ class StepKind(StrEnum):
     APPROVAL_REQUESTED = "approval_requested"
     APPROVAL_GIVEN = "approval_given"
     APPROVAL_DENIED = "approval_denied"
+    STATUS_CHANGED = "status_changed"
+
+
+class StatusCause(StrEnum):
+    """Why a `status_changed` step moved its job."""
+
+    CANCEL_REQUESTED = "cancel_requested"
+    APPROVAL_REQUESTED = "approval_requested"
 
 
 @dataclass(frozen=True, slots=True)

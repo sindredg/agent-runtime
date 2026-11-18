@@ -453,12 +453,13 @@ def test_event_stream_of_a_job_without_steps_ends_when_the_job_does(database_url
         reading = asyncio.create_task(api.events(job.id))
         await asyncio.sleep(0.2)
         still_open = not reading.done()
-        await api.finish(job, JobStatus.CANCELLED)
+        # A success writes no step. A cancel or a failure would write one.
+        await api.finish(job, JobStatus.SUCCEEDED)
         return await reading, still_open
 
     events, still_open = api_test(database_url, body)
     assert still_open
-    assert events == [(None, "end", {"status": "cancelled"})]
+    assert events == [(None, "end", {"status": "succeeded"})]
 
 
 def test_healthz(database_url: str) -> None:
@@ -511,9 +512,15 @@ def test_a_quiet_event_stream_sends_keep_alive_comments(database_url: str) -> No
 # The body of an answer to the question of `parked_for_approval`, its step 2.
 QUESTION_2 = {"question": 2}
 
+# The `status_changed` step that parking a job for its question writes.
+PARKED = {"from": "running", "to": "needs_approval", "cause": "approval_requested"}
+
 
 async def parked_for_approval(api: Api) -> Job:
-    """A job waiting for a person, with the log a worker leaves: the intent and the question."""
+    """A job waiting for a person, with the log a worker leaves: the intent and the question.
+
+    The park adds step 3, the `status_changed` step.
+    """
     job = await api.new_job()
     asked = {
         "tool_use_id": "toolu_1",
@@ -564,14 +571,16 @@ def test_event_stream_says_that_a_job_waits_for_approval_and_goes_on_when_it_is_
     assert [(event_id, name) for event_id, name, _ in events] == [
         (1, "step"),
         (2, "step"),
+        (3, "step"),
         # Said once, after the steps that led to it, and the stream stays open.
         (None, "status"),
-        (3, "step"),
+        (4, "step"),
         (None, "end"),
     ]
-    assert events[2][2] == {"status": "needs_approval"}
-    assert events[3][2]["kind"] == "approval_given"
-    assert events[4][2] == {"status": "succeeded"}
+    assert (events[2][2]["kind"], events[2][2]["payload"]) == ("status_changed", PARKED)
+    assert events[3][2] == {"status": "needs_approval"}
+    assert events[4][2]["kind"] == "approval_given"
+    assert events[5][2] == {"status": "succeeded"}
 
 
 def test_event_stream_says_it_again_when_the_job_waits_again_between_two_polls(
@@ -599,7 +608,7 @@ def test_event_stream_says_it_again_when_the_job_waits_again_between_two_polls(
                         api.engine,
                         job_id=job.id,
                         lease_epoch=claimed.lease_epoch,
-                        seq=4,
+                        seq=5,
                         kind=StepKind.APPROVAL_REQUESTED,
                         payload={"tool_use_id": "toolu_2", "operation_id": f"{job.id}:toolu_2"},
                     )
@@ -613,15 +622,29 @@ def test_event_stream_says_it_again_when_the_job_waits_again_between_two_polls(
     assert [(event_id, name) for event_id, name, _ in events] == [
         (1, "step"),
         (2, "step"),
-        (None, "status"),
         (3, "step"),
+        (None, "status"),
         (4, "step"),
+        (5, "step"),
+        (6, "step"),
         # The second stop, said after the steps that led to it.
         (None, "status"),
+        (7, "step"),
         (None, "end"),
     ]
-    assert [events[i][2]["kind"] for i in (3, 4)] == ["approval_denied", "approval_requested"]
-    assert events[6][2] == {"status": "cancelled"}
+    assert [events[i][2]["kind"] for i in (2, 4, 5, 6, 8)] == [
+        "status_changed",
+        "approval_denied",
+        "approval_requested",
+        "status_changed",
+        "status_changed",
+    ]
+    assert [events[i][2]["payload"] for i in (2, 6, 8)] == [
+        PARKED,
+        PARKED,
+        {"from": "needs_approval", "to": "cancelled", "cause": "cancel_requested"},
+    ]
+    assert events[9][2] == {"status": "cancelled"}
 
 
 ANSWERS = [("approve", StepKind.APPROVAL_GIVEN), ("deny", StepKind.APPROVAL_DENIED)]
@@ -683,11 +706,11 @@ def test_an_answer_with_no_body_is_422(database_url: str, answer: str) -> None:
 
 
 @pytest.mark.parametrize("answer", ["approve", "deny"])
-@pytest.mark.parametrize("question", [1, 3, 99])
+@pytest.mark.parametrize("question", [1, 3, 4, 99])
 def test_an_answer_to_another_question_is_409_names_the_open_one_and_changes_nothing(
     database_url: str, answer: str, question: int
 ) -> None:
-    """The job waits on question 2. Step 1 is its intent, 3 does not exist yet."""
+    """The job waits on question 2. Step 1 is its intent, 3 its park, 4 does not exist yet."""
 
     async def body(api: Api) -> tuple[httpx2.Response, bool]:
         job = await parked_for_approval(api)
@@ -729,10 +752,12 @@ def test_an_answer_queues_the_job_and_is_recorded_as_a_step(
     assert [(step.seq, step.kind) for step in steps] == [
         (1, StepKind.TOOL_INTENT),
         (2, StepKind.APPROVAL_REQUESTED),
-        (3, kind),
+        (3, StepKind.STATUS_CHANGED),
+        (4, kind),
     ]
+    assert steps[2].payload == PARKED
     # The answer names the question it answers, and the call that question is about.
-    assert steps[2].payload == {
+    assert steps[3].payload == {
         "tool_use_id": "toolu_1",
         "operation_id": f"{parked.id}:toolu_1",
         "question": 2,
@@ -763,9 +788,17 @@ def test_an_answer_is_refused_for_a_job_that_is_not_waiting_for_one(
     assert "only a job that needs approval" in response.json()["detail"]
     assert job is not None
     assert job.status is status
-    # No step was added. A failed job has the one its failure wrote.
+    # No step was added. A failed job has the one its failure wrote, and a
+    # cancelled job the one its cancel wrote.
     assert steps == before
-    assert len(steps) == (1 if status is JobStatus.FAILED else 0)
+    written = {JobStatus.FAILED: StepKind.ERROR, JobStatus.CANCELLED: StepKind.STATUS_CHANGED}
+    assert [step.kind for step in steps] == ([written[status]] if status in written else [])
+    if status is JobStatus.CANCELLED:
+        assert steps[0].payload == {
+            "from": "running",
+            "to": "cancelled",
+            "cause": "cancel_requested",
+        }
 
 
 @pytest.mark.parametrize("answer", ["approve", "deny"])
@@ -798,10 +831,11 @@ def test_answers_sent_at_once_answer_once(database_url: str) -> None:
 
     answered, steps = api_test(database_url, body)
     assert sorted(code for _, code in answered) == [200, *[409] * 7]
-    assert [step.seq for step in steps] == [1, 2, 3]
+    assert [step.seq for step in steps] == [1, 2, 3, 4]
+    assert steps[2].kind is StepKind.STATUS_CHANGED
     # The step is the answer that got the 200, and no other.
     winner = next(answer for answer, code in answered if code == 200)
-    assert steps[2].kind is dict(ANSWERS)[winner]
+    assert steps[3].kind is dict(ANSWERS)[winner]
 
 
 def test_a_list_of_tools_that_need_approval_is_stored_with_the_job(database_url: str) -> None:

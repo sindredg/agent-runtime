@@ -235,8 +235,16 @@ def test_a_call_nobody_can_vouch_for_waits_for_approval_and_then_runs_again(chao
     assert [len(ids) for ids in run.issues.values()] == [2]
     assert run.duplicates() == {}
     kinds = [s["kind"] for s in run.steps]
-    assert kinds[kinds.index("approval_requested") :][:3] == [
+    at = kinds.index("approval_requested")
+    assert kinds[at:][:4] == [
         "approval_requested",
+        "status_changed",
         "approval_given",
         "tool_intent",
     ]
+    # The park is in the log with the move it made (APTS AR-002).
+    assert run.steps[at + 1]["payload"] == {
+        "from": "running",
+        "to": "needs_approval",
+        "cause": "approval_requested",
+    }

@@ -8,19 +8,32 @@ so several calls can share one transaction:
 """
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Row, Select, Update, and_, case, func, insert, literal, or_, select, update
+from sqlalchemy import (
+    Row,
+    Select,
+    Update,
+    and_,
+    case,
+    func,
+    insert,
+    literal,
+    literal_column,
+    or_,
+    select,
+    update,
+)
 from sqlalchemy.ext.asyncio import AsyncConnection
-from sqlalchemy.sql.elements import ColumnElement
+from sqlalchemy.sql.elements import ColumnElement, Label
 
 from runtime.store.payload import check_json
 from runtime.store.schema import job_columns, jobs, steps
 from runtime.store.status import FINAL_STATUSES, JobStatus, sources_of
-from runtime.store.steps import StepKind, next_seq
+from runtime.store.steps import StatusCause, StepKind, next_seq
 
 log = logging.getLogger("runtime.store")
 
@@ -76,10 +89,24 @@ class OtherQuestion(Exception):
         self.waiting_on = waiting_on
 
 
+_JOB_FIELDS = tuple(field.name for field in fields(Job))
+
+# The status a row had before the UPDATE that returns it. Postgres 18 names
+# the row before the change `old` in RETURNING.
+PREVIOUS_STATUS: Label[str] = literal_column("old.status").label("previous_status")
+
+
 def job_from_row(row: Row[Any]) -> Job:
-    fields = dict(row._mapping)
-    fields["status"] = JobStatus(fields["status"])
-    return Job(**fields)
+    """The job in a row. Columns that are not a field of Job are left out."""
+    mapping = row._mapping
+    values = {name: mapping[name] for name in _JOB_FIELDS}
+    values["status"] = JobStatus(values["status"])
+    return Job(**values)
+
+
+def status_change(previous: str, job: Job, cause: StatusCause) -> dict[str, str]:
+    """The payload of a `status_changed` step (APTS AR-002): from, to, and why."""
+    return {"from": previous, "to": job.status.value, "cause": cause.value}
 
 
 async def create_job(
@@ -136,10 +163,11 @@ def claim_statement(worker_id: str, lease: timedelta) -> Update:
         .order_by(jobs.c.created_at, jobs.c.id)
         .limit(1)
         # FOR NO KEY UPDATE locks the chosen row until commit. It is the lock
-        # an UPDATE of non-key columns takes anyway, and unlike FOR UPDATE it
-        # does not conflict with the lock a step insert takes on its job row.
-        # SKIP LOCKED makes another worker pass over a locked row and take the
-        # next one, instead of waiting for a job it can no longer have.
+        # an UPDATE of non-key columns takes anyway. A step insert takes the
+        # same lock on its job row to move the chain's head (migration 0007),
+        # so a job whose step is being written is passed over. SKIP LOCKED
+        # makes another worker pass over a locked row and take the next one,
+        # instead of waiting for a job it can no longer have.
         .with_for_update(skip_locked=True, key_share=True)
         .scalar_subquery()
     )
@@ -175,7 +203,7 @@ def claim_statement(worker_id: str, lease: timedelta) -> Update:
                 else_=jobs.c.error,
             ),
         )
-        .returning(*job_columns)
+        .returning(*job_columns, PREVIOUS_STATUS)
     )
 
 
@@ -199,10 +227,20 @@ async def _append_next_step(
     )
 
 
-async def _record_end(conn: AsyncConnection, job: Job) -> None:
-    """Record a job the claim ended: an `error` step for a failure, a log line for both."""
+async def _record_end(conn: AsyncConnection, job: Job, previous: str) -> None:
+    """Record a job the claim ended: a step, and a log line.
+
+    An `error` step for a failure, a `status_changed` step for a cancel.
+    """
     if job.status is JobStatus.FAILED:
         await _append_next_step(conn, job, StepKind.ERROR, {"message": job.error})
+    else:
+        await _append_next_step(
+            conn,
+            job,
+            StepKind.STATUS_CHANGED,
+            status_change(previous, job, StatusCause.CANCEL_REQUESTED),
+        )
     log.warning(
         "job ended by the claim",
         extra={"job_id": job.id, "status": job.status.value, "error": job.error},
@@ -242,7 +280,7 @@ async def claim_job(
         job = job_from_row(row)
         if job.status is JobStatus.RUNNING:
             return job
-        await _record_end(conn, job)
+        await _record_end(conn, job, row.previous_status)
         if failed is not None:
             failed.append(job)
 
@@ -257,6 +295,10 @@ async def update_status(
     The move is checked against the transition table inside the UPDATE
     itself, so a job whose status changed in the meantime is not overwritten.
     Raises InvalidTransition when no row was updated.
+
+    It writes no `status_changed` step, so it is not for a cancel or a
+    park: those go through `cancel_job`, the claim, or the worker's
+    `leave_running`. Only tests call it.
 
     A `running` job is never moved here. Only the worker that holds it moves
     it, through `leave_running` or `fail` in `runtime.store.held`, which check
@@ -377,9 +419,10 @@ def _unheld() -> ColumnElement[bool]:
 async def cancel_job(conn: AsyncConnection, job_id: UUID) -> tuple[Job, bool]:
     """Cancel a job, or ask the worker that holds it to. Returns the job and whether it is done.
 
-    One statement. A job that no worker holds is `cancelled` by it: one that
-    waits (`queued`, `waiting`, `needs_approval`), or a `running` one whose
-    lease is over. A `running` job under a live lease gets `cancel_requested`:
+    One statement does it. A job that no worker holds is `cancelled` by it:
+    one that waits (`queued`, `waiting`, `needs_approval`), or a `running`
+    one whose lease is over. That cancel also writes a `status_changed` step,
+    in the caller's transaction. A `running` job under a live lease gets `cancel_requested`:
     its worker sees the flag within a second and stops it. A job that is
     already `cancelled` is returned as it is. Raises JobNotFound, or
     InvalidTransition for a job that ended otherwise.
@@ -397,11 +440,19 @@ async def cancel_job(conn: AsyncConnection, job_id: UUID) -> tuple[Job, bool]:
             lease_owner=case((unheld, None), else_=jobs.c.lease_owner),
             lease_expires_at=case((unheld, None), else_=jobs.c.lease_expires_at),
         )
-        .returning(*job_columns)
+        .returning(*job_columns, PREVIOUS_STATUS)
     )
     row = result.one_or_none()
     if row is not None:
         job = job_from_row(row)
+        if job.status is JobStatus.CANCELLED:
+            # In the caller's transaction, under the row lock of the UPDATE.
+            await _append_next_step(
+                conn,
+                job,
+                StepKind.STATUS_CHANGED,
+                status_change(row.previous_status, job, StatusCause.CANCEL_REQUESTED),
+            )
         return job, job.status is JobStatus.CANCELLED
     found = await get_job(conn, job_id)
     if found is None:

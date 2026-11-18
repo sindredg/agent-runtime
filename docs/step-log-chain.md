@@ -71,5 +71,5 @@ holds, 1: a mismatch, 2: a job could not be checked.
 - The same role rewriting a step, every later hash and the head. Keeping the
   head outside the database is the follow-up for both.
 - A restore of an older backup.
-- A status change without a step, such as a cancel.
+- A status change without a step, such as a claim or a release.
 - A step whose content was false when it was written.
