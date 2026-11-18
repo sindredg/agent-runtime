@@ -33,7 +33,8 @@ refused, but the tool ran. An idempotency key on the other side closes this.
   lets one check pass on a lease that is over. The write is still refused.
 - A job is failed at its sixth takeover, also when the workers were lost for
   reasons that have nothing to do with the job. The limit is a constant.
-- A failed model call fails the job. There is no retry and no backoff.
+- Only a rate limit or overload is waited out. Any other failed model call
+  fails the job, and workers share no limit ([Backoff](backoff.md#limits)).
 - A response cut off at `max_tokens`, or a refusal, fails the job. It is not
   continued.
 - The whole conversation is sent with every model call. A job that outgrows
@@ -141,4 +142,3 @@ refused, but the tool ran. An idempotency key on the other side closes this.
   id ([issue 74](https://github.com/sindredg/agent-runtime/issues/74),
   [issue 76](https://github.com/sindredg/agent-runtime/issues/76)).
 - The size of a request body is not capped. Only the fields are limited.
-- `not_before` and the `waiting` status exist, and nothing sets them yet.

@@ -30,8 +30,7 @@ flowchart LR
 - They stop before the first test unless every worker is on the fake
   provider ([The Claude API](settings.md#the-claude-api)).
 - `make chaos` replaces the normal stack. Run `make up` afterwards.
-- `CHAOS_RUNS` sets the number of runs with a random kill time (default 20),
-  `CHAOS_SEED` the times.
+- `CHAOS_RUNS` and `CHAOS_SEED` set the number and times of random kills.
 - CI runs unit, integration, escape and the short chaos run on every pull
   request.
 
@@ -95,6 +94,8 @@ test writes its result to `.chaos/results.jsonl` with a `verdict`: `passed`,
   from `system`, `tools` and `messages`, output from the answer's content.
 - It never answers with more output tokens than `max_tokens`. A longer turn
   is cut, with stop reason `max_tokens`.
+- `PUT /_fake/busy` makes it answer 429 or 529 for a time, for one model or
+  all ([Backoff](backoff.md)).
 - The fake tracker stores up to 100,000 issues in memory and never merges
   two.
 

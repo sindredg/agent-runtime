@@ -65,10 +65,18 @@ def leave(new_status: JobStatus) -> Write:
 
     async def write(engine: AsyncEngine, job_id: UUID, epoch: int) -> Job:
         return await held.leave_running(
-            engine, job_id=job_id, lease_epoch=epoch, new_status=new_status
+            engine,
+            job_id=job_id,
+            lease_epoch=epoch,
+            new_status=new_status,
+            wait=WAIT if new_status is S.WAITING else None,
         )
 
     return write
+
+
+# A wait for a busy provider (ADR 0018).
+WAIT = held.Wait(seconds=5, attempt=1, retry_after=5, error="provider answered 429")
 
 
 # Every kind of write a worker makes to its job.
@@ -78,6 +86,7 @@ WRITES = {
     "finish": leave(S.SUCCEEDED),
     "failure": fail,
     "release": leave(S.QUEUED),
+    "wait": leave(S.WAITING),
 }
 each_write = pytest.mark.parametrize("write", WRITES.values(), ids=WRITES.keys())
 
@@ -167,9 +176,7 @@ def test_an_expired_lease_nobody_took_is_still_the_holders(database_url: str) ->
 def test_the_holder_moves_its_job_out_of_running(database_url: str, new_status: JobStatus) -> None:
     async def body(engine: AsyncEngine) -> tuple[Job, Job]:
         job = await held_job(engine)
-        returned = await held.leave_running(
-            engine, job_id=job.id, lease_epoch=1, new_status=new_status
-        )
+        returned = await leave(new_status)(engine, job.id, 1)
         return returned, (await stored(engine, job.id))[0]
 
     returned, job = with_engine(database_url, body)

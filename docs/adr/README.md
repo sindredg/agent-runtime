@@ -48,6 +48,7 @@ An arrow means the later record builds on, or follows from, the earlier one.
 | [0015](0015-keep-the-chains-trigger-to-the-owner-and-the-steps-table.md) | Keep the chain's trigger to the owner and the steps table | Yes |
 | [0016](0016-verify-reads-the-database-not-the-api.md) | `runtime verify` reads the database, not the API | Yes |
 | [0017](0017-bound-the-workspace-walk-and-state-what-it-cannot-see.md) | Bound the workspace walk, and state what it cannot see | Yes |
+| [0018](0018-wait-out-a-busy-provider-in-the-waiting-status.md) | Wait out a busy provider in the `waiting` status | [Yes](../backoff.md), for one worker. No shared limiter |
 
 Each record states what was built at the time it was written. What is built
 now is described in [Architecture](../architecture.md).

@@ -15,6 +15,10 @@ stateDiagram-v2
     running --> needs_approval: a call needs a person
     running --> queued: its worker was told to stop
     running --> cancelled: cancel
+    running --> waiting: the provider is busy
+    waiting --> running: claim after not_before
+    waiting --> failed: deadline
+    waiting --> cancelled: cancel
     needs_approval --> queued: approve or deny
     needs_approval --> failed: deadline
     needs_approval --> cancelled: cancel
@@ -25,14 +29,13 @@ stateDiagram-v2
     cancelled --> [*]
 ```
 
-A seventh status, `waiting`, exists for backoff and is planned. Nothing sets
-it yet.
+`waiting` is described in [Backoff](backoff.md).
 
 ## Who moves a job
 
 | Who | Moves | How |
 |---|---|---|
-| A claim | `queued` to `running`. A `running` job whose lease is over stays `running` under the new worker. | One `UPDATE` in `store/jobs.py` |
+| A claim | `queued`, or `waiting` past its `not_before`, to `running`. A `running` job whose lease is over stays `running` under the new worker. | One `UPDATE` in `store/jobs.py` |
 | The worker that holds the job | `running` to anything else | A fenced write in `store/held.py` |
 | A claim, instead of handing the job out | To `cancelled` if a cancel was requested. To `failed` past the deadline or at the takeover limit. | The same `UPDATE` |
 | A cancel | A job no worker holds, to `cancelled` | `cancel_job` |
@@ -43,8 +46,8 @@ it yet.
 - A `running` job under a live lease is moved only by its worker.
 - "No worker holds it" means `queued`, `waiting`, `needs_approval`, or
   `running` with its lease over.
-- A park in `needs_approval` becomes `cancelled` instead if a cancel was
-  requested.
+- A park in `needs_approval` or a move to `waiting` becomes `cancelled`
+  instead if a cancel was requested.
 
 ## Tables
 
@@ -109,7 +112,7 @@ the WHERE clauses of the partial indexes.
 | `approval_given` | By `POST /jobs/{id}/approve` | `tool_use_id`, `operation_id`, `question` |
 | `approval_denied` | By `POST /jobs/{id}/deny` | `tool_use_id`, `operation_id`, `question` |
 | `error` | When the job fails, whoever fails it | `message` |
-| `status_changed` | With a cancel and a park for approval, in the same statement or transaction | `from`, `to`, `cause` (`cancel_requested` or `approval_requested`) |
+| `status_changed` | With a cancel, a park for approval and a wait for a busy provider, in the same statement or transaction | `from`, `to`, `cause` (`cancel_requested`, `approval_requested` or `provider_busy`). A wait adds [its details](backoff.md#the-step). |
 
 A new kind needs a migration: the kinds are a CHECK constraint.
 

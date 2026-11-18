@@ -182,7 +182,10 @@ def _detail(kind: str, payload: dict[str, Any]) -> str:
     if kind in ("approval_given", "approval_denied"):
         return _preview(payload["operation_id"])
     if kind == "status_changed":
-        return _preview(f"{payload['from']} -> {payload['to']} ({payload['cause']})")
+        change = f"{payload['from']} -> {payload['to']} ({payload['cause']})"
+        if "not_before" in payload:
+            change += f" until {payload['not_before']}"
+        return _preview(change)
     return _preview(json.dumps(payload))
 
 

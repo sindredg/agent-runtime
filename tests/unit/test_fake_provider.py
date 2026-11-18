@@ -345,6 +345,93 @@ def test_request_log_filters_by_user_id_and_can_be_cleared() -> None:
     assert api.get("/_fake/requests").json() == []
 
 
+# Busy window: the rate limit and overload of the Claude API
+
+
+class Clock:
+    """A clock the test moves by hand."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def busy_client() -> tuple[TestClient, Clock]:
+    clock = Clock()
+    return TestClient(create_app({"two": TWO_TURNS, "other": TWO_TURNS}, clock=clock)), clock
+
+
+def test_a_busy_window_answers_429_with_retry_after_until_it_ends() -> None:
+    api, clock = busy_client()
+    set_busy = api.put("/_fake/busy", json={"seconds": 60, "retry_after": 5})
+    assert set_busy.status_code == 204
+
+    refused = api.post("/v1/messages", json=request(stream=True), headers=HEADERS)
+    assert refused.status_code == 429
+    assert refused.headers["retry-after"] == "5"
+    assert refused.headers["request-id"] == refused.json()["request_id"]
+    assert refused.json()["type"] == "error"
+    assert refused.json()["error"]["type"] == "rate_limit_error"
+
+    clock.now += 59.9
+    assert api.post("/v1/messages", json=request(), headers=HEADERS).status_code == 429
+    clock.now += 0.1
+    assert api.post("/v1/messages", json=request(), headers=HEADERS).status_code == 200
+
+    log = api.get("/_fake/requests").json()
+    assert [entry["status"] for entry in log] == [429, 429, 200]
+    assert log[0]["error"] == "rate_limit_error"
+    assert log[0]["retry_after"] == 5
+
+
+def test_an_overload_window_answers_529_and_may_leave_out_retry_after() -> None:
+    api, _ = busy_client()
+    api.put("/_fake/busy", json={"seconds": 1, "status": 529})
+    refused = api.post("/v1/messages", json=request(), headers=HEADERS)
+    assert refused.status_code == 529
+    assert refused.json()["error"]["type"] == "overloaded_error"
+    assert "retry-after" not in refused.headers
+
+
+def test_a_busy_window_for_one_model_leaves_the_others_alone() -> None:
+    api, _ = busy_client()
+    api.put("/_fake/busy", json={"seconds": 60, "model": "other"})
+    assert api.post("/v1/messages", json=request(), headers=HEADERS).status_code == 200
+    assert api.post("/v1/messages", json=request(model="other"), headers=HEADERS).status_code == 429
+
+
+def test_a_busy_window_can_be_ended_and_replaced() -> None:
+    api, clock = busy_client()
+    api.put("/_fake/busy", json={"seconds": 60})
+    assert api.delete("/_fake/busy").status_code == 204
+    assert api.post("/v1/messages", json=request(), headers=HEADERS).status_code == 200
+    api.put("/_fake/busy", json={"seconds": 60, "status": 529})
+    api.put("/_fake/busy", json={"seconds": 10})
+    assert api.post("/v1/messages", json=request(), headers=HEADERS).status_code == 429
+    clock.now += 10
+    assert api.post("/v1/messages", json=request(), headers=HEADERS).status_code == 200
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {},
+        {"seconds": 0},
+        {"seconds": 3601},
+        {"seconds": "inf"},
+        {"seconds": 5, "status": 500},
+        {"seconds": 5, "retry_after": -1},
+        {"seconds": 5, "colour": "red"},
+    ],
+)
+def test_a_busy_window_that_makes_no_sense_is_refused(body: dict[str, Any]) -> None:
+    api, _ = busy_client()
+    assert api.put("/_fake/busy", json=body).status_code == 422
+    assert api.post("/v1/messages", json=request(), headers=HEADERS).status_code == 200
+
+
 # Delay
 
 

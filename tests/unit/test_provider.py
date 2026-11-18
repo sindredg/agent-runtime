@@ -13,7 +13,12 @@ import pytest
 
 from fake_provider.messages import encode_sse, stream_events
 from runtime.provider.base import ModelRequest, ModelResponse, ProviderError
-from runtime.provider.messages import CLAUDE_API_URL, AnthropicProvider
+from runtime.provider.messages import (
+    CLAUDE_API_URL,
+    MAX_RETRY_AFTER,
+    AnthropicProvider,
+    retry_after,
+)
 
 REQUEST = ModelRequest(
     model="m", max_tokens=100, messages=[{"role": "user", "content": "hi"}], user_id="job-1"
@@ -51,10 +56,16 @@ def sse(chunks: list[bytes]) -> httpx2.Response:
     )
 
 
-def error(status: int, kind: str) -> httpx2.Response:
-    return httpx2.Response(
-        status, json={"type": "error", "error": {"type": kind, "message": "nope"}}
-    )
+def error(
+    status: int,
+    kind: str,
+    headers: dict[str, str] | None = None,
+    details: dict[str, str] | None = None,
+) -> httpx2.Response:
+    detail: dict[str, object] = {"type": kind, "message": "nope"}
+    if details is not None:
+        detail["details"] = details
+    return httpx2.Response(status, json={"type": "error", "error": detail}, headers=headers)
 
 
 def test_a_complete_stream_becomes_the_response() -> None:
@@ -81,22 +92,76 @@ def test_a_complete_stream_becomes_the_response() -> None:
 
 
 @pytest.mark.parametrize(
-    ("status", "kind", "retryable"),
+    ("status", "kind", "retryable", "busy"),
     [
-        (400, "invalid_request_error", False),
-        (401, "authentication_error", False),
-        (404, "not_found_error", False),
-        (413, "request_too_large", False),
-        (429, "rate_limit_error", True),
-        (500, "api_error", True),
-        (529, "overloaded_error", True),
+        (400, "invalid_request_error", False, False),
+        (401, "authentication_error", False, False),
+        (404, "not_found_error", False, False),
+        (408, "timeout_error", True, False),
+        (413, "request_too_large", False, False),
+        (429, "rate_limit_error", True, True),
+        (500, "api_error", True, False),
+        (504, "timeout_error", True, False),
+        (529, "overloaded_error", True, True),
     ],
 )
-def test_an_error_status_is_classified(status: int, kind: str, retryable: bool) -> None:
+def test_an_error_status_is_classified(status: int, kind: str, retryable: bool, busy: bool) -> None:
+    """Only a rate limit and overload make the job wait (ADR 0018). The rest fail it."""
     with pytest.raises(ProviderError) as raised:
         complete(lambda request: error(status, kind))
     assert raised.value.status == status
     assert raised.value.retryable is retryable
+    assert raised.value.busy is busy
+    assert raised.value.retry_after is None
+
+
+@pytest.mark.parametrize("status", [429, 529])
+def test_a_busy_answer_carries_its_retry_after(status: int) -> None:
+    kind = "rate_limit_error" if status == 429 else "overloaded_error"
+    with pytest.raises(ProviderError) as raised:
+        complete(lambda request: error(status, kind, headers={"retry-after": "5"}))
+    assert raised.value.busy is True
+    assert raised.value.retry_after == 5
+
+
+def test_a_spend_cap_is_not_waited_out() -> None:
+    """The Claude API's spend-cap 429 has the rate limit's type and no `retry-after`.
+
+    Waiting does not lift it, so the job fails instead of waiting until its deadline.
+    """
+    capped = error(429, "rate_limit_error", details={"error_code": "enforced_spend_limit_reached"})
+    with pytest.raises(ProviderError) as raised:
+        complete(lambda request: capped)
+    assert raised.value.status == 429
+    assert raised.value.busy is False
+    assert raised.value.retryable is False
+
+
+def test_a_ramp_limit_429_is_waited_out() -> None:
+    ramp = error(429, "rate_limit_error", details={"error_code": "ramp_limit_exceeded"})
+    with pytest.raises(ProviderError) as raised:
+        complete(lambda request: ramp)
+    assert raised.value.busy is True
+
+
+@pytest.mark.parametrize(
+    ("header", "seconds"),
+    [
+        (None, None),
+        ("5", 5),
+        (" 12 ", 12),
+        ("0", 0),
+        ("1.5", 1.5),
+        ("-1", None),
+        ("soon", None),
+        ("Wed, 18 Nov 2026 15:00:00 GMT", None),
+        ("nan", None),
+        ("inf", None),
+        ("1e12", MAX_RETRY_AFTER),
+    ],
+)
+def test_retry_after_is_read_as_seconds(header: str | None, seconds: float | None) -> None:
+    assert retry_after(header) == seconds
 
 
 def test_the_client_does_not_retry_by_itself() -> None:
@@ -137,21 +202,22 @@ def stream_error(kind: str) -> bytes:
 
 
 @pytest.mark.parametrize(
-    ("kind", "retryable"),
+    ("kind", "retryable", "busy"),
     [
-        ("overloaded_error", True),
-        ("api_error", True),
-        ("rate_limit_error", True),
-        ("invalid_request_error", False),
+        ("overloaded_error", True, True),
+        ("api_error", True, False),
+        ("rate_limit_error", True, True),
+        ("invalid_request_error", False, False),
     ],
 )
 def test_an_error_event_inside_a_started_stream_is_classified_by_its_type(
-    kind: str, retryable: bool
+    kind: str, retryable: bool, busy: bool
 ) -> None:
     """The HTTP status was 200. The error arrives as an event after some output."""
     with pytest.raises(ProviderError) as raised:
         complete(lambda request: sse([*STREAM[:3], stream_error(kind)]))
     assert raised.value.retryable is retryable
+    assert raised.value.busy is busy
     assert raised.value.status is None
     assert kind in str(raised.value)
 
