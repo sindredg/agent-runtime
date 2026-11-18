@@ -17,7 +17,7 @@ from runtime.store.jobs import DEADLINE_ERROR, Job, cancel_job, claim_job, fail_
 from runtime.store.status import JobStatus
 from runtime.store.steps import Step, StepKind, read_steps
 
-from .conftest import new_job, with_engine
+from .conftest import database_now, new_job, with_engine
 
 S = JobStatus
 WAIT = held.Wait(seconds=30, attempt=2, retry_after=5, error="provider answered 429: busy")
@@ -35,11 +35,6 @@ async def wait(engine: AsyncEngine, job: Job, how: held.Wait = WAIT) -> Job:
     return await held.leave_running(
         engine, job_id=job.id, lease_epoch=job.lease_epoch, new_status=S.WAITING, wait=how
     )
-
-
-async def database_now(conn: AsyncConnection) -> datetime:
-    now: datetime = (await conn.execute(text("SELECT clock_timestamp()"))).scalar_one()
-    return now
 
 
 async def end_the_wait(conn: AsyncConnection, job: Job) -> None:
