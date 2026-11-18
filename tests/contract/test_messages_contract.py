@@ -8,12 +8,17 @@ of them refused on purpose) and needs a key.
 
 The same two-turn exchange (a tool call, then the answer) runs against both
 providers through the runtime's own client. Then the raw JSON of the same
-exchange from each is compared: everything the fake returns must also be in
-what the real API returns.
+exchange from each is compared, both ways: everything the fake returns must
+also be in what the real API returns, and everything the API returns and the
+fake does not must be declared in NOT_MODELLED. The raw responses and that
+list are written to `.contract/<time>/`.
 """
 
 import asyncio
+import json
 import os
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import httpx2
@@ -25,6 +30,18 @@ from runtime.worker.budget import input_bound
 
 FAKE_URL = os.environ.get("FAKE_PROVIDER_URL", "http://127.0.0.1:8001")
 CLAUDE_URL = "https://api.anthropic.com"
+REPORTS = Path(__file__).resolve().parents[2] / ".contract"
+
+# What the API may return and the fake does not, as `api_only` names it.
+# Why each is not modelled: docs/contract-test.md, "What the fake does not model".
+# Only entries an API run has shown are listed.
+NOT_MODELLED = frozenset(
+    {
+        "block type thinking",
+        "tool_use block field caller",
+        "more than one tool_use block in a response",
+    }
+)
 
 TOOL = {
     "name": "read_file",
@@ -169,6 +186,15 @@ def raw_exchange(base_url: str, api_key: str, model: str) -> list[dict[str, Any]
     return [first, second]
 
 
+def blocks_by_type(responses: list[dict[str, Any]]) -> dict[str, list[set[str]]]:
+    """The field names of every content block of the exchange, grouped by block type."""
+    blocks: dict[str, list[set[str]]] = {}
+    for response in responses:
+        for block in response["content"]:
+            blocks.setdefault(block["type"], []).append(set(block))
+    return blocks
+
+
 def differences(fake: list[dict[str, Any]], real: list[dict[str, Any]]) -> list[str]:
     """What the fake returns that the real API does not. Empty when there is nothing.
 
@@ -192,14 +218,6 @@ def differences(fake: list[dict[str, Any]], real: list[dict[str, Any]]) -> list[
             if ours[field] != theirs[field]
         ]
 
-    def blocks_by_type(responses: list[dict[str, Any]]) -> dict[str, list[set[str]]]:
-        """The field names of every content block of the exchange, grouped by block type."""
-        blocks: dict[str, list[set[str]]] = {}
-        for response in responses:
-            for block in response["content"]:
-                blocks.setdefault(block["type"], []).append(set(block))
-        return blocks
-
     real_blocks = blocks_by_type(real)
     for block_type, blocks in blocks_by_type(fake).items():
         if block_type not in real_blocks:
@@ -213,10 +231,63 @@ def differences(fake: list[dict[str, Any]], real: list[dict[str, Any]]) -> list[
     return found
 
 
-def test_everything_the_fake_returns_is_also_in_the_real_responses() -> None:
+def api_only(fake: list[dict[str, Any]], real: list[dict[str, Any]]) -> list[str]:
+    """What the API returned and the fake did not, over the whole exchange. Sorted.
+
+    The other direction of `differences`. Compared over the whole exchange,
+    not turn by turn: the question is what the worker can meet at all.
+    """
+
+    def names(responses: list[dict[str, Any]], part: str | None = None) -> set[str]:
+        return {name for r in responses for name in (r[part] if part else r)}
+
+    def most_calls(responses: list[dict[str, Any]]) -> int:
+        return max(len([b for b in r["content"] if b["type"] == "tool_use"]) for r in responses)
+
+    found = {f"message field {name}" for name in names(real) - names(fake)}
+    found |= {f"usage field {name}" for name in names(real, "usage") - names(fake, "usage")}
+    found |= {
+        f"stop reason {reason}"
+        for reason in {r["stop_reason"] for r in real} - {r["stop_reason"] for r in fake}
+    }
+    fake_blocks = blocks_by_type(fake)
+    for block_type, blocks in blocks_by_type(real).items():
+        if block_type not in fake_blocks:
+            found.add(f"block type {block_type}")
+            continue
+        ours = {name for block in fake_blocks[block_type] for name in block}
+        found |= {f"{block_type} block field {name}" for block in blocks for name in block - ours}
+    if most_calls(real) > 1 >= most_calls(fake):
+        found.add("more than one tool_use block in a response")
+    return sorted(found)
+
+
+@pytest.fixture(scope="module")
+def exchanges() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """The raw exchange with each provider, once, written to `.contract/<time>/`."""
     fake = raw_exchange(*target("fake"))
     real = raw_exchange(*target("claude"))
+    report = REPORTS / datetime.now(UTC).strftime("%Y-%m-%dT%H%M%SZ")
+    report.mkdir(parents=True)
+    (report / "fake.json").write_text(json.dumps(fake, indent=2) + "\n")
+    (report / "api.json").write_text(json.dumps(real, indent=2) + "\n")
+    (report / "api-only.txt").write_text("".join(f"{line}\n" for line in api_only(fake, real)))
+    return fake, real
+
+
+def test_everything_the_fake_returns_is_also_in_the_real_responses(
+    exchanges: tuple[list[dict[str, Any]], list[dict[str, Any]]],
+) -> None:
+    fake, real = exchanges
     assert differences(fake, real) == []
+
+
+def test_what_only_the_api_returns_is_declared(
+    exchanges: tuple[list[dict[str, Any]], list[dict[str, Any]]],
+) -> None:
+    """A new entry is a decision: model it in the fake, or declare it and say why."""
+    fake, real = exchanges
+    assert [entry for entry in api_only(fake, real) if entry not in NOT_MODELLED] == []
 
 
 def test_both_refuse_an_unknown_model_with_the_same_error_shape() -> None:

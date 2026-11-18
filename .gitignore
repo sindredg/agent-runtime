@@ -22,3 +22,6 @@ dist/
 
 # Logs written by the chaos tests.
 .chaos/
+
+# Raw responses written by the contract test.
+.contract/
