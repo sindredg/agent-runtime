@@ -19,6 +19,7 @@ from runtime.sandbox.runner import (
     EPOCH_LABEL,
     JOB_LABEL,
     LABEL,
+    MIB,
     NotStarted,
     Run,
     Sandbox,
@@ -27,6 +28,7 @@ from runtime.sandbox.runner import (
     check_host,
     deny_list,
     ends_within,
+    measure_within,
 )
 from runtime.scope import FIXED_DENY, Resolved
 from runtime.tools.base import ToolCall, ToolResult
@@ -251,6 +253,23 @@ def test_a_daemon_that_answers_every_request_late_ends_the_call_within_its_bound
     # The create never came back, so Docker was never asked to start it.
     assert isinstance(outcome, NotStarted), outcome
     assert f"within {call_within(short):g} s" in str(outcome)
+
+
+def test_with_a_workspace_limit_the_run_leaves_the_measurement_its_part_of_the_bound(
+    short: SandboxSettings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The measurement before the call and the run together end within `call_within`."""
+    monkeypatch.setattr(runner, "MEASURE_WITHIN", 1.0)
+    limited = dataclasses.replace(short, workspace_limit=MIB)
+    sandbox = Sandbox(FakeDocker(late=EVERY_REQUEST), limited)  # type: ignore[arg-type]
+
+    took, outcome = timed_run(sandbox)
+
+    assert measure_within(limited) == 1.0
+    run_bound = call_within(limited) - measure_within(limited)
+    assert took < run_bound + 0.3
+    assert isinstance(outcome, NotStarted), outcome
+    assert f"within {run_bound:g} s" in str(outcome)
 
 
 def test_a_late_daemon_becomes_a_failed_result_that_says_the_command_did_not_run(

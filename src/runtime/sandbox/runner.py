@@ -163,9 +163,11 @@ def measure_within(settings: SandboxSettings) -> float:
 
 
 def call_within(settings: SandboxSettings) -> float:
-    """Seconds after it began by which `Sandbox.run` returns, whatever Docker does.
+    """Seconds after a sandboxed tool call began by which it returns, whatever Docker does.
 
-    `ends_within`, plus one request's time for removing the containers. A
+    `ends_within`, plus one request's time for removing the containers. With
+    a workspace limit, the measurement before the call takes its part first,
+    and `Sandbox.run` returns within the rest. A
     worker's stop grace period has to be longer, by the time the steps
     around the call take (`runtime.config.STOP_MARGIN_SECONDS`), or a stop
     can cut off a call and leave it for a person.
