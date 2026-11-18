@@ -27,7 +27,7 @@ from runtime.provider.base import ModelRequest, ModelResponse
 from runtime.provider.messages import AnthropicProvider
 from runtime.sandbox.docker import Docker
 from runtime.sandbox.runner import LABEL, MIB, Run, Sandbox, SandboxSettings, ends_within
-from runtime.sandbox.workspace import workspace_size
+from runtime.sandbox.workspace import Bounds, workspace_size
 from runtime.scope import FIXED_DENY, Resolved
 from runtime.store.jobs import DEADLINE_ERROR, Job, cancel_job, claim_job, create_job, get_job
 from runtime.store.status import JobStatus
@@ -830,11 +830,17 @@ def test_a_lost_lease_kills_a_running_command(
 
 # The workspace watcher (ADR 0014)
 
-# Writes 1 MiB every 0.05 s, 200 times: 200 MiB in about 10 s if nothing stops it.
+# Writes 1 MiB every 0.2 s, 60 times: 60 MiB in about 12 s if nothing stops it.
+# At 5 MiB/s, the 8 MiB margin of the test below covers 1.6 s of writing past
+# the limit: the 0.2 s interval, the walk and the kill, also on a loaded host.
 WRITER = (
-    "i=0; while [ $i -lt 200 ]; do head -c 1048576 /dev/zero > part-$i;"
-    " i=$((i+1)); sleep 0.05; done; echo wrote it all"
+    "i=0; while [ $i -lt 60 ]; do head -c 1048576 /dev/zero > part-$i;"
+    " i=$((i+1)); sleep 0.2; done; echo wrote it all"
 )
+
+
+def measured(path: Path) -> int:
+    return workspace_size(path, Bounds(2**40, 10**9, time.monotonic() + 60))
 
 
 def tool_call(tool: SandboxTool, root: Path, job_id: uuid.UUID, command: str) -> ToolResult:
@@ -854,18 +860,18 @@ def test_a_command_that_writes_past_the_workspace_limit_is_stopped(
     started = time.monotonic()
     result = tool_call(tool, root, job_id, WRITER)
     took = time.monotonic() - started
-    size = workspace_size(root / str(job_id))
+    size = measured(root / str(job_id))
 
     assert result.is_error
     assert result.content.startswith("[stopped: the job's workspace holds ")
-    assert "over its limit of 8.0 MiB" in result.content
-    # Stopped long before the command's 10 s, and close to the limit.
+    assert "holds more than its limit of 8.0 MiB" in result.content
+    # Stopped long before the command's 12 s, and close to the limit.
     assert took < 5
     assert 8 * MIB < size < 16 * MIB
     # The container is gone: nothing writes on.
     assert our_containers(volume) == []
     time.sleep(0.5)
-    assert workspace_size(root / str(job_id)) == size
+    assert measured(root / str(job_id)) == size
 
 
 def test_a_workspace_over_its_limit_runs_no_command(
@@ -879,5 +885,5 @@ def test_a_workspace_over_its_limit_runs_no_command(
     result = tool_call(run_shell_tool(OwnClientSandbox(limit)), root, job_id, "touch ran")
 
     assert result.is_error
-    assert result.content.endswith("over its limit of 1.0 MiB. The command did not start.")
+    assert result.content.endswith("its limit of 1.0 MiB. The command did not start.")
     assert not (root / str(job_id) / "ran").exists()

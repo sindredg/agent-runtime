@@ -154,6 +154,7 @@ def test_sandbox_settings_are_read() -> None:
             "SANDBOX_TIMEOUT_SECONDS": "2.5",
             "SANDBOX_WORKSPACE_LIMIT_MIB": "16",
             "SANDBOX_WORKSPACE_POLL_SECONDS": "0.25",
+            "SANDBOX_WORKSPACE_FILE_LIMIT": "500",
         }
     )
     assert config.sandbox is not None
@@ -161,6 +162,7 @@ def test_sandbox_settings_are_read() -> None:
     assert config.sandbox.settings.timeout == 2.5
     assert config.sandbox.settings.workspace_limit == 16 * MIB
     assert config.sandbox.settings.watch_interval == 0.25
+    assert config.sandbox.settings.workspace_entries == 500
 
 
 @pytest.mark.parametrize(
@@ -170,9 +172,10 @@ def test_sandbox_settings_are_read() -> None:
         ("SANDBOX_WORKSPACE_LIMIT_MIB", "1.5"),
         ("SANDBOX_WORKSPACE_POLL_SECONDS", "0"),
         ("SANDBOX_WORKSPACE_POLL_SECONDS", "nan"),
+        ("SANDBOX_WORKSPACE_FILE_LIMIT", "0"),
     ],
 )
-def test_the_workspace_limit_and_its_interval_must_be_positive(name: str, value: str) -> None:
+def test_the_workspace_limits_and_the_interval_must_be_positive(name: str, value: str) -> None:
     env = {"SANDBOX_IMAGE": "i", "SANDBOX_VOLUME": "v", name: value}
     with pytest.raises(ConfigError, match=name):
         WorkerConfig.from_env({**WORKER_ENV, **env})
@@ -292,13 +295,13 @@ def test_the_defaults_fit_a_sandboxed_call_into_the_stop_grace_period() -> None:
 
 
 def test_a_sandbox_timeout_whose_call_does_not_fit_the_stop_grace_period_is_refused() -> None:
-    # 15 + 10 + 40 + 2 + 10 = 77, and 5 more.
+    # 3 (measuring the workspace) + 15 + 10 + 40 + 2 + 10 = 80, and 5 more.
     env = {**SANDBOX_ENV, "SANDBOX_TIMEOUT_SECONDS": "40"}
-    with pytest.raises(ConfigError, match=r"77 s .* 5 s more: more than STOP_GRACE_SECONDS \(75\)"):
+    with pytest.raises(ConfigError, match=r"80 s .* 5 s more: more than STOP_GRACE_SECONDS \(75\)"):
         WorkerConfig.from_env(env)
 
 
-@pytest.mark.parametrize("grace", ["77", "81"])
+@pytest.mark.parametrize("grace", ["80", "84"])
 def test_a_stop_grace_period_that_fits_the_call_but_not_the_steps_around_it_is_refused(
     grace: str,
 ) -> None:
@@ -308,8 +311,8 @@ def test_a_stop_grace_period_that_fits_the_call_but_not_the_steps_around_it_is_r
 
 
 def test_a_longer_stop_grace_period_lets_a_longer_timeout_in() -> None:
-    env = {**SANDBOX_ENV, "SANDBOX_TIMEOUT_SECONDS": "40", "STOP_GRACE_SECONDS": "82"}
-    assert WorkerConfig.from_env(env).stop_grace_seconds == 82
+    env = {**SANDBOX_ENV, "SANDBOX_TIMEOUT_SECONDS": "40", "STOP_GRACE_SECONDS": "85"}
+    assert WorkerConfig.from_env(env).stop_grace_seconds == 85
 
 
 @pytest.mark.parametrize("value", ["0", "-1", "nan", "inf", "soon"])

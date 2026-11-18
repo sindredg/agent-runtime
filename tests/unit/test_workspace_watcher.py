@@ -1,10 +1,11 @@
-"""The workspace watcher of ADR 0014: the measurement, and a call over the limit.
+"""The workspace watcher of ADR 0014 and 0017: the measurement, and a call over the limit.
 
-The integration test in `test_sandbox.py` runs it against Docker.
+The integration tests in `test_sandbox.py` run it against Docker.
 """
 
 import asyncio
 import os
+import time
 import uuid
 from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
@@ -12,8 +13,9 @@ from pathlib import Path
 import pytest
 
 from runtime.sandbox.runner import MIB, Run, SandboxSettings
-from runtime.sandbox.workspace import Unmeasurable, workspace_size
+from runtime.sandbox.workspace import MAX_DEPTH, Bounds, OverLimit, Unmeasurable, workspace_size
 from runtime.scope import Resolved
+from runtime.tools import sandboxed
 from runtime.tools.base import ToolCall, ToolResult
 from runtime.tools.run_shell import run_shell_tool
 
@@ -22,6 +24,10 @@ JOB = uuid.UUID("01a1d655-88bd-7468-afc4-5ca3a1947906")
 
 def blocks(path: Path) -> int:
     return os.lstat(path).st_blocks * 512
+
+
+def size(root: Path, *, limit: int = 2**40, entries: int = 10**9, seconds: float = 60) -> int:
+    return workspace_size(root, Bounds(limit, entries, time.monotonic() + seconds))
 
 
 # Measuring
@@ -33,14 +39,14 @@ def test_files_and_directories_are_counted_by_what_they_take_on_disk(tmp_path: P
     (tmp_path / "d" / "e" / "b").write_bytes(b"y" * 5000)
     paths = [tmp_path, tmp_path / "a", tmp_path / "d", tmp_path / "d" / "e", tmp_path / "d/e/b"]
 
-    assert workspace_size(tmp_path) == sum(blocks(p) for p in paths)
-    assert workspace_size(tmp_path) >= 105_000
+    assert size(tmp_path) == sum(blocks(p) for p in paths)
+    assert size(tmp_path) >= 105_000
 
 
 def test_a_sparse_file_counts_what_it_uses(tmp_path: Path) -> None:
     with (tmp_path / "sparse").open("wb") as file:
         file.truncate(512 * MIB)
-    assert workspace_size(tmp_path) < MIB
+    assert size(tmp_path) < MIB
 
 
 def test_a_link_is_not_followed(tmp_path: Path) -> None:
@@ -52,7 +58,7 @@ def test_a_link_is_not_followed(tmp_path: Path) -> None:
     (root / "to-dir").symlink_to(outside)
     (root / "to-file").symlink_to(outside / "big")
 
-    assert workspace_size(root) < MIB
+    assert size(root) < MIB
 
 
 @pytest.fixture
@@ -77,28 +83,62 @@ def test_a_directory_the_command_locked_cannot_be_measured(
 ) -> None:
     """The command runs as the worker's uid and may chmod its own directories."""
     with pytest.raises(Unmeasurable):
-        workspace_size(locked(mode))
+        size(locked(mode))
 
 
 def test_a_missing_workspace_cannot_be_measured(tmp_path: Path) -> None:
     with pytest.raises(Unmeasurable):
-        workspace_size(tmp_path / "gone")
+        size(tmp_path / "gone")
 
 
 def test_directories_nested_too_deep_cannot_be_measured(tmp_path: Path) -> None:
     path = tmp_path
-    for _ in range(1200):
+    for _ in range(MAX_DEPTH + 1):
         path = path / "d"
         path.mkdir()
-    with pytest.raises(Unmeasurable, match="nested too deep"):
-        workspace_size(tmp_path)
+    with pytest.raises(Unmeasurable, match=f"nested deeper than {MAX_DEPTH}"):
+        size(tmp_path)
+
+
+def test_the_walk_stops_at_the_size_limit(tmp_path: Path) -> None:
+    for n in range(4):
+        (tmp_path / f"f{n}").write_bytes(b"x" * MIB)
+    with pytest.raises(OverLimit, match=r"its limit of 2\.0 MiB"):
+        size(tmp_path, limit=2 * MIB)
+
+
+def test_the_walk_stops_at_the_entry_limit(tmp_path: Path) -> None:
+    for n in range(50):
+        (tmp_path / f"f{n}").touch()
+    with pytest.raises(OverLimit, match="its limit of 20 files and directories"):
+        size(tmp_path, entries=20)
+
+
+def test_a_walk_past_its_deadline_cannot_be_measured(tmp_path: Path) -> None:
+    for n in range(3000):
+        (tmp_path / f"f{n}").touch()
+    with pytest.raises(Unmeasurable, match="took too long"):
+        size(tmp_path, seconds=-1)
+
+
+def test_any_error_of_the_file_system_cannot_be_measured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "d").mkdir()
+
+    def broken(fd: int) -> None:
+        raise OSError(5, "Input/output error")
+
+    monkeypatch.setattr(os, "scandir", broken)
+    with pytest.raises(Unmeasurable, match="Input/output error"):
+        size(tmp_path)
 
 
 # The watcher around a call
 
 
 class WritingSandbox:
-    """Writes `chunk` bytes into the workspace every `every` seconds, `times` times, then ends."""
+    """Writes `chunk` bytes into the workspace every 0.02 s, `times` times, then ends."""
 
     def __init__(self, workspace: Path, limit: int | None, *, times: int, chunk: int) -> None:
         self.settings = SandboxSettings(
@@ -156,7 +196,7 @@ def test_a_call_that_writes_past_the_limit_is_stopped(workspace: Path) -> None:
 
     assert result.is_error
     assert result.content.startswith("[stopped: the job's workspace holds ")
-    assert "over its limit of 2.0 MiB" in result.content
+    assert "holds more than its limit of 2.0 MiB" in result.content
     assert sandbox.cancelled
     # Stopped near the limit: far less than the 25 MiB it would write.
     assert sandbox.written < 8 * MIB
@@ -178,7 +218,22 @@ def test_a_workspace_over_the_limit_starts_no_command(workspace: Path) -> None:
     result = run(sandbox)
 
     assert result.is_error
-    assert result.content.endswith("over its limit of 1.0 MiB. The command did not start.")
+    assert result.content.endswith("its limit of 1.0 MiB. The command did not start.")
+    assert sandbox.calls == 0
+
+
+def test_a_workspace_with_too_many_files_starts_no_command(workspace: Path) -> None:
+    for n in range(30):
+        (workspace / f"f{n}").touch()
+    sandbox = WritingSandbox(workspace, 64 * MIB, times=1, chunk=1)
+    sandbox.settings = SandboxSettings(
+        image="sandbox:test", volume="workspaces", workspace_limit=64 * MIB, workspace_entries=20
+    )
+
+    result = run(sandbox)
+
+    assert result.is_error
+    assert "its limit of 20 files and directories. The command did not start." in result.content
     assert sandbox.calls == 0
 
 
@@ -197,3 +252,92 @@ def test_without_a_limit_nothing_is_measured(tmp_path: Path) -> None:
     sandbox = WritingSandbox(tmp_path / str(JOB), None, times=0, chunk=0)
 
     assert run(sandbox) == ToolResult("wrote it all\n[exit status 0]")
+
+
+def test_a_measurement_past_its_time_box_starts_no_command(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The time box is part of `ends_within`: a slow walk must not delay the start."""
+    for n in range(3000):
+        (workspace / f"f{n}").touch()
+    monkeypatch.setattr(sandboxed, "MEASURE_WITHIN", -1.0)
+    sandbox = WritingSandbox(workspace, 64 * MIB, times=1, chunk=1)
+
+    result = run(sandbox)
+
+    assert result.is_error
+    assert "cannot be measured (the walk took too long" in result.content
+    assert sandbox.calls == 0
+
+
+def test_a_run_that_ends_does_not_wait_for_a_measurement(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    measured = 0
+
+    def slow(root: Path, bounds: Bounds) -> int:
+        nonlocal measured
+        measured += 1
+        if measured > 1:
+            # Every measurement during the call takes 2 s.
+            time.sleep(2)
+        return 0
+
+    monkeypatch.setattr(sandboxed, "workspace_size", slow)
+    sandbox = WritingSandbox(workspace, 64 * MIB, times=10, chunk=1)
+    tool = run_shell_tool(sandbox)
+
+    async def body() -> tuple[ToolResult, float]:
+        started = time.monotonic()
+        result = await tool.run(ToolCall(workspace, {"command": "w"}, f"{JOB}:toolu_1", 1))
+        # Timed in the loop: closing it waits for the walk's thread.
+        return result, time.monotonic() - started
+
+    result, took = asyncio.run(body())
+
+    assert result == ToolResult("wrote it all\n[exit status 0]")
+    assert measured >= 2
+    assert took < 1.5
+
+
+class SlowRemoval(WritingSandbox):
+    """Writes past the limit at once, then takes `removal` seconds to go when cancelled."""
+
+    def __init__(self, workspace: Path, removal: float) -> None:
+        super().__init__(workspace, MIB, times=1, chunk=2 * MIB)
+        self.removal = removal
+        self.removing = asyncio.Event()
+
+    async def run(
+        self,
+        job_id: uuid.UUID,
+        lease_epoch: int,
+        argv: Sequence[str],
+        scope: Resolved | None = None,
+    ) -> Run:
+        (self.workspace / "big").write_bytes(b"w" * self.chunk)
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            self.removing.set()
+            # As Sandbox.run's finally: the removal is waited for.
+            await asyncio.sleep(self.removal)
+            raise
+        raise AssertionError("not stopped")
+
+
+def test_a_cancel_of_the_call_during_the_removal_is_not_swallowed(workspace: Path) -> None:
+    """The job's cancel or deadline cancels the tool run; the watcher must pass that on."""
+    sandbox = SlowRemoval(workspace, removal=0.5)
+    tool = run_shell_tool(sandbox)
+
+    async def body() -> None:
+        call = asyncio.ensure_future(
+            tool.run(ToolCall(workspace, {"command": "w"}, f"{JOB}:toolu_1", 1))
+        )
+        await asyncio.wait_for(sandbox.removing.wait(), 5)
+        call.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await call
+
+    asyncio.run(body())

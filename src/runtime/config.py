@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from runtime.failpoints import NAMES as FAILPOINT_NAMES
-from runtime.sandbox.runner import MIB, SandboxSettings, call_within
+from runtime.sandbox.runner import DEFAULT_WORKSPACE_ENTRIES, MIB, SandboxSettings, call_within
 
 # Seconds a stop needs besides a sandboxed call: the scope's lookup ends at a
 # stop, but the intent before the call, the result after it and the release
@@ -137,6 +137,9 @@ class SandboxConfig:
                 volume=_required(env, "SANDBOX_VOLUME"),
                 timeout=_positive_float(env, "SANDBOX_TIMEOUT_SECONDS", 30.0),
                 workspace_limit=_positive_int(env, "SANDBOX_WORKSPACE_LIMIT_MIB", 1024) * MIB,
+                workspace_entries=_positive_int(
+                    env, "SANDBOX_WORKSPACE_FILE_LIMIT", DEFAULT_WORKSPACE_ENTRIES
+                ),
                 watch_interval=_positive_float(env, "SANDBOX_WORKSPACE_POLL_SECONDS", 1.0),
                 guard_image=guard_image,
                 network=network,

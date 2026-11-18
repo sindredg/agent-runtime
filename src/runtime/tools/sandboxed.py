@@ -9,7 +9,7 @@ start, or is stopped. A workspace that cannot be measured counts as over.
 """
 
 import asyncio
-import contextlib
+import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,8 +17,8 @@ from typing import Any, Protocol
 from uuid import UUID
 
 from runtime.sandbox.docker import SandboxError
-from runtime.sandbox.runner import MIB, NotStarted, Run, SandboxSettings
-from runtime.sandbox.workspace import Unmeasurable, workspace_size
+from runtime.sandbox.runner import MEASURE_WITHIN, NotStarted, Run, SandboxSettings
+from runtime.sandbox.workspace import Bounds, OverLimit, Unmeasurable, workspace_size
 from runtime.scope import Resolved
 from runtime.tools.base import ToolCall, ToolResult, tool_definition
 
@@ -78,42 +78,61 @@ def describe(run: Run, *, timeout: float, limit: int) -> ToolResult:
     )
 
 
-def _mib(size: int) -> str:
-    return f"{size / MIB:.1f} MiB"
+def _bounds(settings: SandboxSettings, limit: int) -> Bounds:
+    deadline = time.monotonic() + MEASURE_WITHIN
+    return Bounds(size=limit, entries=settings.workspace_entries, deadline=deadline)
 
 
-async def _over(workspace: Path, limit: int) -> str | None:
-    """Why the workspace is over `limit`, or None while it is within it."""
+async def _over(workspace: Path, settings: SandboxSettings, limit: int) -> str | None:
+    """Why the workspace is over its limits, or None while it is within them.
+
+    The walk is bounded by MEASURE_WITHIN, so this ends in about that time.
+    """
     try:
-        size = await asyncio.to_thread(workspace_size, workspace)
+        await asyncio.to_thread(workspace_size, workspace, _bounds(settings, limit))
+    except OverLimit as error:
+        return f"the job's workspace {error}"
     except Unmeasurable as error:
         return f"the job's workspace cannot be measured ({error})"
-    if size > limit:
-        return f"the job's workspace holds {_mib(size)}, over its limit of {_mib(limit)}"
     return None
 
 
-async def _watched(run: Awaitable[Run], workspace: Path, limit: int, interval: float) -> Run | str:
-    """Await `run` while measuring the workspace every `interval` seconds.
+async def _watched(
+    run: Awaitable[Run], workspace: Path, settings: SandboxSettings, limit: int
+) -> Run | str:
+    """Await `run` while measuring the workspace every `watch_interval` seconds.
 
-    Returns why it was stopped instead, once the workspace is over `limit`.
-    Stopping cancels the run, and the sandbox kills and removes the
-    container before the cancel completes.
+    Returns why it was stopped instead, once the workspace is over its
+    limits. Stopping cancels the run, and the sandbox kills and removes the
+    container before the cancel completes. A run that ends while a
+    measurement is under way is returned at once.
     """
     task = asyncio.ensure_future(run)
+    measuring: asyncio.Future[str | None] | None = None
     try:
         while True:
-            done, _ = await asyncio.wait({task}, timeout=interval)
+            done, _ = await asyncio.wait({task}, timeout=settings.watch_interval)
             if done:
                 return task.result()
-            reason = await _over(workspace, limit)
+            measuring = asyncio.ensure_future(_over(workspace, settings, limit))
+            await asyncio.wait({task, measuring}, return_when=asyncio.FIRST_COMPLETED)
+            if task.done():
+                return task.result()
+            reason = measuring.result()
             if reason is not None:
                 return reason
     finally:
+        if measuring is not None and not measuring.done():
+            # The walk's thread ends by its own deadline.
+            measuring.cancel()
         if not task.done():
             task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, SandboxError):
-                await task
+            # Not suppressed: a cancel of this call that arrives while the
+            # container is removed propagates.
+            await asyncio.wait({task})
+        if not task.cancelled():
+            # Retrieved, so asyncio does not report it as never retrieved.
+            task.exception()
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,7 +165,7 @@ class SandboxTool:
             return ToolResult("the workspace is not a job's workspace", is_error=True)
         settings = self.sandbox.settings
         limit = settings.workspace_limit
-        if limit is not None and (reason := await _over(call.workspace, limit)) is not None:
+        if limit is not None and (reason := await _over(call.workspace, settings, limit)):
             return ToolResult(f"{reason}. The command did not start.", is_error=True)
         try:
             scope = call.scope if self.networked else None
@@ -154,7 +173,7 @@ class SandboxTool:
             if limit is None:
                 run = await started
             else:
-                watched = await _watched(started, call.workspace, limit, settings.watch_interval)
+                watched = await _watched(started, call.workspace, settings, limit)
                 if isinstance(watched, str):
                     return ToolResult(
                         f"[stopped: {watched}. The files it wrote stay; its output is lost.]",

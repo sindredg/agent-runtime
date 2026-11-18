@@ -44,6 +44,12 @@ TIMEOUT_PROGRAM = "/usr/bin/timeout"
 # Seconds the timeout inside the container waits beyond the worker's own, so
 # that a worker that is still there stops the command first and reports it.
 KILL_MARGIN = 2.0
+# Seconds the measurement of a job's workspace before a call may take
+# (ADR 0017). Past it the workspace counts as unmeasurable: no command.
+MEASURE_WITHIN = 3.0
+# Files and directories a workspace may hold by default. One walk of it
+# takes about 1.3 s at the slowest rate measured (80,000 entries/s).
+DEFAULT_WORKSPACE_ENTRIES = 100_000
 # The longest timeout or start bound accepted: one day.
 MAX_SECONDS = 86_400.0
 MIB = 1024 * 1024
@@ -79,9 +85,11 @@ class SandboxSettings:
     network: str | None = None
     # Addresses no scope can open. Always holds FIXED_DENY.
     deny: tuple[Network, ...] = FIXED_DENY
-    # The soft size limit of a job's workspace (ADR 0014), in bytes, and the
-    # seconds between two measurements while a command runs. None: no limit.
+    # The soft size limit of a job's workspace (ADR 0014), in bytes, its
+    # limit on files and directories (ADR 0017), and the seconds between two
+    # measurements while a command runs. None: no limit, nothing measured.
     workspace_limit: int | None = None
+    workspace_entries: int = DEFAULT_WORKSPACE_ENTRIES
     watch_interval: float = 1.0
 
     def __post_init__(self) -> None:
@@ -114,6 +122,10 @@ class SandboxSettings:
             raise ValueError("deny must hold the fixed deny list")
         if self.workspace_limit is not None and self.workspace_limit < 1:
             raise ValueError(f"workspace_limit must be at least 1, got {self.workspace_limit!r}")
+        if self.workspace_entries < 1:
+            raise ValueError(
+                f"workspace_entries must be at least 1, got {self.workspace_entries!r}"
+            )
         if not 0 < self.watch_interval <= MAX_SECONDS:
             raise ValueError(
                 f"watch_interval must be above 0 and at most {MAX_SECONDS:g},"
@@ -127,13 +139,25 @@ class SandboxSettings:
 def ends_within(settings: SandboxSettings) -> float:
     """Seconds after a call began by which its container has ended, whatever the worker did.
 
-    The worker does not ask Docker to start the command after `start_within`,
-    and that request ends within its own timeout. From the start the command
-    has the timeout inside the container. Not covered: a worker that is
+    With a workspace limit, the workspace is measured first, within
+    MEASURE_WITHIN. The worker does not ask Docker to start the command after
+    `start_within`, and that request ends within its own timeout. From the
+    start the command has the timeout inside the container. Not covered: a worker that is
     paused between the start of the call and the start request, and a
     daemon that acts on a request after the worker gave up on it.
     """
-    return settings.start_within + REQUEST_TIMEOUT + settings.timeout + KILL_MARGIN
+    return (
+        measure_within(settings)
+        + settings.start_within
+        + REQUEST_TIMEOUT
+        + settings.timeout
+        + KILL_MARGIN
+    )
+
+
+def measure_within(settings: SandboxSettings) -> float:
+    """Seconds the measurement before a call may take: none without a workspace limit."""
+    return 0.0 if settings.workspace_limit is None else MEASURE_WITHIN
 
 
 def call_within(settings: SandboxSettings) -> float:
@@ -148,7 +172,7 @@ def call_within(settings: SandboxSettings) -> float:
 
 
 # The longest `ends_within` any valid settings give.
-LONGEST_BOUND = 2 * MAX_SECONDS + REQUEST_TIMEOUT + KILL_MARGIN
+LONGEST_BOUND = MEASURE_WITHIN + 2 * MAX_SECONDS + REQUEST_TIMEOUT + KILL_MARGIN
 
 
 # What a guard runs: set the rules, say so with the call's own token, wait.
@@ -481,7 +505,9 @@ class Sandbox:
             raise NotStarted("this sandbox has no guard image, so it cannot enforce a scope")
         now = asyncio.get_running_loop().time()
         start_by = now + settings.start_within
-        within = call_within(settings)
+        # The measurement of the workspace before this call had its own part
+        # of `call_within`, counted from the start of the tool call.
+        within = call_within(settings) - measure_within(settings)
         end = now + within
         # Chosen here, not by Docker: a container whose create was cut off
         # before Docker's answer arrived can still be removed by its name.
