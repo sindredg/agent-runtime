@@ -9,11 +9,12 @@ from runtime.tools.list_dir import list_dir_tool
 from runtime.tools.read_file import READ_FILE
 from runtime.tools.run_shell import run_shell_tool
 from runtime.tools.sandboxed import Runner
+from runtime.tools.trackers import Tracker
 
 
 def default_tools(
     *,
-    tracker_url: str | None = None,
+    tracker: Tracker | None = None,
     chaos_log_dir: Path | None = None,
     sandbox: Runner | None = None,
 ) -> ToolRegistry:
@@ -27,8 +28,8 @@ def default_tools(
     tools: list[AnyTool] = [READ_FILE]
     if sandbox is not None:
         tools += [list_dir_tool(sandbox), run_shell_tool(sandbox)]
-    if tracker_url:
-        tools.append(create_issue_tool(tracker_url))
+    if tracker is not None:
+        tools.append(create_issue_tool(tracker))
     if chaos_log_dir is not None:
         tools.append(crash_worker_tool(chaos_log_dir))
     return ToolRegistry(tools)

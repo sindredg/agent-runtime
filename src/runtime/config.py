@@ -4,7 +4,7 @@ import os
 import re
 import socket
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from runtime.failpoints import NAMES as FAILPOINT_NAMES
@@ -68,6 +68,52 @@ def _http_url(env: Mapping[str, str], name: str) -> str | None:
     if not value.startswith(("http://", "https://")):
         raise ConfigError(f"{name} must be an http or https URL, got {value!r}")
     return value.rstrip("/")
+
+
+TRACKER_KINDS = ("fake", "gitea")
+# Gitea's names for a repository's owner and name.
+# A name of dots only would make a path like `/repos/../..` of the URL.
+_GITEA_NAME = r"(?!\.+(?:/|$))[A-Za-z0-9_.-]+"
+_GITEA_REPO = re.compile(rf"{_GITEA_NAME}/{_GITEA_NAME}")
+# Letters and digits only: a token that could break a header line could end
+# up in an error message, and from there in the step log.
+_GITEA_TOKEN = re.compile(r"[A-Za-z0-9]+")
+
+
+@dataclass(frozen=True, slots=True)
+class TrackerConfig:
+    """The issue tracker the `create_issue` tool opens issues in.
+
+    TRACKER_KIND picks it: `fake` (the default) or `gitea`. Gitea also needs
+    TRACKER_REPO (`owner/name`) and TRACKER_TOKEN, a token that can write
+    issues and read its own user. The token is never printed.
+    """
+
+    kind: str
+    url: str
+    repo: str = ""
+    token: str = field(default="", repr=False)
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str]) -> TrackerConfig | None:
+        """None when TRACKER_URL is not set: the tool is then not offered."""
+        url = _http_url(env, "TRACKER_URL")
+        kind = env.get("TRACKER_KIND") or "fake"
+        if kind not in TRACKER_KINDS:
+            raise ConfigError(
+                f"TRACKER_KIND must be one of {', '.join(TRACKER_KINDS)}, got {kind!r}"
+            )
+        if url is None:
+            return None
+        if kind == "fake":
+            return cls(kind, url)
+        repo, token = _required(env, "TRACKER_REPO"), _required(env, "TRACKER_TOKEN")
+        if not _GITEA_REPO.fullmatch(repo):
+            raise ConfigError(f"TRACKER_REPO must be owner/name, got {repo!r}")
+        if not _GITEA_TOKEN.fullmatch(token):
+            # The value is not repeated: it is a secret.
+            raise ConfigError("TRACKER_TOKEN must be letters and digits only")
+        return cls(kind, url, repo, token)
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,7 +221,7 @@ class WorkerConfig:
     # How often the worker renews the lease of the job it is running.
     heartbeat_seconds: float
     # Where the `create_issue` tool opens issues. Unset, the tool is not offered.
-    tracker_url: str | None
+    tracker: TrackerConfig | None
     # For chaos tests only. The failpoint at which the worker ends its own
     # process, and the tool the tool failpoints are limited to.
     failpoint: str | None
@@ -233,7 +279,7 @@ class WorkerConfig:
             alive_file=Path(env.get("WORKER_ALIVE_FILE") or "/tmp/worker.alive"),  # noqa: S108
             lease_seconds=lease_seconds,
             heartbeat_seconds=heartbeat_seconds,
-            tracker_url=_http_url(env, "TRACKER_URL"),
+            tracker=TrackerConfig.from_env(env),
             failpoint=failpoint,
             failpoint_tool=env.get("FAILPOINT_TOOL") or None,
             chaos_log_dir=chaos_log_dir,

@@ -12,6 +12,7 @@ from runtime.failpoints import NAMES, Failpoints
 from runtime.tools import default_tools
 from runtime.tools.base import ToolCall
 from runtime.tools.crash_worker import crash_worker_tool
+from runtime.tools.trackers import FakeTracker
 
 WORKER_ENV = {"ANTHROPIC_API_KEY": "k", "MODEL": "m", "DATABASE_URL": "postgresql://u:p@h/db"}
 
@@ -131,7 +132,7 @@ def test_chaos_tools_need_a_log_directory() -> None:
 
 def test_the_crash_tool_is_absent_unless_chaos_tools_are_on(tmp_path: Path) -> None:
     assert default_tools().get("crash_worker") is None
-    assert default_tools(tracker_url="http://t").get("crash_worker") is None
+    assert default_tools(tracker=FakeTracker("http://t")).get("crash_worker") is None
     assert default_tools(chaos_log_dir=tmp_path).get("crash_worker") is not None
 
 

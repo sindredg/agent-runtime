@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from runtime.config import ApiConfig, ConfigError, ProviderConfig, WorkerConfig
+from runtime.config import ApiConfig, ConfigError, ProviderConfig, TrackerConfig, WorkerConfig
 from runtime.sandbox.runner import MIB, SandboxSettings
 
 ENV = {"ANTHROPIC_API_KEY": "k", "MODEL": "some-model"}
@@ -55,7 +55,7 @@ def test_worker_defaults() -> None:
     assert config.alive_file == Path("/tmp/worker.alive")  # noqa: S108
     assert config.lease_seconds == 30.0
     assert config.heartbeat_seconds == 10.0
-    assert config.tracker_url is None
+    assert config.tracker is None
     assert config.sandbox is None
     assert config.sweep_interval == 300.0
 
@@ -80,7 +80,7 @@ def test_worker_settings_are_read() -> None:
     assert config.alive_file == Path("/run/alive")
     assert config.lease_seconds == 2.5
     assert config.heartbeat_seconds == 0.5
-    assert config.tracker_url == "http://fake-tracker:8000"
+    assert config.tracker == TrackerConfig("fake", "http://fake-tracker:8000")
     assert config.sweep_interval == 60.0
 
 
@@ -131,6 +131,52 @@ def test_the_heartbeat_must_be_shorter_than_the_lease(env: dict[str, str]) -> No
 def test_the_tracker_url_must_be_http_or_https(value: str) -> None:
     with pytest.raises(ConfigError, match="TRACKER_URL"):
         WorkerConfig.from_env({**WORKER_ENV, "TRACKER_URL": value})
+
+
+GITEA_ENV = {
+    "TRACKER_KIND": "gitea",
+    "TRACKER_URL": "http://gitea:3000/",
+    "TRACKER_REPO": "lab-admin/shop",
+    "TRACKER_TOKEN": "secretTokenValue0123",
+}
+
+
+def test_a_gitea_tracker_is_read_and_its_token_is_not_printed() -> None:
+    config = WorkerConfig.from_env({**WORKER_ENV, **GITEA_ENV})
+    assert config.tracker == TrackerConfig(
+        "gitea", "http://gitea:3000", "lab-admin/shop", "secretTokenValue0123"
+    )
+    assert "secretTokenValue0123" not in repr(config)
+
+
+def test_the_tracker_kind_is_fake_by_default_and_needs_a_url_to_offer_the_tool() -> None:
+    assert WorkerConfig.from_env({**WORKER_ENV, "TRACKER_KIND": "gitea"}).tracker is None
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ({"TRACKER_KIND": "jira"}, "TRACKER_KIND"),
+        ({"TRACKER_REPO": ""}, "TRACKER_REPO is not set"),
+        ({"TRACKER_TOKEN": ""}, "TRACKER_TOKEN is not set"),
+        ({"TRACKER_REPO": "shop"}, "owner/name"),
+        ({"TRACKER_REPO": "a/b/../../admin"}, "owner/name"),
+        ({"TRACKER_REPO": "a/b?x=1"}, "owner/name"),
+        ({"TRACKER_REPO": "../.."}, "owner/name"),
+        ({"TRACKER_REPO": "lab/.."}, "owner/name"),
+        ({"TRACKER_TOKEN": "abc\n"}, "letters and digits"),
+        ({"TRACKER_TOKEN": "s3cr3t\u00e9"}, "letters and digits"),
+        ({"TRACKER_TOKEN": "a b"}, "letters and digits"),
+    ],
+)
+def test_a_gitea_tracker_needs_a_repo_and_a_token_of_letters_and_digits(
+    change: dict[str, str], message: str
+) -> None:
+    with pytest.raises(ConfigError, match=message) as raised:
+        WorkerConfig.from_env({**WORKER_ENV, **GITEA_ENV, **change})
+    # A refused token is not repeated in the error.
+    if token := change.get("TRACKER_TOKEN"):
+        assert token not in str(raised.value)
 
 
 def test_the_sandbox_is_on_when_an_image_is_named() -> None:

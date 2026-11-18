@@ -20,6 +20,7 @@ from runtime.tools.base import ToolCall, ToolResult
 from runtime.tools.list_dir import list_dir_tool
 from runtime.tools.run_shell import run_shell_tool
 from runtime.tools.sandboxed import SandboxTool, describe
+from runtime.tools.trackers import FakeTracker
 from runtime.worker.approval import gate_reason
 
 LIMIT = 64 * 1024
@@ -209,7 +210,7 @@ def test_no_tool_a_worker_offers_needs_approval_unless_a_job_asks(tmp_path: Path
     Pinned here so that a tool which starts to ask on every call does so on purpose.
     """
     tools = default_tools(
-        tracker_url="http://tracker.invalid", chaos_log_dir=tmp_path, sandbox=FakeSandbox()
+        tracker=FakeTracker("http://tracker.invalid"), chaos_log_dir=tmp_path, sandbox=FakeSandbox()
     )
     names = [definition["name"] for definition in tools.definitions()]
     assert sorted(names) == ["crash_worker", "create_issue", "list_dir", "read_file", "run_shell"]

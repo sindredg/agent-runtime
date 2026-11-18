@@ -24,6 +24,7 @@ from runtime.store.jobs import Job, claim_job, get_job
 from runtime.store.status import JobStatus
 from runtime.store.steps import Step, StepKind, read_steps
 from runtime.tools import default_tools
+from runtime.tools.trackers import FakeTracker
 from runtime.worker.agent import AgentSettings, run_job
 
 from .conftest import Stack, expire_lease
@@ -80,7 +81,7 @@ def test_every_failpoint_has_an_expectation() -> None:
 def test_a_job_stopped_at_the_failpoint_is_finished_by_a_second_worker_with_one_issue(
     stack: Stack, fake_tracker_url: str, name: str
 ) -> None:
-    tools = default_tools(tracker_url=fake_tracker_url)
+    tools = default_tools(tracker=FakeTracker(fake_tracker_url))
 
     def settings() -> AgentSettings:
         plain = stack.settings()

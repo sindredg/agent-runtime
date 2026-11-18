@@ -1,4 +1,4 @@
-.PHONY: all up up-claude down clean logs test integration escape chaos
+.PHONY: all up up-claude down clean logs test integration escape chaos lab
 
 # The group that owns the Docker socket. The worker joins it to start a
 # container for each sandboxed tool call. Every compose command needs it.
@@ -24,9 +24,9 @@ up-claude:
 down:
 	docker compose down
 
-# Stop the services and delete the database volume.
+# Stop the services and delete the database volume, and the lab's Gitea data.
 clean:
-	docker compose down --volumes --remove-orphans
+	docker compose -f docker-compose.yml -f docker-compose.lab.yml down --volumes --remove-orphans
 
 logs:
 	docker compose logs --follow
@@ -55,3 +55,11 @@ chaos:
 	chmod 777 .chaos
 	docker compose -f docker-compose.yml -f docker-compose.chaos.yml up --build --wait
 	uv run --frozen pytest -v -s tests/chaos
+
+# The lab demo: create_issue against Gitea in a container, and a worker that
+# stops itself in the middle of the call. Sets Gitea up (users, repository,
+# a token that can only write issues), then runs the two cases. Fake provider.
+# Gitea stays up at http://127.0.0.1:3000; `make up` brings the normal stack back.
+lab:
+	docker compose -f docker-compose.yml -f docker-compose.lab.yml build
+	uv run --frozen pytest -v -s tests/lab

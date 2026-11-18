@@ -59,7 +59,19 @@ flowchart LR
 | `STOP_GRACE_SECONDS` | 75 | Time the worker gets after SIGTERM. Also the stack's `stop_grace_period`. |
 | `WORKER_ID` | host name and process id | Stored as `lease_owner` |
 | `WORKER_ALIVE_FILE` | `/tmp/worker.alive` | Touched every 5 seconds. The compose health check reads its age. |
+
+## Worker: the issue tracker
+
+| Variable | Default | Meaning |
+|---|---|---|
 | `TRACKER_URL` | unset | The tracker `create_issue` talks to. Unset, the tool is not offered. |
+| `TRACKER_KIND` | `fake` | `fake` for the fake tracker, `gitea` for Gitea |
+| `TRACKER_REPO` | unset | Gitea only: the repository, as `owner/name` |
+| `TRACKER_TOKEN` | unset | Gitea only: a token with `write:issue` and `read:user`. The check counts only its user's issues. |
+
+The [lab demo](lab-demo.md) sets these for Gitea. It also reads
+`LAB_GITEA_PORT` (3000) and `LAB_GITEA_PASSWORD` (`lab-admin-dev`) for the
+Gitea container and its admin user.
 
 ## Worker: workspace and sandbox
 
