@@ -104,34 +104,8 @@ test writes its result to `.chaos/results.jsonl` with a `verdict`: `passed`,
 
 ## The contract test
 
-```sh
-make up
-ANTHROPIC_API_KEY=<key> CONTRACT_MODEL=<model id> uv run pytest tests/contract
-```
-
-It sends five small requests to the Claude API, one of which is refused on
-purpose. Everything the fake returns has to be in what the API returns.
-
-It was run once on 2026-11-17, against `claude-haiku-5-5` at commit
-`a27b0f8`, on one machine, with the fake provider of `make up` at the same
-commit. 4 of 4 tests passed.
-
-What the pass does not show:
-
-- The comparison goes one way. What the API returns and the fake never does
-  is not reported
-  ([issue 72](https://github.com/sindredg/agent-runtime/issues/72)).
-- The fake was not broken and then compared with the API. That the
-  comparison reports a difference is shown on made-up responses, in
-  `tests/unit/test_contract_comparison.py`.
-- It is one exchange of two turns with one model.
-
-An earlier version of the test ran on 2026-11-14 at commit `8f73f6e`. 3 of 4
-passed: the fourth expected text before the tool call, and the model wrote
-none.
-
-Whole jobs have also run against the API:
-[Runs against the Claude API](results/api.md).
+It compares the fake provider with the Claude API, both ways, and is run
+by hand with a key: [The contract test](contract-test.md).
 
 ## Commands
 

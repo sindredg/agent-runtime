@@ -118,3 +118,55 @@ def test_a_field_on_only_some_api_blocks_of_a_type_is_not_one_the_fake_may_rely_
     differences = contract.differences(fake, real)
     assert len(differences) == 1
     assert "sometimes" in differences[0]
+
+
+# The other direction: what the API returns and the fake does not.
+
+THINKING = {"type": "thinking", "thinking": "", "signature": "sig"}
+
+
+def test_what_the_api_returns_and_the_fake_does_not_is_listed(contract: ModuleType) -> None:
+    """REAL has three fields the fake leaves out: on a message, on usage, on a block."""
+    assert contract.api_only(FAKE, REAL) == [
+        "message field another_field",
+        "text block field another_field",
+        "tool_use block field caller",
+        "usage field another_count",
+    ]
+
+
+def test_the_same_responses_list_nothing(contract: ModuleType) -> None:
+    assert contract.api_only(REAL, REAL) == []
+
+
+@pytest.mark.parametrize(
+    ("real", "found"),
+    [
+        ([message("tool_use", THINKING, CALL), FAKE[1]], "block type thinking"),
+        (
+            [message("tool_use", CALL, {**CALL, "id": "toolu_2"}), FAKE[1]],
+            "more than one tool_use block in a response",
+        ),
+        ([FAKE[0], message("refusal", TEXT)], "stop reason refusal"),
+    ],
+    ids=["block-type", "two-calls", "stop-reason"],
+)
+def test_each_kind_of_api_only_entry_is_named(
+    contract: ModuleType, real: list[dict[str, Any]], found: str
+) -> None:
+    assert contract.api_only(FAKE, real) == [found]
+
+
+def test_an_entry_that_is_not_declared_fails_the_contract_test(contract: ModuleType) -> None:
+    """The check the keyed run makes, on a response with a block type nobody declared."""
+    real = [message("tool_use", {"type": "made_up", "x": 1}, CALL), FAKE[1]]
+    exchanges = (FAKE, real)
+    with pytest.raises(AssertionError):
+        contract.test_what_only_the_api_returns_is_declared(exchanges)
+
+
+def test_every_declared_entry_has_its_line_on_the_contract_test_page(contract: ModuleType) -> None:
+    page = (CONTRACT.parents[2] / "docs" / "contract-test.md").read_text()
+    section = page.split("### What the fake does not model", 1)[1].split("\n#", 1)[0]
+    listed = {line.split("`")[1] for line in section.splitlines() if line.startswith("| `")}
+    assert listed == set(contract.NOT_MODELLED)

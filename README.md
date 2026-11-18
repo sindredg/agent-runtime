@@ -98,7 +98,7 @@ machine, not in the repository. The run, and what it does not show:
 [Results](docs/results/README.md).
 
 The fake provider is compared with the Claude API by a contract test that is
-run by hand: [Testing](docs/testing.md#the-contract-test). Eight jobs have
+run by hand: [The contract test](docs/contract-test.md). Eight jobs have
 run against the API: [Runs against the Claude API](docs/results/api.md).
 
 ## Documentation
