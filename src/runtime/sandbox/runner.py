@@ -50,6 +50,8 @@ MEASURE_WITHIN = 3.0
 # Files and directories a workspace may hold by default. One walk of it
 # takes about 1.3 s at the slowest rate measured (80,000 entries/s).
 DEFAULT_WORKSPACE_ENTRIES = 100_000
+# The soft size limit of a job's workspace by default, in MiB (ADR 0014).
+DEFAULT_WORKSPACE_LIMIT_MIB = 1024
 # The longest timeout or start bound accepted: one day.
 MAX_SECONDS = 86_400.0
 MIB = 1024 * 1024
