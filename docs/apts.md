@@ -57,8 +57,9 @@ server. Other production networks are on it only if listed in
 | SC-020 | The allowed tools enforced outside the model | The worker offers a fixed set of tools from its code. A call of any other name gets an error result and nothing runs. | tested | `test_worker.py`, in the [suites](results/README.md#the-suites) |
 | AR-020 | The audit trail out of the agent's reach | Tool containers have no route to Postgres: the runtime's networks are on every deny list. The worker writes the log. | tested | [Scope and sandbox](results/sandbox.md) |
 
-The workspace has no disk quota
-([issue 28](https://github.com/sindredg/agent-runtime/issues/28)).
+The workspace has a soft size limit, not a disk quota: a command writes on
+until the next measurement ([Sandbox](sandbox.md#workspace-size)). The hard
+limit is [issue 78](https://github.com/sindredg/agent-runtime/issues/78).
 
 ## Halt and approval
 
