@@ -35,6 +35,7 @@ from runtime.tools import default_tools
 from runtime.worker.agent import run_job
 
 from .conftest import Ran, Stack, expire_lease
+from .test_resume import PARKED
 
 SOCKET = os.environ.get("DOCKER_SOCKET", "/var/run/docker.sock")
 IMAGE = os.environ.get("SANDBOX_IMAGE", "agent-runtime-sandbox:dev")
@@ -492,7 +493,9 @@ def test_the_next_worker_removes_a_dead_workers_container_and_waits_out_the_call
         (StepKind.MODEL_RESPONSE, 1),
         (StepKind.TOOL_INTENT, 1),
         (StepKind.APPROVAL_REQUESTED, 2),
+        (StepKind.STATUS_CHANGED, 2),
     ]
+    assert taken.steps[4].payload == PARKED
     intent, question = taken.steps[2], taken.steps[3]
     assert intent.payload["ends_within"] == bound
     # run_shell is not idempotent: after the wait, a person decides.
@@ -755,6 +758,11 @@ def test_a_cancel_kills_a_running_command_and_its_container(
     kinds = [step.kind for step in steps]
     assert StepKind.TOOL_INTENT in kinds
     assert StepKind.TOOL_RESULT not in kinds
+    # The worker's stop is the last step, with its cause.
+    assert (steps[-1].kind, steps[-1].payload) == (
+        StepKind.STATUS_CHANGED,
+        {"from": "running", "to": "cancelled", "cause": "cancel_requested"},
+    )
 
 
 def test_the_deadline_kills_a_running_command_and_fails_the_job(

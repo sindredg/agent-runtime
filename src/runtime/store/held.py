@@ -29,7 +29,14 @@ from runtime.store.jobs import Job, job_from_row
 from runtime.store.payload import check_json
 from runtime.store.schema import job_columns, jobs, step_columns, steps
 from runtime.store.status import JobStatus, can_move
-from runtime.store.steps import Step, StepConflict, StepKind, next_seq, step_from_row
+from runtime.store.steps import (
+    StatusCause,
+    Step,
+    StepConflict,
+    StepKind,
+    next_seq,
+    step_from_row,
+)
 
 # Postgres reports a broken unique constraint with this SQLSTATE.
 _UNIQUE_VIOLATION = "23505"
@@ -139,6 +146,12 @@ async def renew_lease(
     return expires
 
 
+# Leaving `running` for these writes a `status_changed` step with the move.
+# A release to `queued` is not a decision about the job, and an end with
+# `succeeded` follows the model's last answer: both stay log lines.
+_RECORDED = frozenset({JobStatus.NEEDS_APPROVAL, JobStatus.CANCELLED})
+
+
 async def leave_running(
     engine: AsyncEngine,
     *,
@@ -154,13 +167,16 @@ async def leave_running(
     `cancelled` instead: nobody else would stop it before its deadline. A
     released job keeps the request; the next claim cancels it.
 
+    A park and a cancel also write a `status_changed` step, in the same
+    statement: from `running`, to the status the job got, and the cause.
+
     Not to `failed`: that is `fail`, which writes the `error` step with it.
     """
     if new_status is JobStatus.FAILED:
         raise ValueError("a job is failed with held.fail, which also writes its error step")
     if not isinstance(new_status, JobStatus) or not can_move(JobStatus.RUNNING, new_status):
         raise ValueError(f"a running job cannot move to {new_status!r}")
-    statement = (
+    moved = (
         update(jobs)
         .where(*_held(job_id, lease_epoch))
         .values(
@@ -175,6 +191,33 @@ async def leave_running(
         )
         .returning(*job_columns)
     )
+    if new_status not in _RECORDED:
+        return job_from_row(await _send(engine, moved, job_id, lease_epoch))
+    held = moved.cte("held")
+    cause = case(
+        (held.c.status == JobStatus.CANCELLED.value, StatusCause.CANCEL_REQUESTED.value),
+        else_=StatusCause.APPROVAL_REQUESTED.value,
+    )
+    step = (
+        insert(steps)
+        .from_select(
+            ["job_id", "seq", "kind", "payload", "lease_epoch"],
+            select(
+                held.c.id,
+                next_seq(job_id),
+                literal(StepKind.STATUS_CHANGED.value, Text),
+                func.jsonb_build_object(
+                    "from", JobStatus.RUNNING.value, "to", held.c.status, "cause", cause
+                ),
+                literal(lease_epoch, Integer),
+            ),
+        )
+        .returning(steps.c.seq)
+        .cte("step")
+    )
+    # The step is in a CTE that the main query does not read. Postgres runs
+    # it all the same, and in the same statement as the move.
+    statement = select(*held.c).add_cte(step)
     return job_from_row(await _send(engine, statement, job_id, lease_epoch))
 
 

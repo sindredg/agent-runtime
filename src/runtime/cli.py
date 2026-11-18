@@ -181,6 +181,8 @@ def _detail(kind: str, payload: dict[str, Any]) -> str:
         return _preview(f"{payload['name']}: {payload['reason']} ({payload['operation_id']})")
     if kind in ("approval_given", "approval_denied"):
         return _preview(payload["operation_id"])
+    if kind == "status_changed":
+        return f"{payload['from']} -> {payload['to']} ({payload['cause']})"
     return _preview(json.dumps(payload))
 
 

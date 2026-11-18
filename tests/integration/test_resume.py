@@ -44,6 +44,9 @@ TURNS: list[list[dict[str, Any]]] = [
 ]
 SPEC = {"prompt": "do both", "files": {"seed.txt": "seeded\n"}}
 
+# The `status_changed` step a worker writes when it parks the job for a question.
+PARKED = {"from": "running", "to": "needs_approval", "cause": "approval_requested"}
+
 
 class Script:
     """A provider that answers from TURNS and records every request it received.
@@ -370,7 +373,9 @@ def test_a_call_nobody_can_vouch_for_stops_the_job_for_a_person(
         (K.MODEL_RESPONSE, 1),
         (K.TOOL_INTENT, 1),
         (K.APPROVAL_REQUESTED, 2),
+        (K.STATUS_CHANGED, 2),
     ]
+    assert resumed.steps[4].payload == PARKED
     asked = resumed.steps[3].payload
     assert reason in asked.pop("reason")
     assert asked == {
@@ -613,6 +618,7 @@ def test_an_approved_call_is_run_again_under_its_own_intent(stack: Stack) -> Non
         (K.MODEL_RESPONSE, 1),
         (K.TOOL_INTENT, 1),
         (K.APPROVAL_REQUESTED, 2),
+        (K.STATUS_CHANGED, 2),
         (K.APPROVAL_GIVEN, 2),
         (K.TOOL_INTENT, 3),
         (K.TOOL_RESULT, 3),
@@ -624,7 +630,8 @@ def test_an_approved_call_is_run_again_under_its_own_intent(stack: Stack) -> Non
     a, b = op(job, "toolu_a"), op(job, "toolu_b")
     # Two runs of the first call, for two intents: the abandoned one and the approved one.
     assert acts.runs == [(a, "a"), (a, "a"), (b, "b")]
-    assert steps[4].payload == {"tool_use_id": "toolu_a", "operation_id": a, "question": 4}
+    assert steps[4].payload == PARKED
+    assert steps[5].payload == {"tool_use_id": "toolu_a", "operation_id": a, "question": 4}
 
 
 def test_an_approved_rerun_that_is_interrupted_too_needs_a_new_approval(stack: Stack) -> None:
@@ -681,8 +688,10 @@ def test_an_approved_rerun_that_is_interrupted_too_needs_a_new_approval(stack: S
     assert [step.kind for step in steps][2:] == [
         K.TOOL_INTENT,
         K.APPROVAL_REQUESTED,
+        K.STATUS_CHANGED,
         K.APPROVAL_GIVEN,
         K.TOOL_INTENT,
         K.APPROVAL_REQUESTED,
+        K.STATUS_CHANGED,
     ]
     assert len(acts.runs) == 2

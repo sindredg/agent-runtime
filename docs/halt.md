@@ -56,8 +56,9 @@ The code is `worker/halt.py`.
 | 409 | The job succeeded or failed |
 | 404 | No such job |
 
-A cancel leaves no step. The job's status and `cancel_requested` are the
-record. A deadline failure has its `error` step.
+A cancel writes a `status_changed` step with the status before it, whoever
+makes it: the API, the claim, or the job's worker. A deadline failure has
+its `error` step.
 
 ## Token budget
 

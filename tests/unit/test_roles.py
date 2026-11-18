@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import select
 import signal
 import subprocess
 import sys
@@ -30,6 +31,24 @@ def test_a_stop_ends_the_wait_for_the_database() -> None:
     assert time.monotonic() - started < 2
 
 
+def refused_line(process: subprocess.Popen[str], timeout: float) -> str:
+    """Read the process's stderr until a line says it is trying again. Fails after `timeout`."""
+    assert process.stderr is not None
+    deadline = time.monotonic() + timeout
+    seen = ""
+    while (left := deadline - time.monotonic()) > 0:
+        ready, _, _ = select.select([process.stderr], [], [], left)
+        if not ready:
+            break
+        line = process.stderr.readline()
+        if not line:
+            break
+        seen += line
+        if "trying again" in line:
+            return seen
+    raise AssertionError(f"no retry within {timeout} s: {seen!r}")
+
+
 def test_sigterm_stops_an_api_that_waits_for_the_database() -> None:
     """Docker stops the API with SIGTERM. Without the wait before uvicorn
     starts, the API either fails at once or ignores the signal until Docker
@@ -43,13 +62,15 @@ def test_sigterm_stops_an_api_that_waits_for_the_database() -> None:
         text=True,
     )
     try:
-        time.sleep(2)
-        # Refused several times by now, and still trying.
+        # Once it says so, it has been refused and keeps trying. A fixed
+        # sleep is not enough: the first start in a new environment compiles
+        # the imports first, and a signal before the handler kills it.
+        first = refused_line(api, timeout=30)
         assert api.poll() is None
         api.send_signal(signal.SIGTERM)
-        _, stderr = api.communicate(timeout=5)
+        _, rest = api.communicate(timeout=5)
     finally:
         api.kill()
         api.wait()
-    assert api.returncode == 0, stderr
-    assert "trying again" in stderr
+    assert api.returncode == 0, first + rest
+    assert "trying again" in first

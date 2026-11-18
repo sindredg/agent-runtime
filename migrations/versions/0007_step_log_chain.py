@@ -66,7 +66,8 @@ RETURN sha256(
 
 # The insert trigger. It locks the job row as its UPDATE of the head would,
 # before it reads the head, so two inserts for one job run one after the
-# other. A claim, which locks the row FOR UPDATE, waits for the insert too.
+# other. A claim locks the row the same way with SKIP LOCKED, so it passes
+# over a job whose step is being inserted.
 #
 # A `seq` at or below the head is let through with a placeholder hash. The
 # step with that `seq` exists, so the primary key refuses the row, and

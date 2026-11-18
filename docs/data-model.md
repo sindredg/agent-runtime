@@ -109,6 +109,7 @@ the WHERE clauses of the partial indexes.
 | `approval_given` | By `POST /jobs/{id}/approve` | `tool_use_id`, `operation_id`, `question` |
 | `approval_denied` | By `POST /jobs/{id}/deny` | `tool_use_id`, `operation_id`, `question` |
 | `error` | When the job fails, whoever fails it | `message` |
+| `status_changed` | With a cancel and a park for approval, in the same statement or transaction | `from`, `to`, `cause` (`cancel_requested` or `approval_requested`) |
 
 A new kind needs a migration: the kinds are a CHECK constraint.
 
