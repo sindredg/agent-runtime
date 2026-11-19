@@ -33,6 +33,7 @@ make kills-claude KILLS_MODEL=claude-haiku-5-5
   the first failure. It needs `CLAUDE_API_KEY` in `.env`
   ([Settings](settings.md#the-claude-api)).
 - Both replace the normal stack. Run `make up` afterwards.
+- The `KILLS_*` variables are in [Settings](settings.md#the-kill-runs).
 
 Recorded runs start from the Manual runs workflow on GitHub Actions
 ([ADR 0020](adr/0020-run-recorded-kill-and-api-runs-in-a-manual-workflow.md)). A job on the Claude API waits for a reviewer:
@@ -72,6 +73,17 @@ its result. The two failpoints aim there
 ([Interrupted calls](interrupted-calls.md)). The rules are in
 `tests/kills/rules.py`, and `tests/unit/test_kill_rules.py` breaks each one.
 
+### Recorded, not judged
+
+A model decides by itself whether an answer holds a `thinking` block. Each
+line of `results.jsonl` counts them, and no count fails a run:
+
+- `jobs_with_a_thinking_block`: jobs with the block in a model response.
+- `jobs_that_sent_one_back_after_a_takeover`: of those, jobs where the
+  next worker sent it back and was answered. A job that was also claimed
+  after a wait or an approval is left out.
+- `block_types`: the blocks of every response, by type.
+
 ## The stack
 
 `docker-compose.kills.yml` goes on top of the normal stack.
@@ -83,18 +95,6 @@ its result. The two failpoints aim there
 | Failpoint | Set by the tests, only in `create_issue` calls |
 | Sandbox timeout | 10 s |
 | Tools | The normal ones. Not `crash_worker`: a model that is not scripted must not get it. |
-
-## Settings
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `KILLS_PROVIDER` | `fake` | `fake` or `claude`. The make targets set it. |
-| `KILLS_MODEL` | none | The model id. Required on the Claude API, refused on the fake provider. |
-| `KILLS_RUNS` | 20 | Jobs with a kill at a random time |
-| `KILLS_FAILPOINT_RUNS` | 5 | Jobs per failpoint |
-| `KILLS_SEED` | `20261119` | Fixes each kill time as a fraction of the window |
-| `KILLS_WINDOW` | measured | The window in seconds, to repeat a recorded run |
-| `KILLS_TESTS` | all | A `pytest -k` selection, for a must-fail run |
 
 ## What keeps a run from paying by mistake
 
@@ -144,7 +144,7 @@ The same commit with the intent write removed, as branch
   14 percent, at 95 percent confidence, and no lower.
 - A kill during a model's second call of a tool. The failpoints fire in the
   job's first `create_issue` call.
-- Whether a real model's answer held a `thinking` block. The results do not
-  record block types ([issue 113](https://github.com/sindredg/agent-runtime/issues/113)).
+- A `thinking` block sent back after a takeover. The runs above are from
+  before the results counted it ([issue 113](https://github.com/sindredg/agent-runtime/issues/113)).
 - More than one run per model. GitHub Actions deletes a run's log after 90
   days; a copy is kept outside the repository.

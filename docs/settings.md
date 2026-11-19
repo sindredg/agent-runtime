@@ -120,5 +120,19 @@ admin) from the shell, and compose reads the port from `.env` too.
 | `RUNTIME_DATABASE_URL` | `runtime verify` | the stack's `runtime_app` on `127.0.0.1:5432` | The database whose step log it checks. The app role is enough. |
 | `FAKE_SCENARIO_DIR` | fake-provider | scenarios in the package | Directory of scenario files |
 
+## The kill runs
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `KILLS_PROVIDER` | `fake` | `fake` or `claude`. The make targets set it. |
+| `KILLS_MODEL` | none | The model id. Required on the Claude API, refused on the fake provider. |
+| `KILLS_RUNS` | 20 | Jobs with a kill at a random time |
+| `KILLS_FAILPOINT_RUNS` | 5 | Jobs per failpoint |
+| `KILLS_SEED` | `20261119` | Fixes each kill time as a fraction of the window |
+| `KILLS_WINDOW` | measured | The window in seconds, to repeat a recorded run |
+| `KILLS_TESTS` | all | A `pytest -k` selection, for a must-fail run |
+
+Read by the [kill runs](kill-runs.md), not by a service.
+
 The switches for failure tests (`FAILPOINT`, `FAILPOINT_TOOL`, `CHAOS_TOOLS`,
 `CHAOS_LOG_DIR`) are in [Testing](testing.md#failure-switches).
