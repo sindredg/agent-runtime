@@ -41,6 +41,14 @@ NOT_MODELLED = frozenset(
         "block type thinking",
         "tool_use block field caller",
         "more than one tool_use block in a response",
+        "message field container",
+        "message field diagnostics",
+        "message field stop_details",
+        "usage field cache_creation",
+        "usage field inference_geo",
+        "usage field output_tokens_details",
+        "usage field service_tier",
+        "usage field speed",
     }
 )
 
