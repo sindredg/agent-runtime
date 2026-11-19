@@ -104,6 +104,10 @@ jobs:
           CLAUDE_API_KEY=not-a-real-key docker compose \
             -f docker-compose.yml -f docker-compose.claude.yml config --quiet
           docker compose -f docker-compose.yml -f docker-compose.lab.yml config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.kills.yml config --quiet
+          CLAUDE_API_KEY=not-a-real-key docker compose \
+            -f docker-compose.yml -f docker-compose.kills.yml \
+            -f docker-compose.claude.yml config --quiet
       # Builds the image and fails unless every service becomes healthy and
       # the one-shot migrate service exits 0.
       - name: Start the stack
@@ -220,6 +224,39 @@ jobs:
       - name: Service logs
         if: failure()
         run: docker compose -f docker-compose.yml -f docker-compose.lab.yml logs --no-color
+      - name: Stop the stack
+        if: always()
+        run: make clean
+
+  kills:
+    name: Kill runs (fake provider)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        with:
+          version: "0.13.8"
+      - run: uv sync --locked
+      # Every compose command needs the group of the Docker socket, which the
+      # worker joins to start tool containers. `make` sets it; the steps that
+      # call compose directly read it from here.
+      - name: Docker socket group
+        run: echo "DOCKER_GID=$(stat -c %g /var/run/docker.sock)" >> "$GITHUB_ENV"
+      # Kills workers at random times and stops them inside the call that
+      # opens an issue, and judges each job without a reference run. Always
+      # the fake provider here: the Claude API needs a key, and no secret is
+      # given to this workflow.
+      - name: Kill runs
+        run: make kills
+      - name: Results
+        if: always()
+        run: cat .kills/*/results.jsonl
+      - name: Service logs
+        if: failure()
+        run: docker compose -f docker-compose.yml -f docker-compose.kills.yml logs --no-color
       - name: Stop the stack
         if: always()
         run: make clean

@@ -133,6 +133,7 @@ uv installs the pinned Python and tools into `.venv`.
 | `make escape` | Escape tests: tries to get out of the sandbox. Needs no stack. |
 | `make chaos` | Chaos tests: kills, pauses and crashes workers. Run `make up` afterwards. |
 | `make lab` | [Lab demo](docs/lab-demo.md): a worker stopped in a call to Gitea. Run `make up` afterwards. |
+| `make kills` | [Kill runs](docs/kill-runs.md): killed workers, judged without a reference run. Run `make up` afterwards. |
 
 Suites, failure switches and the lint commands are in
 [Testing](docs/testing.md). Ports and environment variables are in

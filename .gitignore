@@ -25,3 +25,6 @@ dist/
 
 # Raw responses written by the contract test.
 .contract/
+
+# Results and worker logs written by the kill runs.
+.kills/

@@ -24,8 +24,8 @@ flowchart LR
 
 ## The Claude API
 
-The fake provider is the default, and the only provider the test suites
-run against. The Claude API takes its own command.
+The fake provider is the default. The Claude API takes its own command,
+and only the [kill runs](kill-runs.md) can be started against it.
 
 ```mermaid
 flowchart LR
@@ -34,10 +34,14 @@ flowchart LR
     K[CLAUDE_API_KEY, CLAUDE_MODEL in .env] --> C
     F --> T[make integration, make chaos]
     A -->|refused before the first test| T
+    KC[make kills-claude KILLS_MODEL=...] -->|adds docker-compose.claude.yml| KA[kill runs on the Claude API]
+    K --> KC
 ```
 
 - Only `docker-compose.claude.yml` reads `CLAUDE_API_KEY`, so the key can
   stay in `.env`. `CLAUDE_MODEL` defaults to `claude-haiku-5-5`.
+- `make kills-claude` has no default model: it does not start without
+  `KILLS_MODEL`.
 - `make up-claude` ends by printing the worker's provider URL and model.
   A result from that stack names both.
 - `scripts/check_fake_provider.py` does the refusing: it reads each

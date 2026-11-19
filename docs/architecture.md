@@ -138,6 +138,7 @@ Only a tool call with an intent and no result needs more: see
 | [Settings](settings.md) | Environment variables |
 | [Testing](testing.md) | Suites, failure switches, commands |
 | [The contract test](contract-test.md) | The fake provider against the Claude API, both ways |
+| [Kill runs](kill-runs.md) | Killed workers judged without a reference run, on the fake provider or a real model |
 | [Results](results/README.md) | The evidence behind each guarantee |
 | [Runs against the Claude API](results/api.md) | Eight jobs with a real model |
 | [Known limits](limits.md) | What is accepted and what is not built |

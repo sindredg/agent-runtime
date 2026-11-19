@@ -1,0 +1,35 @@
+# Changes to the stack for the kill runs (tests/kills). Used on top of
+# docker-compose.yml, with the fake provider:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.kills.yml up --wait
+#
+# `make kills` does that and runs the tests. `make kills-claude` adds
+# docker-compose.claude.yml, which is still the only file that names the
+# Claude API. `make up` afterwards brings the normal stack back.
+#
+# Not the chaos stack: that one offers the crash_worker tool, and a model
+# that is not scripted must not be handed it.
+name: agent-runtime
+
+services:
+  worker:
+    # Three workers, so that a job always has another worker to go to.
+    deploy:
+      replicas: 3
+    # A worker that stopped at the failpoint comes back. One that the tests
+    # killed is started by them.
+    restart: on-failure
+    environment:
+      # A lease of seconds, so a takeover is not half a minute away. Not the
+      # chaos stack's 2 s: a renewal that is late by a second would then
+      # cause a takeover that no kill caused.
+      LEASE_SECONDS: "6"
+      HEARTBEAT_SECONDS: "2"
+      POLL_INTERVAL_SECONDS: "0.2"
+      # Where the worker ends its own process; tests/kills sets it for the
+      # failpoint runs. Only in the call that opens the issue.
+      FAILPOINT: ${FAILPOINT:-}
+      FAILPOINT_TOOL: create_issue
+      # A short sandbox timeout, so that a takeover during a sandboxed call
+      # waits seconds, not a minute, before it decides about the call.
+      SANDBOX_TIMEOUT_SECONDS: "10"

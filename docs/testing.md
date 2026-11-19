@@ -1,7 +1,7 @@
 # Testing
 
-Six suites, each with its own needs. Nothing here calls a paid API except
-the contract test, which is run by hand.
+Seven suites, each with its own needs. Nothing here calls a paid API except
+the contract test and `make kills-claude`, which are run by hand.
 
 ```mermaid
 flowchart LR
@@ -10,6 +10,8 @@ flowchart LR
     E[tests/escape] --> IMG[the sandbox and guard images,<br/>no stack]
     C[tests/chaos] --> CS[make chaos:<br/>three workers, 2 s lease,<br/>failure switches]
     L[tests/lab] --> LS[make lab:<br/>Gitea, two workers,<br/>a failpoint]
+    R[tests/kills] --> RS[make kills:<br/>three workers, 6 s lease,<br/>a failpoint]
+    R -.->|make kills-claude| KEY
     K[tests/contract] --> S
     K --> KEY[a Claude API key]
 ```
@@ -23,6 +25,7 @@ flowchart LR
 | `tests/escape` | `make escape` | Attempts to get out of the sandbox, and scoped calls against two targets |
 | `tests/chaos` | `make chaos` | Workers that are killed, paused, crashed or stopped while jobs run |
 | `tests/lab` | `make lab` | A worker stopped in a call to Gitea ([Lab demo](lab-demo.md)) |
+| `tests/kills` | `make kills` | Killed workers, judged without a reference run ([Kill runs](kill-runs.md)) |
 | `tests/contract` | by hand | The fake provider against the Claude API |
 
 - The integration and chaos suites never mock Postgres.
@@ -30,11 +33,13 @@ flowchart LR
   stack does, so a missing right fails a test. The owner builds and
   migrates the test databases ([Database roles](database-roles.md)).
 - They stop before the first test unless every worker is on the fake
-  provider ([The Claude API](settings.md#the-claude-api)).
-- `make chaos` and `make lab` replace the normal stack. Run `make up` afterwards.
+  provider ([The Claude API](settings.md#the-claude-api)). The kill runs
+  stop unless every worker is on the provider they were started for.
+- `make chaos`, `make lab` and `make kills` replace the normal stack. Run
+  `make up` afterwards.
 - `CHAOS_RUNS` and `CHAOS_SEED` set the number and times of random kills.
-- CI runs unit, integration, escape and the short chaos run on every pull
-  request.
+- CI runs unit, integration, escape, the short chaos run, the lab demo and
+  a short kill run on the fake provider on every pull request.
 
 ## Records a test trusts
 
@@ -61,7 +66,8 @@ mechanism switched off, which had to fail. The outcomes are in
 
 ## Failure switches
 
-These exist for `tests/chaos` and do nothing unless switched on.
+These exist for `tests/chaos`, `tests/lab` and `tests/kills`, and do nothing
+unless switched on.
 
 | Switch | Effect |
 |---|---|
