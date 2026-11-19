@@ -34,9 +34,12 @@ FAILPOINTS = ("after_tool_intent", "after_tool_ran")
 TOOL = "create_issue"
 # The longest window a run may be given, in seconds. A job has five minutes on the API.
 MAX_WINDOW = 300.0
-# The block type a model's reasoning comes back in. The API checks such a
-# block when a later request sends it back.
+# The block type a model's reasoning comes back in. A later request sends it
+# back unchanged; Claude Fable 5.2 checks it on every account.
 THINKING = "thinking"
+# A step that moves a held job to one of these is written at the lease epoch
+# it leaves. The claim after it is not a takeover.
+NOT_A_TAKEOVER = ("waiting", "needs_approval")
 
 
 @dataclass(frozen=True)
@@ -165,6 +168,22 @@ class Run:
             found.append((int(step["lease_epoch"]), types))
         return found
 
+    def handed_on(self) -> list[int]:
+        """Lease epochs that ended with a wait or a park for an approval, in order.
+
+        The claim that follows such an epoch is not a takeover.
+        """
+        found = set()
+        for step in self.steps:
+            payload = step["payload"]
+            if (
+                step["kind"] == "status_changed"
+                and isinstance(payload, dict)
+                and payload.get("to") in NOT_A_TAKEOVER
+            ):
+                found.add(int(step["lease_epoch"]))
+        return sorted(found)
+
     def summary(self) -> str:
         job = self.job
         issues = ", ".join(f"{op.split(':')[-1]}={ids}" for op, ids in self.issues.items()) or "-"
@@ -177,6 +196,7 @@ class Run:
             f" claims={job['lease_epoch']} tokens={job['tokens_used']} {self.seconds:.1f}s"
             f" approvals={sum(self.approvals.values())}"
             f" responses at epochs {epochs} thinking at {thinking}"
+            f" waited or parked at {self.handed_on()}"
             f" issues: {issues} {self.note}"
         )
 
@@ -265,22 +285,30 @@ def sent_thinking_back_after_a_takeover(run: Run) -> bool:
     """Whether a worker that took the job over sent a `thinking` block back and was answered.
 
     A request holds the whole conversation. So a response at a later lease
-    epoch than the first one with a `thinking` block means: a worker that
-    never received the block rebuilt it from the step log, sent it, and the
-    API answered. The job must have succeeded.
+    epoch than a takeover that came after a `thinking` block means: a worker
+    that never received the block rebuilt it from the step log, sent it,
+    and the API answered. The job must have succeeded.
 
-    Every claim raises the lease epoch, and a claim after a wait for the
-    provider or after an approval is not a takeover. The job row counts
-    both, so a later epoch is taken as a takeover only when every claim
-    after the first was one. A job with another kind of claim is left out:
-    the count may be too low and is never too high.
+    Every claim that hands the job to a worker raises the lease epoch. The
+    claim after a wait or a park is not a takeover: its epoch ends with a
+    `status_changed` step. A release ends with no step, like a takeover, and
+    the job row counts only takeovers. So a job whose unexplained claims
+    outnumber its takeovers was also released, and is left out: the count
+    may be too low and is never too high.
     """
     job = run.job
-    if job["status"] != "succeeded" or job["lease_epoch"] - 1 != job["takeovers"]:
+    if job["status"] != "succeeded":
         return False
     responses = run.responses()
     first = min((epoch for epoch, types in responses if THINKING in types), default=None)
-    return first is not None and any(epoch > first for epoch, _ in responses)
+    if first is None:
+        return False
+    handed_on = set(run.handed_on())
+    # Epoch e ended in a claim of the job at e + 1.
+    taken = [e for e in range(1, job["lease_epoch"]) if e not in handed_on]
+    if len(taken) != job["takeovers"]:
+        return False
+    return any(e >= first and any(epoch > e for epoch, _ in responses) for e in taken)
 
 
 def thinking_record(runs: list[Run]) -> dict[str, Any]:

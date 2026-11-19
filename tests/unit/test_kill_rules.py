@@ -36,7 +36,7 @@ def job(**changes: Any) -> dict[str, Any]:
         "id": JOB,
         "status": "succeeded",
         "takeovers": 0,
-        # Claims of the job. The first one makes it 1, every later one adds 1.
+        # Claims that handed the job to a worker. A claim that ends the job adds 0.
         "lease_epoch": 1,
         "tokens_used": 4_000,
         "token_budget": 50_000,
@@ -314,7 +314,8 @@ def test_a_summary_names_the_job_and_its_issues(rules: ModuleType) -> None:
     run = rules.Run(job(), [], {OPERATION: [7]}, seconds=3.21, note="kill at 1.00s")
     assert run.summary() == (
         f"{JOB} succeeded  takeovers=0 claims=1 tokens=4000 3.2s approvals=0"
-        f" responses at epochs [] thinking at [] issues: {CALL}=[7] kill at 1.00s"
+        f" responses at epochs [] thinking at [] waited or parked at []"
+        f" issues: {CALL}=[7] kill at 1.00s"
     )
 
 
@@ -331,7 +332,9 @@ def test_a_summary_shows_what_the_thinking_counts_are_made_from(rules: ModuleTyp
     ]
     run = rules.Run(job(takeovers=1, lease_epoch=2), steps, {OPERATION: [7]}, seconds=9.0)
     assert " takeovers=1 claims=2 " in run.summary()
-    assert " responses at epochs [1, 1, 2] thinking at [1] " in run.summary()
+    assert " responses at epochs [1, 1, 2] thinking at [1] waited or parked at [] " in run.summary()
+    steps.insert(2, changed(1, "waiting"))
+    assert " waited or parked at [1] " in run.summary()
 
 
 # Thinking blocks: recorded, never judged
@@ -339,6 +342,12 @@ def test_a_summary_shows_what_the_thinking_counts_are_made_from(rules: ModuleTyp
 THINKING = {"type": "thinking", "thinking": "", "signature": "sig"}
 TEXT = {"type": "text", "text": "Done."}
 CALL_BLOCK = {"type": "tool_use", "id": CALL, "name": "create_issue", "input": {}}
+
+
+def changed(epoch: int, to: str) -> dict[str, Any]:
+    """A `status_changed` step as a worker writes it when it hands the job on."""
+    payload = {"from": "running", "to": to, "cause": "provider_busy"}
+    return {"kind": "status_changed", "lease_epoch": epoch, "payload": payload}
 
 
 def response(epoch: int, *blocks: Any, **more: Any) -> dict[str, Any]:
@@ -415,16 +424,49 @@ def test_a_takeover_after_the_last_answer_does_not_count(rules: ModuleType) -> N
     assert rules.sent_thinking_back_after_a_takeover(run) is False
 
 
+def test_a_block_in_both_responses_counts_from_the_first(rules: ModuleType) -> None:
+    """A model that thinks in every answer: the takeover after the first answer counts."""
+    steps = [response(1, THINKING, CALL_BLOCK), intent(1), result(2), response(2, THINKING, TEXT)]
+    run = thinking_job(rules, steps, takeovers=1, lease_epoch=2)
+    assert rules.sent_thinking_back_after_a_takeover(run) is True
+
+
 def test_a_claim_after_a_wait_is_not_a_takeover(rules: ModuleType) -> None:
     """The lease epoch also rises when a job is claimed after a wait or an approval."""
-    steps = [response(1, THINKING, CALL_BLOCK), intent(1), result(1), response(2, TEXT)]
-    waited = thinking_job(rules, steps, takeovers=0, lease_epoch=2)
+    steps = [response(1, THINKING, CALL_BLOCK), intent(1), result(1), changed(1, "waiting")]
+    waited = thinking_job(rules, [*steps, response(2, TEXT)], takeovers=0, lease_epoch=2)
     assert rules.sent_thinking_back_after_a_takeover(waited) is False
-    # Taken over before the block and claimed after a wait behind it: the
-    # step log does not say which claim was which, so the job is left out.
-    steps = [response(2, THINKING, CALL_BLOCK), intent(2), result(2), response(3, TEXT)]
-    both = thinking_job(rules, steps, takeovers=1, lease_epoch=3)
-    assert rules.sent_thinking_back_after_a_takeover(both) is False
+    parked = [*steps[:3], changed(1, "needs_approval"), response(2, TEXT)]
+    run = thinking_job(rules, parked, takeovers=0, lease_epoch=2)
+    assert rules.sent_thinking_back_after_a_takeover(run) is False
+
+
+def test_a_takeover_after_a_wait_counts(rules: ModuleType) -> None:
+    """The wait's step names its epoch, so the claim after the next epoch is the takeover."""
+    steps = [
+        response(1, THINKING, CALL_BLOCK),
+        changed(1, "waiting"),
+        response(2, CALL_BLOCK),
+        intent(2),
+        result(3),
+        response(3, TEXT),
+    ]
+    run = thinking_job(rules, steps, takeovers=1, lease_epoch=3)
+    assert rules.sent_thinking_back_after_a_takeover(run) is True
+
+
+def test_a_takeover_only_before_a_wait_and_the_block_does_not_count(rules: ModuleType) -> None:
+    """Taken over at 1 to 2, the block at 2, a wait at 2: no takeover after the block."""
+    steps = [response(2, THINKING, CALL_BLOCK), changed(2, "waiting"), response(3, TEXT)]
+    run = thinking_job(rules, steps, takeovers=1, lease_epoch=3)
+    assert rules.sent_thinking_back_after_a_takeover(run) is False
+
+
+def test_a_job_that_was_also_released_is_left_out(rules: ModuleType) -> None:
+    """A release leaves no step, like a takeover. More unexplained claims than takeovers."""
+    steps = [response(1, THINKING, CALL_BLOCK), intent(1), result(2), response(3, TEXT)]
+    run = thinking_job(rules, steps, takeovers=1, lease_epoch=3)
+    assert rules.sent_thinking_back_after_a_takeover(run) is False
 
 
 def test_a_job_that_did_not_succeed_does_not_count(rules: ModuleType) -> None:

@@ -75,13 +75,13 @@ its result. The two failpoints aim there
 
 ### Recorded, not judged
 
-A model decides by itself whether an answer holds a `thinking` block. Each
-line of `results.jsonl` counts them, and no count fails a run:
+The worker asks for no thinking, so whether an answer holds a `thinking`
+block is up to the model. Each `results.jsonl` line counts, and no count fails a run:
 
 - `jobs_with_a_thinking_block`: jobs with the block in a model response.
-- `jobs_that_sent_one_back_after_a_takeover`: of those, jobs where the
-  next worker sent it back and was answered. A job that was also claimed
-  after a wait or an approval is left out.
+- `jobs_that_sent_one_back_after_a_takeover`: of those, jobs that succeeded
+  and got an answer after a takeover that followed the block. A job that
+  was also released is left out: a release leaves no step.
 - `block_types`: the blocks of every response, by type.
 
 ## The stack
