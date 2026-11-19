@@ -71,10 +71,18 @@ stop reason, `input_tokens` and `output_tokens`
 | 2026-11-14 | `8f73f6e` | `claude-haiku-5-5` | 3 of 4. The fourth expected text before the tool call, and the model wrote none. |
 | 2026-11-17 | `a27b0f8` | `claude-haiku-5-5` | 4 of 4, the comparison one way only. |
 | 2026-11-19 | `adc388d` | `claude-haiku-5-5` | 4 of 5, the first two-way run. The API returned eight fields that were not declared yet. |
+| 2026-11-19 | `672103b` | `claude-haiku-5-5` | 5 of 5, both ways. Nine entries only the API returned, all declared. |
 
-That run is [GitHub Actions run 44603223641](https://github.com/sindredg/agent-runtime/actions/runs/44603223641).
-Its eight fields are now declared above. No two-way run has passed yet:
-the declared list is configured, not tested.
+The two runs of 2026-11-19 are GitHub Actions runs
+[44603223641](https://github.com/sindredg/agent-runtime/actions/runs/44603223641)
+and [44614433826](https://github.com/sindredg/agent-runtime/actions/runs/44614433826).
+Between them the eight fields were declared and nothing else changed.
+Status: tested.
+
+The nine entries of the second run are the eight fields and `tool_use block
+field caller`. It did not bring out a `thinking` block or a second
+`tool_use` block: those two entries are declared from earlier jobs
+([API runs](results/api.md)).
 
 ## What a pass does not show
 
