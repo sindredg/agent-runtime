@@ -32,6 +32,9 @@ flowchart LR
   token budget.
 - **A busy provider slows a job, it does not fail it.** A rate limit or
   overload makes the job wait, then it goes on.
+- **A change to the step log is refused or found.** Each step is chained by
+  hash, and `runtime verify` recomputes the chain. Its limits are in
+  [Hash chain](docs/step-log-chain.md#what-it-does-not-catch).
 
 Not built: retry on other provider errors, and a limit on provider calls
 shared by workers. Everything else that is missing or accepted is in
@@ -81,18 +84,19 @@ such a run did not reach is named with its result.
 
 | Guarantee | Status | Evidence |
 |---|---|---|
-| A job survives a worker stopping | Tested | [200 of 200 jobs, 176 kills](docs/results/durability.md#a-job-survives-a-worker-stopping) |
-| An unsafe tool call does not run twice without approval | Tested, one accepted exception | [No operation id with two issues](docs/results/durability.md#an-unsafe-tool-call-does-not-run-twice-without-approval) |
+| A job survives a worker stopping | Tested | [200 of 200 jobs, 171 kills](docs/results/durability.md#a-job-survives-a-worker-stopping) |
+| An unsafe tool call does not run twice without approval | Tested, one accepted exception | [No operation id with two issues, also in Gitea](docs/results/durability.md#an-unsafe-tool-call-does-not-run-twice-without-approval) |
 | A stale worker cannot corrupt a job | Tested | [No write after the takeover](docs/results/durability.md#a-stale-worker-cannot-corrupt-a-job) |
 | A job that crashes its worker every time does not loop forever | Tested | [Failed after 5 takeovers](docs/results/durability.md#a-job-that-crashes-its-worker-does-not-loop-forever) |
 | Every job stays inside its token budget and deadline, and can be cancelled | Tested, with [accepted exceptions](docs/limits.md#halt-and-budget) | [Budget, cancel and deadline](docs/results/controls.md#budget-deadline-and-cancel) |
 | A tool can reach only its job's scope, and nothing else of the host | Tested, with [accepted exceptions](docs/limits.md#sandbox-and-scope) | [23 of 23 escape tests](docs/results/sandbox.md) |
 | A tool call that needs approval does not run before a person approved it | Tested | [134 issues for 134 approvals](docs/results/controls.md#approval-before-a-tool-call) |
 | Bad tool output does not break a job | Tested | [100 MB cut to 64 KiB, the job goes on](docs/results/controls.md#bad-tool-output) |
-| Provider rate limits slow jobs, they do not fail them | Built for one job, no shared limiter. Not yet in a recorded run. | [Backoff](docs/backoff.md) |
+| Provider rate limits slow jobs, they do not fail them | Tested for one job. No limit shared by workers. | [One job waits out 60 s of 429s](docs/results/controls.md#a-busy-provider-slows-a-job) |
+| The step log cannot be changed without detection | Tested, with [stated limits](docs/step-log-chain.md#what-it-does-not-catch) | [Changes refused or found; 421 jobs verified](docs/results/durability.md#the-step-log-cannot-be-changed-without-detection) |
 | Throughput scales with workers | Not measured | |
 
-Every result is from one run at commit `e656fd8`, on one machine, against
+Every result is from one run at commit `1f57ee4`, on one machine, against
 the fake provider. The output of the switched-off runs is kept on that
 machine, not in the repository. The run, and what it does not show:
 [Results](docs/results/README.md).

@@ -4,11 +4,9 @@ The evidence that a tool reaches only its job's scope, and nothing else of
 the host. The conditions of the runs are on the [Results](README.md) page.
 The mechanisms are in [Sandbox](../sandbox.md) and [Scope](../scope.md).
 
-Tested. `make escape`, 23 of 23 tests, at `5d2f4fd` on 2026-11-17, on the
-machine of the `e656fd8` run. This page is from that later run, unless a
-line names another commit: the suite changed (issues 63 and 64). Docker
-29.1.3, `kernel.yama.ptrace_scope` 1, both read from the host and not
-recorded by the run.
+Tested. `make escape`, 23 of 23 tests, in the run at `1f57ee4`, unless a
+line names another commit. Docker 29.1.3, `kernel.yama.ptrace_scope` 1,
+both read from the host and not recorded by the run.
 
 Without a scope, 12 escape attempts, each as a `run_shell` call:
 
@@ -65,3 +63,19 @@ Which attempts have a failing run:
 | 200 forks, 512 MiB of memory | Yes |
 | A mount | No. Docker's default capabilities and seccomp profile refuse it, also to root. |
 | The Docker socket, the metadata address, both file searches | No. The switch mounts nothing but the workspace. |
+
+## Workspace size
+
+Tested, as a soft limit ([Sandbox](../sandbox.md#workspace-size)).
+Integration suite, `test_sandbox.py`, with an 8 MiB limit and a 0.2 s
+interval.
+
+- A command that writes on was stopped within 5 s with a failed result that
+  names the limit. The workspace held between 8 and 16 MiB, and the
+  container was gone.
+- A workspace already over its limit ran no command.
+
+With the mechanism off, each of 10 switches failed its tests. Among them:
+no measurement during a call, none before it, no cap on files, no deadline
+on the walk, and a watcher that leaves the run going on a cancel (a
+container was left).

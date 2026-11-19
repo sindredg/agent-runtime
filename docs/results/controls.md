@@ -1,7 +1,7 @@
 # Results: budget, approval and tool output
 
 The evidence for the guarantees about what a job may spend and do. Every
-result here is from the run at `e656fd8`, unless a line names another
+result here is from the run at `1f57ee4`, unless a line names another
 commit. Its conditions, and the runs with a mechanism switched off, are on
 the [Results](README.md) page. What a job may reach is on
 [Scope and sandbox](sandbox.md).
@@ -24,7 +24,7 @@ flowchart LR
 
 ## Budget, deadline and cancel
 
-Tested. Integration suite, 410 of 410 tests.
+Tested. Integration suite, 536 of 536 tests.
 
 - `test_budget.py`: a job that loops, set to read a 2 KB file thirty times,
   with a budget of 20,000 tokens.
@@ -54,7 +54,7 @@ With the mechanism off:
 |---|---|
 | The check that the next call fits | The call was made with no valid `max_tokens`, and the provider refused it. The job failed with that error, not the budget's. |
 | The check and the cut of `max_tokens`, at `bd830cc` | The job spent 282,118 tokens in 31 calls against its 20,000, by the provider's count. The test fails on the spend. |
-| The cancel check | Both cancel tests fail. One job ended `succeeded` instead of `cancelled`. |
+| The cancel check | Both cancel tests fail: neither job ended within the test's wait |
 | The deadline timer | Both deadline tests fail |
 | The claim's deadline check | Both claim tests fail. The job stayed `running`. |
 
@@ -64,7 +64,7 @@ Tested. `tests/chaos/test_approval.py`, 200 runs in the chaos run.
 
 - 200 jobs that ask before `create_issue`. The worker holding the job was
   killed at a random time before the question, and again after the answer.
-- 246 kills sent, 122 takeovers. 134 jobs were approved and 66 denied. No
+- 250 kills sent, 138 takeovers. 134 jobs were approved and 66 denied. No
   run failed.
 - The tracker holds 134 issues for 134 approvals, each created after its
   approval by the tracker's own time, and none for a denied call.
@@ -72,7 +72,7 @@ Tested. `tests/chaos/test_approval.py`, 200 runs in the chaos run.
   again. Two approvals, one issue.
 - Worker stopped after the approved call ran: the check finds the issue. One
   approval, one issue.
-- A job nobody answered, with an 8 s timeout: `failed` 0.06 s after its
+- A job nobody answered, with an 8 s timeout: `failed` 0.10 s after its
   deadline, no issue.
 
 `tests/integration/test_approval.py` covers the same with a tool that
@@ -82,6 +82,22 @@ that an answer counts only for the question it names.
 With the mechanism off: with the gate removed, all 4 chaos tests fail. In 20
 short runs the tracker holds 20 issues for 0 approvals. 14 of the 19
 integration tests fail.
+
+## A busy provider slows a job
+
+Tested for one job, with one worker. Workers share no limit, so G5's own
+line (50 jobs, 4 workers) is not claimed. `test_backoff_in_stack.py`, in the
+integration suite.
+
+- The fake answered 429 with `retry-after: 5` for 60 s, from before one
+  `ci-triage` job was submitted.
+- The job waited in `waiting` with `not_before` set, one backoff step per
+  429, and ended `succeeded` with the tool calls of a healthy run.
+- No request of the job reached the fake less than 5 s after a 429 to it.
+  The fake refused at most 6 of its requests.
+
+With the mechanism off, each of the three failed 5 tests: a 429 treated as an
+error, `retry-after` ignored, the claim ignoring `not_before`.
 
 ## Bad tool output
 

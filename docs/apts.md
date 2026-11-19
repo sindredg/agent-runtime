@@ -80,8 +80,8 @@ asks. No reason is recorded with an answer, and not who gave it. Details:
 | Requirement | What it asks | What the runtime does | Status | Evidence |
 |---|---|---|---|---|
 | AR-001 | Every event in a structured, schema-validated log | One row per model call, tool intent and result, question, answer and error. Payloads are JSON, not checked against a schema per kind. | gap | |
-| AR-002 | Every state transition logged with old state, new state and cause | A cancel and a park write a `status_changed` step. An answer has its own step; a claim, a release and a finish have none. | built, not tested | [Jobs and steps](data-model.md#step-kinds) |
-| AR-012 | A tamper-evident log: a hash chain, continuous sequence numbers | A trigger chains each step by hash and refuses a gap, a change and a delete. `runtime verify` recomputes it and finds a change by the owner. | built, not tested | [Hash chain](step-log-chain.md) |
+| AR-002 | Every state transition logged with old state, new state and cause | A cancel and a park write a `status_changed` step. An answer has its own step; a claim, a release and a finish have none. | tested, for a cancel and a park. Gap for the rest. | `test_status_changed.py`, in the [suites](results/README.md#the-suites) |
+| AR-012 | A tamper-evident log: a hash chain, continuous sequence numbers | A trigger chains each step by hash and refuses a gap, a change and a delete. `runtime verify` recomputes it and finds a change by the owner. | tested | [Durability](results/durability.md#the-step-log-cannot-be-changed-without-detection) |
 
 ## Not in APTS
 
