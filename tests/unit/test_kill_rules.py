@@ -455,6 +455,26 @@ def test_a_takeover_after_a_wait_counts(rules: ModuleType) -> None:
     assert rules.sent_thinking_back_after_a_takeover(run) is True
 
 
+def test_a_takeover_after_an_approval_counts(rules: ModuleType) -> None:
+    """A park for an approval names its epoch too: the later claim is the takeover."""
+    steps = [
+        response(1, THINKING, CALL_BLOCK),
+        changed(1, "needs_approval"),
+        intent(2),
+        result(3),
+        response(3, TEXT),
+    ]
+    run = thinking_job(rules, steps, takeovers=1, lease_epoch=3)
+    assert rules.sent_thinking_back_after_a_takeover(run) is True
+
+
+def test_a_move_to_another_status_does_not_hide_a_takeover(rules: ModuleType) -> None:
+    """Only a wait or a park hands the job on. A step to any other status is not one."""
+    steps = [response(1, THINKING, CALL_BLOCK), changed(1, "queued"), result(2), response(2, TEXT)]
+    run = thinking_job(rules, steps, takeovers=1, lease_epoch=2)
+    assert rules.sent_thinking_back_after_a_takeover(run) is True
+
+
 def test_a_takeover_only_before_a_wait_and_the_block_does_not_count(rules: ModuleType) -> None:
     """Taken over at 1 to 2, the block at 2, a wait at 2: no takeover after the block."""
     steps = [response(2, THINKING, CALL_BLOCK), changed(2, "waiting"), response(3, TEXT)]
