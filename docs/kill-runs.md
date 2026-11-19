@@ -109,7 +109,31 @@ its result. The two failpoints aim there
 
 ## Runs
 
-None recorded yet. Status: configured, not tested.
+One run per row: 2026-11-19, commit `adc388d`, the Manual runs workflow on
+GitHub Actions (Linux x86_64, 4 CPUs), seed `20261119`, 3 + 20 + 5 + 5 jobs.
+
+| Provider, model | Window | Kills that hit the holder | Tokens, all jobs | Most in one job | Run |
+|---|---|---|---|---|---|
+| Fake provider | 1.76 s | 17 of 20 | 65,835 | 1,995 | [44602128214](https://github.com/sindredg/agent-runtime/actions/runs/44602128214) |
+| Claude API, `claude-haiku-5-5` | 3.31 s | 18 of 20 | 131,545 | 4,079 | [44604752837](https://github.com/sindredg/agent-runtime/actions/runs/44604752837) |
+| Claude API, `claude-opus-5-5` | 7.03 s | 19 of 20 | 138,432 | 4,352 | [44606477808](https://github.com/sindredg/agent-runtime/actions/runs/44606477808) |
+| Claude API, `claude-fable-5-2` | 7.98 s | 20 of 20 | 142,234 | 4,582 | [44608054848](https://github.com/sindredg/agent-runtime/actions/runs/44608054848) |
+
+In every row: 4 of 4 tests passed, every job whose holder was killed was
+taken over, and each failpoint fired in 5 of 5 jobs. No approval was asked
+for, no job had more than one `create_issue` operation, and no operation id
+has two issues. Status: tested.
+
+### With the intent write switched off
+
+The same commit with the intent write removed, as branch
+`must-fail/g2-intent-skipped` (`49b9c6e`, deleted afterwards). Five jobs at
+`after_tool_ran`. The run has to end red.
+
+| Provider, model | Result | Run |
+|---|---|---|
+| Fake provider | Red. 5 of 5 jobs have two issues for one operation id. | [44602234151](https://github.com/sindredg/agent-runtime/actions/runs/44602234151) |
+| Claude API, `claude-haiku-5-5` | Red. 5 of 5 jobs have two issues for one operation id. | [44605952449](https://github.com/sindredg/agent-runtime/actions/runs/44605952449) |
 
 ## What a pass does not show
 
@@ -120,3 +144,7 @@ None recorded yet. Status: configured, not tested.
   14 percent, at 95 percent confidence, and no lower.
 - A kill during a model's second call of a tool. The failpoints fire in the
   job's first `create_issue` call.
+- Whether a real model's answer held a `thinking` block. The results do not
+  record block types ([issue 113](https://github.com/sindredg/agent-runtime/issues/113)).
+- More than one run per model. GitHub Actions deletes a run's log after 90
+  days; a copy is kept outside the repository.

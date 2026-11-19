@@ -102,8 +102,12 @@ machine, not in the repository. The run, and what it does not show:
 [Results](docs/results/README.md).
 
 The fake provider is compared with the Claude API by a contract test that is
-started by hand: [The contract test](docs/contract-test.md). Eight jobs have
-run against the API: [Runs against the Claude API](docs/results/api.md).
+started by hand: [The contract test](docs/contract-test.md). Eight single
+jobs ran against the API first: [Runs against the Claude API](docs/results/api.md).
+
+The kill runs also passed on the Claude API, 33 jobs on each of three
+models: every job succeeded and no issue was opened twice
+([Kill runs](docs/kill-runs.md#runs)).
 
 ## Documentation
 
