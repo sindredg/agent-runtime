@@ -113,7 +113,7 @@ def test_jobs_survive_a_kill_at_a_random_time(stack: Stack) -> None:
     )
     assert not failures, "\n".join(failures)
     # A run of kills that never hit a job proves nothing.
-    assert too_few_kills(chosen.runs, sent, counted["takeovers"]) == []
+    assert too_few_kills(chosen.runs, sent, counted["jobs_taken_over"]) == []
 
 
 @pytest.mark.parametrize("failpoint", FAILPOINTS)

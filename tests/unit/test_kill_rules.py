@@ -277,7 +277,34 @@ def test_kills_that_hit_no_job_show_nothing(rules: ModuleType) -> None:
     assert rules.too_few_kills(20, 9, 5) == [
         "9 of 20 kills were sent to a worker that held the job"
     ]
-    assert rules.too_few_kills(20, 10, 4) == ["4 takeovers in 20 runs"]
+    assert rules.too_few_kills(20, 10, 4) == ["4 of 20 jobs were taken over"]
+
+
+def test_a_job_taken_over_twice_counts_once(rules: ModuleType) -> None:
+    runs = [rules.Run(job(takeovers=n), [], {OPERATION: [7]}) for n in (2, 0, 1)]
+    assert rules.jobs_taken_over(runs) == 2
+
+
+# The model
+
+
+def request(model: str) -> dict[str, Any]:
+    return {"kind": "model_request", "lease_epoch": 1, "payload": {"model": model}}
+
+
+def test_every_request_goes_to_the_model_of_the_run(rules: ModuleType) -> None:
+    steps = [request("claude-opus-5-5"), request("claude-opus-5-5")]
+    run = rules.Run(job(), steps, {OPERATION: [7]}, model="claude-opus-5-5")
+    assert rules.problems(run) == []
+    steps[1] = request("claude-haiku-5-5")
+    assert rules.problems(run) == [
+        "model requests to ['claude-haiku-5-5', 'claude-opus-5-5'], not 'claude-opus-5-5'"
+    ]
+
+
+def test_a_run_that_names_no_model_fails_every_job_with_a_request(rules: ModuleType) -> None:
+    run = rules.Run(job(), [request("ci-triage-slow")], {OPERATION: [7]})
+    assert rules.problems(run) == ["model requests to ['ci-triage-slow'], not ''"]
 
 
 def test_a_summary_names_the_job_and_its_issues(rules: ModuleType) -> None:

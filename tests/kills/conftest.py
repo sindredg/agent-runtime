@@ -26,7 +26,7 @@ from typing import Any
 import httpx2
 import pytest
 
-from .rules import API_JOB_LIMIT, TOKEN_BUDGET, Run, Settings, settings
+from .rules import API_JOB_LIMIT, TOKEN_BUDGET, Run, Settings, jobs_taken_over, settings
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE = json.loads((REPO_ROOT / "examples" / "ci-triage.json").read_text())
@@ -195,7 +195,9 @@ class Stack:
         for issue in self.tracker.get("/issues").raise_for_status().json():
             if issue["operation_id"].startswith(f"{job_id}:"):
                 issues.setdefault(issue["operation_id"], []).append(issue["id"])
-        return Run(job, self.steps(job_id), issues, approvals, tools, seconds, note)
+        return Run(
+            job, self.steps(job_id), issues, approvals, tools, seconds, note, self.settings.model
+        )
 
 
 def totals(runs: list[Run]) -> dict[str, Any]:
@@ -206,6 +208,7 @@ def totals(runs: list[Run]) -> dict[str, Any]:
             tools[tool] = tools.get(tool, 0) + count
     return {
         "takeovers": sum(run.job["takeovers"] for run in runs),
+        "jobs_taken_over": jobs_taken_over(runs),
         "approvals_by_tool": tools,
         "jobs_with_more_than_one_issue_operation": sum(len(run.issues) > 1 for run in runs),
         "tokens_used": sum(run.job["tokens_used"] for run in runs),

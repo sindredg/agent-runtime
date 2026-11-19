@@ -135,6 +135,8 @@ class Run:
     # Seconds from the submission to the final status, on the runner's clock.
     seconds: float = 0.0
     note: str = ""
+    # The model the run was started for. Every model request has to name it.
+    model: str = ""
 
     def duplicates(self) -> dict[str, list[int]]:
         """Operation ids with more issues than one plus the approved reruns."""
@@ -168,6 +170,11 @@ def problems(run: Run) -> list[str]:
         found.append(f"the job's budget is {job['token_budget']}, not {TOKEN_BUDGET}")
     if job["tokens_used"] > job["token_budget"]:
         found.append(f"{job['tokens_used']} tokens used, the budget is {job['token_budget']}")
+    # The step log names the model each request was sent to. A row for one
+    # model must not hold a request to another.
+    models = {s["payload"].get("model") for s in run.steps if s["kind"] == "model_request"}
+    if models - {run.model}:
+        found.append(f"model requests to {sorted(map(str, models))}, not {run.model!r}")
     return found
 
 
@@ -220,11 +227,19 @@ def failpoint_problems(run: Run, failpoint: str, fired: int) -> list[str]:
     return found
 
 
-def too_few_kills(runs: int, sent: int, takeovers: int) -> list[str]:
-    """Why a set of random kills shows nothing: too few of them hit a job."""
+def jobs_taken_over(runs: list[Run]) -> int:
+    """Jobs taken over at least once. A job taken over twice counts once."""
+    return sum(run.job["takeovers"] > 0 for run in runs)
+
+
+def too_few_kills(runs: int, sent: int, taken_over: int) -> list[str]:
+    """Why a set of random kills shows nothing: too few of them hit a job.
+
+    `taken_over` counts jobs, not takeovers: a job taken over twice is one.
+    """
     found = []
     if sent < runs // 2:
         found.append(f"{sent} of {runs} kills were sent to a worker that held the job")
-    if takeovers < runs // 4:
-        found.append(f"{takeovers} takeovers in {runs} runs")
+    if taken_over < runs // 4:
+        found.append(f"{taken_over} of {runs} jobs were taken over")
     return found

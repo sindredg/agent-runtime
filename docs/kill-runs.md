@@ -45,6 +45,7 @@ fake tracker. Every job has to pass all of these:
 | The job has at least one issue. | The tracker's own list |
 | No operation id has more issues than one plus the approved reruns for it. | The tracker's own list |
 | `tokens_used` is at most the budget of 50,000. | The API |
+| Every model request names the model the run was started for. | The step log |
 
 Each kind of run adds its own rules:
 
