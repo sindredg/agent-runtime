@@ -13,7 +13,7 @@ The table with one line per guarantee is in the
   spend and do.
 
 Jobs that ran with a real model, which are not the evidence for a guarantee:
-[Runs against the Claude API](api.md).
+[Runs against the Claude API](api.md) and [Kill run results](kill-runs.md).
 
 This page has what the runs share: the run, how a kill run works, and what
 the results do not show.

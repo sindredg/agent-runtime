@@ -53,12 +53,12 @@ it passed, at the first model call, on a wrong API key.
 
 After these eight, the kill runs passed on three models, 33 jobs each, with
 workers killed at random times and at two failpoints:
-[Kill runs](../kill-runs.md#runs).
+[Kill run results](kill-runs.md#runs).
 
 ## What these eight runs do not show
 
 - No run with a mechanism switched off. One such run on the API is in
-  [Kill runs](../kill-runs.md#with-the-intent-write-switched-off).
+  [Kill run results](kill-runs.md#with-the-intent-write-switched-off).
 - One model, and each job once. A real model does not give the same answer
   twice.
 - No refusal by the model and no rate limit was met.

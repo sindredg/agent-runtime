@@ -67,13 +67,12 @@ Which attempts have a failing run:
 ## Workspace size
 
 Tested, as a soft limit ([Sandbox](../sandbox.md#workspace-size)).
-Integration suite, `test_sandbox.py`, with an 8 MiB limit and a 0.2 s
-interval.
+Integration suite, `test_sandbox.py`:
 
-- A command that writes on was stopped within 5 s with a failed result that
-  names the limit. The workspace held between 8 and 16 MiB, and the
-  container was gone.
-- A workspace already over its limit ran no command.
+- With an 8 MiB limit and a 0.2 s interval, a command that writes on was
+  stopped within 5 s with a failed result that names the limit. The
+  workspace held between 8 and 16 MiB, and the container was gone.
+- With a 1 MiB limit, a workspace already over it ran no command.
 
 With the mechanism off, each of 10 switches failed its tests. Among them:
 no measurement during a call, none before it, no cap on files, no deadline

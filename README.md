@@ -85,7 +85,7 @@ such a run did not reach is named with its result.
 | Guarantee | Status | Evidence |
 |---|---|---|
 | A job survives a worker stopping | Tested | [200 of 200 jobs, 171 kills](docs/results/durability.md#a-job-survives-a-worker-stopping) |
-| An unsafe tool call does not run twice without approval | Tested, one accepted exception | [No operation id with two issues, also in Gitea](docs/results/durability.md#an-unsafe-tool-call-does-not-run-twice-without-approval) |
+| An unsafe tool call does not run twice without approval | Tested, with [accepted exceptions](docs/limits.md#tool-calls) | [No operation id with two issues, also in Gitea](docs/results/durability.md#an-unsafe-tool-call-does-not-run-twice-without-approval) |
 | A stale worker cannot corrupt a job | Tested | [No write after the takeover](docs/results/durability.md#a-stale-worker-cannot-corrupt-a-job) |
 | A job that crashes its worker every time does not loop forever | Tested | [Failed after 5 takeovers](docs/results/durability.md#a-job-that-crashes-its-worker-does-not-loop-forever) |
 | Every job stays inside its token budget and deadline, and can be cancelled | Tested, with [accepted exceptions](docs/limits.md#halt-and-budget) | [Budget, cancel and deadline](docs/results/controls.md#budget-deadline-and-cancel) |
@@ -97,9 +97,9 @@ such a run did not reach is named with its result.
 | Throughput scales with workers | Not measured | |
 
 Every result is from one run at commit `1f57ee4`, on one machine, against
-the fake provider. The output of the switched-off runs is kept on that
-machine, not in the repository. The run, and what it does not show:
-[Results](docs/results/README.md).
+the fake provider; three switched-off runs are older, named with their commit.
+Switched-off output is kept on that machine, not in the repository. The run,
+and what it does not show: [Results](docs/results/README.md).
 
 The fake provider is compared with the Claude API by a contract test that is
 started by hand: [The contract test](docs/contract-test.md). Eight single
@@ -107,7 +107,7 @@ jobs ran against the API first: [Runs against the Claude API](docs/results/api.m
 
 The kill runs also passed on the Claude API, 33 jobs on each of three
 models: every job succeeded and no issue was opened twice
-([Kill runs](docs/kill-runs.md#runs)).
+([Kill run results](docs/results/kill-runs.md#runs)).
 
 ## Documentation
 

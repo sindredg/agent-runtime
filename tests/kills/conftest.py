@@ -7,7 +7,7 @@ docker-compose.claude.yml too for a run on the Claude API. `make kills` and
 KILLS_PROVIDER names the provider, `fake` or `claude`. The session ends
 before the first test unless every worker's provider URL is that
 provider's, so a run never pays by mistake and never records the wrong
-provider. Only that one variable is read from a worker: on the Claude API
+provider. Only that variable and LEASE_SECONDS are read from a worker: on the Claude API
 its environment holds the key.
 
 Each session writes its results and the workers' logs to `.kills/<time>/`.
