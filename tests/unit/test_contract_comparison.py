@@ -8,11 +8,13 @@ its `tool_use` block had a `caller` field that the fake does not return.
 
 import copy
 import importlib.util
+import re
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
 import pytest
+from _pytest._io.saferepr import saferepr
 
 CONTRACT = Path(__file__).resolve().parents[1] / "contract" / "test_messages_contract.py"
 
@@ -170,3 +172,26 @@ def test_every_declared_entry_has_its_line_on_the_contract_test_page(contract: M
     section = page.split("### What the fake does not model", 1)[1].split("\n#", 1)[0]
     listed = {line.split("`")[1] for line in section.splitlines() if line.startswith("| `")}
     assert listed == set(contract.NOT_MODELLED)
+
+
+# The key in a failure report
+
+
+def test_no_function_of_the_contract_test_takes_the_key() -> None:
+    """pytest prints the arguments of the call that failed. The run's log is public."""
+    source = CONTRACT.read_text(encoding="utf-8")
+    taking = re.findall(r"def \w+\([^)]*\b(?:api_)?key\b[^)]*\)", source)
+    assert taking == []
+
+
+def test_the_key_is_not_shown_where_pytest_prints_a_value(
+    contract: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "not-a-real-key-x9")
+    monkeypatch.setenv("CONTRACT_MODEL", "some-model")
+    _, key, _ = contract.target("claude")
+    # It is still the key for a header.
+    assert key == "not-a-real-key-x9"
+    assert "x9" not in repr(key)
+    assert "x9" not in saferepr(key)
+    assert "x9" not in saferepr(("https://api.example", key, "some-model"))
