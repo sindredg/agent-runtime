@@ -29,8 +29,8 @@ That is the fake provider and costs nothing. On the Claude API:
 make kills-claude KILLS_MODEL=claude-haiku-5-5
 ```
 
-- The API run submits 33 jobs of at most 50,000 tokens each, and stops at
-  the first failure. It needs `CLAUDE_API_KEY` in `.env`
+- The API run submits 33 jobs of at most 50,000 tokens each, and stops
+  after the first test that fails. It needs `CLAUDE_API_KEY` in `.env`
   ([Settings](settings.md#the-claude-api)).
 - Both replace the normal stack. Run `make up` afterwards.
 - The `KILLS_*` variables are in [Settings](settings.md#the-kill-runs).
@@ -99,8 +99,8 @@ block is up to the model. Each `results.jsonl` line counts, and no count fails a
 ## What keeps a run from paying by mistake
 
 - The session ends before the first test unless every worker's
-  `ANTHROPIC_BASE_URL` belongs to `KILLS_PROVIDER`. Only that variable is
-  read from a worker.
+  `ANTHROPIC_BASE_URL` belongs to `KILLS_PROVIDER`. It and `LEASE_SECONDS`
+  are the only variables read from a worker; the key never is.
 - On the Claude API the model has to be named. There is no default.
 - Every job carries the 50,000 token budget, and a job with another budget
   fails its run.
@@ -109,42 +109,5 @@ block is up to the model. Each `results.jsonl` line counts, and no count fails a
 
 ## Runs
 
-One run per row: 2026-11-19, commit `adc388d`, the Manual runs workflow on
-GitHub Actions (Linux x86_64, 4 CPUs), seed `20261119`, 3 + 20 + 5 + 5 jobs.
-
-| Provider, model | Window | Kills that hit the holder | Tokens, all jobs | Most in one job | Run |
-|---|---|---|---|---|---|
-| Fake provider | 1.76 s | 17 of 20 | 65,835 | 1,995 | [44602128214](https://github.com/sindredg/agent-runtime/actions/runs/44602128214) |
-| Claude API, `claude-haiku-5-5` | 3.31 s | 18 of 20 | 131,545 | 4,079 | [44604752837](https://github.com/sindredg/agent-runtime/actions/runs/44604752837) |
-| Claude API, `claude-opus-5-5` | 7.03 s | 19 of 20 | 138,432 | 4,352 | [44606477808](https://github.com/sindredg/agent-runtime/actions/runs/44606477808) |
-| Claude API, `claude-fable-5-2` | 7.98 s | 20 of 20 | 142,234 | 4,582 | [44608054848](https://github.com/sindredg/agent-runtime/actions/runs/44608054848) |
-
-In every row: 4 of 4 tests passed, every job whose holder was killed was
-taken over, and each failpoint fired in 5 of 5 jobs. No approval was asked
-for, no job had more than one `create_issue` operation, and no operation id
-has two issues. Status: tested.
-
-### With the intent write switched off
-
-The same commit with the intent write removed, as branch
-`must-fail/g2-intent-skipped` (`49b9c6e`, deleted afterwards). Five jobs at
-`after_tool_ran`. The run has to end red.
-
-| Provider, model | Result | Run |
-|---|---|---|
-| Fake provider | Red. 5 of 5 jobs have two issues for one operation id. | [44602234151](https://github.com/sindredg/agent-runtime/actions/runs/44602234151) |
-| Claude API, `claude-haiku-5-5` | Red. 5 of 5 jobs have two issues for one operation id. | [44605952449](https://github.com/sindredg/agent-runtime/actions/runs/44605952449) |
-
-## What a pass does not show
-
-- The order of the requests the provider got. On the fake provider the
-  chaos tests check it; the Claude API keeps no such log to read.
-- That a killed job gives the same answer as one nobody interrupted.
-- A rate. Twenty jobs without a failure put the failure rate under about
-  14 percent, at 95 percent confidence, and no lower.
-- A kill during a model's second call of a tool. The failpoints fire in the
-  job's first `create_issue` call.
-- A `thinking` block sent back after a takeover. The runs above are from
-  before the results counted it ([issue 113](https://github.com/sindredg/agent-runtime/issues/113)).
-- More than one run per model. GitHub Actions deletes a run's log after 90
-  days; a copy is kept outside the repository.
+The recorded runs, and what a pass does not show:
+[Kill run results](results/kill-runs.md).

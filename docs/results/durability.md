@@ -29,12 +29,14 @@ Tested. `tests/chaos/test_kills.py`, 200 runs.
 
 With the mechanism off: with resume switched off, so that the log is not
 replayed, 13 of 20 short runs failed. The provider was asked turns 0, 1, 0,
-1, 2.
+1, 2. That run left out the failpoint runs: no switched-off run reached them
+([issue 117](https://github.com/sindredg/agent-runtime/issues/117)).
 
 ## An unsafe tool call does not run twice without approval
 
-Tested, with [one accepted exception](../limits.md#the-main-one-fencing-protects-the-database-not-the-outside-world)
-for a worker paused at the wrong instant.
+Tested, with accepted exceptions: a
+[worker paused at the wrong instant](../limits.md#the-main-one-fencing-protects-the-database-not-the-outside-world),
+and the [limits of tool calls](../limits.md#tool-calls).
 
 - The same 206 runs: no operation id has more than one issue in the tracker,
   and no approval was needed.
@@ -44,7 +46,8 @@ for a worker paused at the wrong instant.
   once more. One issue.
 - One run with the tracker frozen, so the check gets no answer: the job
   waits in `needs_approval`. After the approval the tracker holds two issues
-  for one approval.
+  for one approval. No switched-off run reached this case
+  ([issue 118](https://github.com/sindredg/agent-runtime/issues/118)).
 
 Against a real tracker, Gitea in a container (`make lab`,
 [Lab demo](../lab-demo.md)): 2 of 2 cases. In each the worker stopped
@@ -113,3 +116,6 @@ With the mechanism off:
   worker's container and asked a person only once the call's bound (40 s)
   had passed. After one approval the command ran again and the job
   succeeded.
+
+Neither of these two has a switched-off run at `1f57ee4`
+([issue 120](https://github.com/sindredg/agent-runtime/issues/120)).

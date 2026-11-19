@@ -81,7 +81,7 @@ kills:
 # 33 jobs of at most 50,000 tokens each. Needs CLAUDE_API_KEY in .env or the
 # environment, and the model named here: `make kills-claude
 # KILLS_MODEL=claude-haiku-5-5`. Recorded runs start from the Manual runs
-# workflow (ADR 0020). Stops at the first failure. `make up` puts the
+# workflow (ADR 0020). Stops after the first test that fails. `make up` puts the
 # workers back on the fake.
 kills-claude:
 	@test -n "$(KILLS_MODEL)" || { echo "Name the model: make kills-claude KILLS_MODEL=claude-haiku-5-5" >&2; exit 1; }

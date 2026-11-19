@@ -56,7 +56,11 @@ With the mechanism off:
 | The check and the cut of `max_tokens`, at `bd830cc` | The job spent 282,118 tokens in 31 calls against its 20,000, by the provider's count. The test fails on the spend. |
 | The cancel check | Both cancel tests fail: neither job ended within the test's wait |
 | The deadline timer | Both deadline tests fail |
-| The claim's deadline check | Both claim tests fail. The job stayed `running`. |
+| The claim's deadline check | Both cases of the claim's deadline test fail. The job stayed `running`. |
+
+No switched-off run reached the claim's cancel or the timer that fails a
+job waiting for an approval ([issue 119](https://github.com/sindredg/agent-runtime/issues/119)). The spend failure is from
+`bd830cc`, and the code has changed since ([issue 116](https://github.com/sindredg/agent-runtime/issues/116)).
 
 ## Approval before a tool call
 
