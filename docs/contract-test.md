@@ -51,6 +51,18 @@ list below and `NOT_MODELLED` in the test hold the same entries.
 | `block type thinking` | The worker sends every block back unchanged. The API accepted its own `thinking` block back, also after a takeover ([API runs](results/api.md)). |
 | `tool_use block field caller` | The worker does not read it and sends the block back unchanged. |
 | `more than one tool_use block in a response` | No packaged scenario has two calls in one turn. The worker's handling of two calls is tested with a scripted provider in `tests/integration/test_resume.py`. |
+| `message field container` | The worker does not read it. It was `null` in the run of 2026-11-19. |
+| `message field diagnostics` | The worker does not read it. It was `null` in that run. |
+| `message field stop_details` | The worker does not read it. It was `null` in that run. |
+| `usage field cache_creation` | The worker does not read it. It splits `cache_creation_input_tokens`, which was 0. |
+| `usage field inference_geo` | The worker does not read it. It was `global`. |
+| `usage field output_tokens_details` | The worker counts `output_tokens` only. `thinking_tokens` was 0. |
+| `usage field service_tier` | The worker does not read it. It was `standard`. |
+| `usage field speed` | The worker does not read it. It was `standard`. |
+
+From a response the worker reads the id, the model, the content blocks, the
+stop reason, `input_tokens` and `output_tokens`
+(`src/runtime/provider/messages.py`).
 
 ## Runs
 
@@ -58,8 +70,11 @@ list below and `NOT_MODELLED` in the test hold the same entries.
 |---|---|---|---|
 | 2026-11-14 | `8f73f6e` | `claude-haiku-5-5` | 3 of 4. The fourth expected text before the tool call, and the model wrote none. |
 | 2026-11-17 | `a27b0f8` | `claude-haiku-5-5` | 4 of 4, the comparison one way only. |
+| 2026-11-19 | `adc388d` | `claude-haiku-5-5` | 4 of 5, the first two-way run. The API returned eight fields that were not declared yet. |
 
-The two-way comparison has not run against the API yet.
+That run is [GitHub Actions run 44603223641](https://github.com/sindredg/agent-runtime/actions/runs/44603223641).
+Its eight fields are now declared above. No two-way run has passed yet:
+the declared list is configured, not tested.
 
 ## What a pass does not show
 
