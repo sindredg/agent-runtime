@@ -801,3 +801,21 @@ def test_verify_defaults_to_the_stacks_app_role(monkeypatch: pytest.MonkeyPatch)
     args = build_parser().parse_args(["verify", "--all"])
     assert args.database_url.startswith("postgresql://runtime_app:")
     assert args.all
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        # No host: the password sits where the port goes.
+        "postgresql://runtime_app:not-the-password-x9/runtime",
+        # A password with "@" and ":" that is not percent-encoded.
+        "postgresql://runtime_app:p@ss:not-the-password-x9@127.0.0.1:5432/runtime",
+    ],
+    ids=["no host", "password not encoded"],
+)
+def test_verify_prints_no_part_of_a_url_it_cannot_read(url: str) -> None:
+    """The library's own error repeats the port text, which can be the password."""
+    out, err = io.StringIO(), io.StringIO()
+    assert main(["verify", "--database-url", url, "--all"], out=out, err=err) == 2
+    assert err.getvalue() == "runtime: cannot check: the database URL cannot be read\n"
+    assert "x9" not in out.getvalue() + err.getvalue()
