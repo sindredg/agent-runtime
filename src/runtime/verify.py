@@ -41,8 +41,6 @@ def _report(job_id: UUID, check: ChainCheck, out: TextIO, *, quiet: bool) -> Non
 
 def _reason(error: BaseException) -> str:
     """One line about a database error, without the URL or the statement."""
-    if isinstance(error, ArgumentError):
-        return "the database URL cannot be read"
     cause: BaseException = error
     if isinstance(error, DBAPIError) and error.orig is not None:
         # The driver's own error is behind SQLAlchemy's adapter.
@@ -60,8 +58,10 @@ async def verify(
     quiet = job_ids is None
     try:
         engine = create_engine(database_url, application_name="runtime-verify")
-    except (ArgumentError, ValueError) as error:
-        print(f"runtime: cannot check: {_reason(error)}", file=err)
+    except ArgumentError, ValueError:
+        # Never the error's own text: for a port that is not a number the
+        # library repeats that part of the URL, which can be the password.
+        print("runtime: cannot check: the database URL cannot be read", file=err)
         return EXIT_CANNOT_CHECK
     try:
         async with engine.connect() as conn:
