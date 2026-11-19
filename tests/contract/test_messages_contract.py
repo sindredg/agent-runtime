@@ -76,16 +76,31 @@ def setting(name: str) -> str:
     return value
 
 
-def target(name: str) -> tuple[str, str, str]:
+class Hidden(str):
+    """A secret that prints as stars.
+
+    pytest prints the arguments of the call that failed, and a recorded
+    run's log is public. No function here takes the key as an argument; this
+    covers the calls into other code that do.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "'***'"
+
+
+def target(name: str) -> tuple[str, Hidden, str]:
     """(base URL, API key, model) of the fake provider or the Claude API."""
     if name == "fake":
-        return FAKE_URL, "contract-test", "hello"
-    return CLAUDE_URL, setting("ANTHROPIC_API_KEY"), setting("CONTRACT_MODEL")
+        return FAKE_URL, Hidden("contract-test"), "hello"
+    return CLAUDE_URL, Hidden(setting("ANTHROPIC_API_KEY")), setting("CONTRACT_MODEL")
 
 
-def exchange(base_url: str, api_key: str, model: str) -> tuple[ModelResponse, ModelResponse]:
+def exchange(name: str) -> tuple[ModelResponse, ModelResponse]:
     async def run() -> tuple[ModelResponse, ModelResponse]:
-        provider = AnthropicProvider(api_key=api_key, base_url=base_url)
+        base_url, secret, model = target(name)
+        provider = AnthropicProvider(api_key=secret, base_url=base_url)
 
         def request(messages: list[dict[str, Any]]) -> ModelRequest:
             return ModelRequest(
@@ -121,7 +136,7 @@ def exchange(base_url: str, api_key: str, model: str) -> tuple[ModelResponse, Mo
 
 @pytest.mark.parametrize("name", ["fake", "claude"])
 def test_tool_call_then_answer(name: str) -> None:
-    first, second = exchange(*target(name))
+    first, second = exchange(name)
 
     assert first.stop_reason == "tool_use"
     calls = [block for block in first.content if block["type"] == "tool_use"]
@@ -160,12 +175,11 @@ def test_tool_call_then_answer(name: str) -> None:
     assert second.input_tokens <= second_bound
 
 
-def raw_message(
-    base_url: str, api_key: str, model: str, messages: list[dict[str, Any]]
-) -> dict[str, Any]:
+def raw_message(name: str, messages: list[dict[str, Any]]) -> dict[str, Any]:
+    base_url, secret, model = target(name)
     response = httpx2.post(
         f"{base_url}/v1/messages",
-        headers={"x-api-key": api_key, "anthropic-version": "2026-10-21"},
+        headers={"x-api-key": secret, "anthropic-version": "2026-10-21"},
         json={"model": model, "max_tokens": 2048, "tools": [TOOL], "messages": messages},
         timeout=120,
     )
@@ -174,18 +188,16 @@ def raw_message(
     return message
 
 
-def raw_exchange(base_url: str, api_key: str, model: str) -> list[dict[str, Any]]:
+def raw_exchange(name: str) -> list[dict[str, Any]]:
     """The raw JSON of both responses of the exchange: the tool call, then the answer."""
-    first = raw_message(base_url, api_key, model, [PROMPT])
+    first = raw_message(name, [PROMPT])
     results = [
         {"type": "tool_result", "tool_use_id": block["id"], "content": "Hello from the file."}
         for block in first["content"]
         if block["type"] == "tool_use"
     ]
     second = raw_message(
-        base_url,
-        api_key,
-        model,
+        name,
         [
             PROMPT,
             {"role": "assistant", "content": first["content"]},
@@ -274,8 +286,8 @@ def api_only(fake: list[dict[str, Any]], real: list[dict[str, Any]]) -> list[str
 @pytest.fixture(scope="module")
 def exchanges() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """The raw exchange with each provider, once, written to `.contract/<time>/`."""
-    fake = raw_exchange(*target("fake"))
-    real = raw_exchange(*target("claude"))
+    fake = raw_exchange("fake")
+    real = raw_exchange("claude")
     report = REPORTS / datetime.now(UTC).strftime("%Y-%m-%dT%H%M%SZ")
     report.mkdir(parents=True)
     (report / "fake.json").write_text(json.dumps(fake, indent=2) + "\n")
@@ -300,17 +312,18 @@ def test_what_only_the_api_returns_is_declared(
 
 
 def test_both_refuse_an_unknown_model_with_the_same_error_shape() -> None:
-    def refusal(base_url: str, api_key: str) -> tuple[int, dict[str, Any]]:
+    def refusal(name: str) -> tuple[int, dict[str, Any]]:
+        base_url, secret, _ = target(name)
         response = httpx2.post(
             f"{base_url}/v1/messages",
-            headers={"x-api-key": api_key, "anthropic-version": "2026-10-21"},
+            headers={"x-api-key": secret, "anthropic-version": "2026-10-21"},
             json={"model": "no-such-model-contract-test", "max_tokens": 16, "messages": [PROMPT]},
             timeout=60,
         )
         return response.status_code, response.json()
 
-    fake_status, fake = refusal(FAKE_URL, "contract-test")
-    real_status, real = refusal(CLAUDE_URL, setting("ANTHROPIC_API_KEY"))
+    fake_status, fake = refusal("fake")
+    real_status, real = refusal("claude")
     assert fake_status == real_status == 404
     assert fake["type"] == real["type"] == "error"
     assert fake["error"]["type"] == real["error"]["type"] == "not_found_error"
