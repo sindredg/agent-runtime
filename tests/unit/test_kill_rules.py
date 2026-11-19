@@ -100,7 +100,8 @@ def test_a_run_on_the_api_may_not_plan_more_than_the_limit(rules: ModuleType) ->
     assert rules.settings({"KILLS_RUNS": "200"}).planned_jobs == 213
 
 
-@pytest.mark.parametrize("text", ["-1", "2.5", "many", ""])
+# "0": a run with no kills would pass and record nothing.
+@pytest.mark.parametrize("text", ["-1", "2.5", "many", "", "0", "\u0663"])
 def test_a_count_that_is_not_a_whole_number_is_refused(rules: ModuleType, text: str) -> None:
     with pytest.raises(ValueError, match="KILLS_RUNS must be a whole number"):
         rules.settings({"KILLS_RUNS": text})

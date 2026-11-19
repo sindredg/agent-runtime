@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from .conftest import FIRED, LEASE, WORKERS, Stack, docker, record, totals
+from .conftest import FIRED, WORKERS, Stack, docker, record, totals
 from .rules import (
     FAILPOINTS,
     UNINTERRUPTED,
@@ -85,7 +85,12 @@ def test_jobs_survive_a_kill_at_a_random_time(stack: Stack) -> None:
             note += " (no holder: before the claim or after the end)"
         else:
             docker("docker", "kill", victim)
-            sent += 1
+            # Counted only if the victim still held the job after the kill.
+            # It may have ended or moved between the read and the kill.
+            if stack.holder(job_id) == victim:
+                sent += 1
+            else:
+                note += " (the job left the worker before the kill)"
             docker("docker", "start", victim)
         run = stack.finish(job_id, submitted=submitted, note=note)
         stack.start_stopped_workers()
@@ -166,10 +171,3 @@ def _wait_for_workers(stack: Stack, timeout: float = 60.0) -> None:
             return
         assert time.monotonic() < deadline, f"not every worker came back in {timeout:g} s: {states}"
         time.sleep(0.5)
-
-
-def test_the_lease_in_the_records_is_the_stacks(stack: Stack) -> None:
-    """The results name the lease. It is read from a worker here, so the two cannot drift."""
-    container = next(c for c, state in stack.workers().items() if state == "running")
-    lease = docker("docker", "exec", container, "printenv", "LEASE_SECONDS").strip()
-    assert float(lease) == LEASE

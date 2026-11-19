@@ -39,7 +39,7 @@ flowchart LR
   `make up` afterwards.
 - `CHAOS_RUNS` and `CHAOS_SEED` set the number and times of random kills.
 - CI runs unit, integration, escape, the short chaos run, the lab demo and
-  a short kill run on the fake provider on every pull request.
+  the kill runs on the fake provider on every pull request.
 
 ## Records a test trusts
 

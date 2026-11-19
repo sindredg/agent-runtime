@@ -61,8 +61,8 @@ class Settings:
 
 def _count(env: Mapping[str, str], name: str, default: int) -> int:
     text = env.get(name, str(default))
-    if not text.isdecimal():
-        raise ValueError(f"{name} must be a whole number, got {text!r}")
+    if not (text.isascii() and text.isdecimal()) or int(text) < 1:
+        raise ValueError(f"{name} must be a whole number above 0, got {text!r}")
     return int(text)
 
 

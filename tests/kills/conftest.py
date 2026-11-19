@@ -271,6 +271,12 @@ def _write_results(directory: Path, verdict: str, void: str | None = None) -> No
 def stack(request: pytest.FixtureRequest) -> Iterator[Stack]:
     found = request.config.stash[_STACK]
     found.workers_up()
+    # The results name the lease. It is read from a worker before the first
+    # result, so the two cannot drift.
+    container = next(c for c, state in found.workers().items() if state == "running")
+    lease = docker("docker", "exec", container, "printenv", "LEASE_SECONDS").strip()
+    if float(lease) != LEASE:
+        pytest.exit(f"Not run: the workers' lease is {lease} s; the records would say {LEASE:g}")
     print(
         f"\n{found.settings.provider_name}, model {found.settings.model}, {WORKERS} workers,"
         f" lease {LEASE:g} s, seed {found.settings.seed}. Records: {found.directory}"

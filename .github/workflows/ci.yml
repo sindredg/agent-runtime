@@ -253,7 +253,7 @@ jobs:
         run: make kills
       - name: Results
         if: always()
-        run: cat .kills/*/results.jsonl
+        run: cat .kills/*/results.jsonl 2>/dev/null || echo "No results, stopped before a test."
       - name: Service logs
         if: failure()
         run: docker compose -f docker-compose.yml -f docker-compose.kills.yml logs --no-color
