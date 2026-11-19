@@ -34,6 +34,17 @@ make kills-claude KILLS_MODEL=claude-haiku-5-5
   ([Settings](settings.md#the-claude-api)).
 - Both replace the normal stack. Run `make up` afterwards.
 
+Recorded runs start from the Manual runs workflow on GitHub Actions
+([ADR 0020](adr/0020-run-recorded-kill-and-api-runs-in-a-manual-workflow.md)). A job on the Claude API waits for a reviewer:
+
+```bash
+gh workflow run manual-runs.yml -f suite=kills -f provider=claude -f model=claude-haiku-5-5
+```
+
+A must-fail run is a branch `must-fail/<name>` with the mechanism switched
+off, started with `--ref must-fail/<name> -f suite=kills-after-tool-ran`,
+and deleted afterwards.
+
 ## What a job is judged by
 
 The job is `examples/ci-triage.json`: read a CI log, open an issue in the
@@ -83,6 +94,7 @@ its result. The two failpoints aim there
 | `KILLS_FAILPOINT_RUNS` | 5 | Jobs per failpoint |
 | `KILLS_SEED` | `20261119` | Fixes each kill time as a fraction of the window |
 | `KILLS_WINDOW` | measured | The window in seconds, to repeat a recorded run |
+| `KILLS_TESTS` | all | A `pytest -k` selection, for a must-fail run |
 
 ## What keeps a run from paying by mistake
 

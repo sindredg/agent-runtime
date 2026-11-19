@@ -68,17 +68,22 @@ lab:
 # Kill runs that are judged without a reference run: workers killed at
 # random times and stopped inside the call that opens an issue. Three
 # workers, a 6 s lease, the fake provider. KILLS_RUNS sets the number of
-# random kills (default 20), KILLS_SEED the times. Records in .kills/.
+# random kills (default 20), KILLS_SEED the times. KILLS_TESTS picks tests
+# by name (pytest -k), for a must-fail run. Records in .kills/.
 # `make up` afterwards brings the normal stack back.
+KILLS_SELECT = $(if $(KILLS_TESTS),-k '$(KILLS_TESTS)')
+
 kills:
 	docker compose -f docker-compose.yml -f docker-compose.kills.yml up --build --wait
-	uv run --frozen pytest -x -v -s tests/kills
+	uv run --frozen pytest -x -v -s tests/kills $(KILLS_SELECT)
 
 # The same runs with the workers on the Claude API. Every job costs money:
-# 33 jobs of at most 50,000 tokens each. Needs CLAUDE_API_KEY in .env, and
-# the model named here: `make kills-claude KILLS_MODEL=claude-haiku-5-5`.
-# Stops at the first failure. `make up` puts the workers back on the fake.
+# 33 jobs of at most 50,000 tokens each. Needs CLAUDE_API_KEY in .env or the
+# environment, and the model named here: `make kills-claude
+# KILLS_MODEL=claude-haiku-5-5`. Recorded runs start from the Manual runs
+# workflow (ADR 0020). Stops at the first failure. `make up` puts the
+# workers back on the fake.
 kills-claude:
 	@test -n "$(KILLS_MODEL)" || { echo "Name the model: make kills-claude KILLS_MODEL=claude-haiku-5-5" >&2; exit 1; }
 	docker compose -f docker-compose.yml -f docker-compose.kills.yml -f docker-compose.claude.yml up --build --wait
-	KILLS_PROVIDER=claude KILLS_MODEL=$(KILLS_MODEL) uv run --frozen pytest -x -v -s tests/kills
+	KILLS_PROVIDER=claude KILLS_MODEL=$(KILLS_MODEL) uv run --frozen pytest -x -v -s tests/kills $(KILLS_SELECT)

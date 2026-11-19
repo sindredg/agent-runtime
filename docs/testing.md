@@ -1,7 +1,8 @@
 # Testing
 
 Seven suites, each with its own needs. Nothing here calls a paid API except
-the contract test and `make kills-claude`, which are run by hand.
+the contract test and `make kills-claude`, which are started by hand
+([ADR 0020](adr/0020-run-recorded-kill-and-api-runs-in-a-manual-workflow.md)).
 
 ```mermaid
 flowchart LR
@@ -26,7 +27,7 @@ flowchart LR
 | `tests/chaos` | `make chaos` | Workers that are killed, paused, crashed or stopped while jobs run |
 | `tests/lab` | `make lab` | A worker stopped in a call to Gitea ([Lab demo](lab-demo.md)) |
 | `tests/kills` | `make kills` | Killed workers, judged without a reference run ([Kill runs](kill-runs.md)) |
-| `tests/contract` | by hand | The fake provider against the Claude API |
+| `tests/contract` | the Manual runs workflow | The fake provider against the Claude API |
 
 - The integration and chaos suites never mock Postgres.
 - Integration tests run store and worker code as `runtime_app`, as the
@@ -110,8 +111,8 @@ test writes its result to `.chaos/results.jsonl` with a `verdict`: `passed`,
 
 ## The contract test
 
-It compares the fake provider with the Claude API, both ways, and is run
-by hand with a key: [The contract test](contract-test.md).
+It compares the fake provider with the Claude API, both ways, and is
+started by hand with a key: [The contract test](contract-test.md).
 
 ## Commands
 

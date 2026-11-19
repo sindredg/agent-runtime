@@ -1,0 +1,126 @@
+# Runs started by hand, on a machine with a steady clock (ADR 0020): the
+# kill runs and their must-fail run, on the fake provider or the Claude API,
+# and the contract test. Only `workflow_dispatch` starts this workflow.
+#
+# A job on the Claude API names the `claude-api` environment. It waits for a
+# reviewer of that environment, and only then gets the key, as an
+# environment secret. The environment allows `main` and `must-fail/*`.
+name: Manual runs
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: kills (all four tests), kills-after-tool-ran (the must-fail run), or contract
+        type: choice
+        options: [kills, kills-after-tool-ran, contract]
+      provider:
+        description: fake costs nothing; claude waits for a reviewer and costs money
+        type: choice
+        options: [fake, claude]
+      model:
+        description: The Claude model (ignored on the fake provider)
+        type: choice
+        options: [claude-haiku-5-5, claude-opus-5-5, claude-fable-5-2]
+
+permissions:
+  contents: read
+
+jobs:
+  fake:
+    name: ${{ inputs.suite }} on the fake provider
+    if: inputs.provider == 'fake'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 40
+    env:
+      SUITE: ${{ inputs.suite }}
+    steps:
+      - name: Refuse the contract test
+        if: inputs.suite == 'contract'
+        run: |
+          echo "The contract test compares the fake with the Claude API: pick provider claude." >&2
+          exit 1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        with:
+          version: "0.13.8"
+      - run: uv sync --locked
+      - name: Docker socket group
+        run: echo "DOCKER_GID=$(stat -c %g /var/run/docker.sock)" >> "$GITHUB_ENV"
+      - name: Commit
+        run: git rev-parse HEAD
+      # make reads KILLS_TESTS from the environment.
+      - name: Kill runs
+        run: |
+          if [ "$SUITE" = kills-after-tool-ran ]; then export KILLS_TESTS=after_tool_ran; fi
+          make kills
+      - name: Results
+        if: always()
+        run: cat .kills/*/results.jsonl 2>/dev/null || echo "No results, stopped before a test."
+      - name: Service logs
+        if: failure()
+        run: docker compose -f docker-compose.yml -f docker-compose.kills.yml logs --no-color
+      - name: Stop the stack
+        if: always()
+        run: make clean
+
+  claude:
+    name: ${{ inputs.suite }} on ${{ inputs.model }}
+    if: inputs.provider == 'claude'
+    runs-on: ubuntu-26.04
+    environment: claude-api
+    # One paid run at a time. A run in progress is never cancelled: that
+    # would spend the tokens and keep no result.
+    concurrency:
+      group: claude-api
+      cancel-in-progress: false
+    timeout-minutes: 90
+    env:
+      SUITE: ${{ inputs.suite }}
+      MODEL: ${{ inputs.model }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        with:
+          version: "0.13.8"
+      - run: uv sync --locked
+      - name: Docker socket group
+        run: echo "DOCKER_GID=$(stat -c %g /var/run/docker.sock)" >> "$GITHUB_ENV"
+      - name: Commit
+        run: git rev-parse HEAD
+      # The key is given to this step only. The runner never reads it; the
+      # workers get it through docker-compose.claude.yml.
+      - name: Kill runs on the Claude API
+        if: inputs.suite != 'contract'
+        env:
+          CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
+        run: |
+          if [ "$SUITE" = kills-after-tool-ran ]; then export KILLS_TESTS=after_tool_ran; fi
+          make kills-claude KILLS_MODEL="$MODEL"
+      # The contract test runs on the host against the normal stack's fake
+      # provider and the API.
+      - name: Contract test
+        if: inputs.suite == 'contract'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
+        run: |
+          make up
+          CONTRACT_MODEL="$MODEL" uv run --frozen pytest -v tests/contract
+      - name: Results
+        if: always()
+        run: |
+          cat .kills/*/results.jsonl 2>/dev/null || true
+          for file in .contract/*/*; do
+            if [ -f "$file" ]; then echo "== $file"; cat "$file"; fi
+          done
+      # Worker logs hold step kinds and errors, never the key.
+      - name: Service logs
+        if: failure()
+        run: docker compose -f docker-compose.yml -f docker-compose.kills.yml logs --no-color worker
+      - name: Stop the stack
+        if: always()
+        run: make clean

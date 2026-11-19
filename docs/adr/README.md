@@ -51,6 +51,7 @@ An arrow means the later record builds on, or follows from, the earlier one.
 | [0017](0017-bound-the-workspace-walk-and-state-what-it-cannot-see.md) | Bound the workspace walk, and state what it cannot see | Yes |
 | [0018](0018-wait-out-a-busy-provider-in-the-waiting-status.md) | Wait out a busy provider in the `waiting` status | [Yes](../backoff.md), for one worker. No shared limiter |
 | [0019](0019-find-a-gitea-issue-by-a-marker-line-not-by-search.md) | Find a Gitea issue by a marker line, not by search | [Yes](../lab-demo.md), in the lab demo |
+| [0020](0020-run-recorded-kill-and-api-runs-in-a-manual-workflow.md) | Run recorded kill runs and API runs in a manual workflow | [Yes](../kill-runs.md#run-it), not run yet |
 
 Each record states what was built at the time it was written. What is built
 now is described in [Architecture](../architecture.md).
