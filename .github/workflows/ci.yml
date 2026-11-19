@@ -231,7 +231,8 @@ jobs:
   kills:
     name: Kill runs (fake provider)
     runs-on: ubuntu-26.04
-    timeout-minutes: 20
+    # 33 jobs, each up to about 30 s with a takeover, plus the build.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:

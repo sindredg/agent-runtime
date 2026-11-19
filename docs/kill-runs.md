@@ -97,7 +97,7 @@ its result. The two failpoints aim there
 
 ## Runs
 
-RUNS_PLACEHOLDER
+None recorded yet. Status: configured, not tested.
 
 ## What a pass does not show
 
