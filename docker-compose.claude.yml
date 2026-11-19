@@ -2,9 +2,10 @@
 #
 #   docker compose -f docker-compose.yml -f docker-compose.claude.yml up --wait
 #
-# `make up-claude` does that. Every job then costs money, so no test suite
-# runs against this stack: they stop before the first test. `make up` puts
-# the workers back on the fake provider.
+# `make up-claude` does that. Every job then costs money, so the test suites
+# do not run against this stack: they stop before the first test. The one
+# exception is `make kills-claude`, which adds this file to the kill runs'
+# stack on purpose. `make up` puts the workers back on the fake provider.
 name: agent-runtime
 
 services:

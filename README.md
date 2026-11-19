@@ -102,7 +102,7 @@ machine, not in the repository. The run, and what it does not show:
 [Results](docs/results/README.md).
 
 The fake provider is compared with the Claude API by a contract test that is
-run by hand: [The contract test](docs/contract-test.md). Eight jobs have
+started by hand: [The contract test](docs/contract-test.md). Eight jobs have
 run against the API: [Runs against the Claude API](docs/results/api.md).
 
 ## Documentation
@@ -133,6 +133,7 @@ uv installs the pinned Python and tools into `.venv`.
 | `make escape` | Escape tests: tries to get out of the sandbox. Needs no stack. |
 | `make chaos` | Chaos tests: kills, pauses and crashes workers. Run `make up` afterwards. |
 | `make lab` | [Lab demo](docs/lab-demo.md): a worker stopped in a call to Gitea. Run `make up` afterwards. |
+| `make kills` | [Kill runs](docs/kill-runs.md): killed workers, judged without a reference run. Run `make up` afterwards. |
 
 Suites, failure switches and the lint commands are in
 [Testing](docs/testing.md). Ports and environment variables are in

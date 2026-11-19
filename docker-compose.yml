@@ -111,8 +111,9 @@ services:
     environment:
       DATABASE_URL: *app-database-url
       # Always the fake provider, whatever .env or the shell holds.
-      # docker-compose.claude.yml (`make up-claude`) is the only way to the
-      # Claude API. The integration and chaos suites check for this URL.
+      # docker-compose.claude.yml (`make up-claude`, `make kills-claude`) is
+      # the only way to the Claude API. The integration and chaos suites
+      # check for this URL.
       ANTHROPIC_BASE_URL: http://fake-provider:8000
       ANTHROPIC_API_KEY: not-a-real-key
       MODEL: hello

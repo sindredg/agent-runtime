@@ -1,8 +1,15 @@
 # The contract test
 
 The fake provider stands in for the Claude API in every other suite. The
-contract test checks that stand-in against the API itself. It is run by hand:
-it needs a key, and it is never part of CI.
+contract test checks that stand-in against the API itself. It needs a key,
+so it is never part of CI. A recorded run starts from the Manual runs
+workflow and waits for a reviewer ([ADR 0020](adr/0020-run-recorded-kill-and-api-runs-in-a-manual-workflow.md)):
+
+```sh
+gh workflow run manual-runs.yml -f suite=contract -f provider=claude -f model=claude-haiku-5-5
+```
+
+The same run on a local machine:
 
 ```sh
 make up

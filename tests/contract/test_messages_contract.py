@@ -1,7 +1,8 @@
 """The fake provider and the Claude API answer the same requests the same way.
 
-Run by hand, never in CI: it calls the Claude API (five small requests, one
-of them refused on purpose) and needs a key.
+Started by hand, never in CI: it calls the Claude API (five small requests,
+one of them refused on purpose) and needs a key. A recorded run starts from
+the Manual runs workflow (docs/contract-test.md). On a local machine:
 
     make up
     ANTHROPIC_API_KEY=... CONTRACT_MODEL=<model id> uv run pytest tests/contract
