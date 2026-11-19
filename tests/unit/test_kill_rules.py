@@ -320,7 +320,15 @@ def test_a_summary_names_the_job_and_its_issues(rules: ModuleType) -> None:
 
 def test_a_summary_shows_what_the_thinking_counts_are_made_from(rules: ModuleType) -> None:
     """The counts of a results line can be worked out again from the lines of its jobs."""
-    steps = [response(1, THINKING, CALL_BLOCK), response(1, CALL_BLOCK), response(2, TEXT)]
+    steps = [
+        request("claude-fable-5-2"),
+        response(1, THINKING, CALL_BLOCK),
+        response(1, CALL_BLOCK),
+        intent(1),
+        # Only responses are listed: a result has content too, and is not one.
+        result(2),
+        response(2, TEXT),
+    ]
     run = rules.Run(job(takeovers=1, lease_epoch=2), steps, {OPERATION: [7]}, seconds=9.0)
     assert " takeovers=1 claims=2 " in run.summary()
     assert " responses at epochs [1, 1, 2] thinking at [1] " in run.summary()
