@@ -26,7 +26,15 @@ from typing import Any
 import httpx2
 import pytest
 
-from .rules import API_JOB_LIMIT, TOKEN_BUDGET, Run, Settings, jobs_taken_over, settings
+from .rules import (
+    API_JOB_LIMIT,
+    TOKEN_BUDGET,
+    Run,
+    Settings,
+    jobs_taken_over,
+    settings,
+    thinking_record,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE = json.loads((REPO_ROOT / "examples" / "ci-triage.json").read_text())
@@ -213,6 +221,7 @@ def totals(runs: list[Run]) -> dict[str, Any]:
         "jobs_with_more_than_one_issue_operation": sum(len(run.issues) > 1 for run in runs),
         "tokens_used": sum(run.job["tokens_used"] for run in runs),
         "most_tokens_in_one_job": max((run.job["tokens_used"] for run in runs), default=0),
+        **thinking_record(runs),
     }
 
 

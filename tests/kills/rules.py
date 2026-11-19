@@ -34,6 +34,9 @@ FAILPOINTS = ("after_tool_intent", "after_tool_ran")
 TOOL = "create_issue"
 # The longest window a run may be given, in seconds. A job has five minutes on the API.
 MAX_WINDOW = 300.0
+# The block type a model's reasoning comes back in. The API checks such a
+# block when a later request sends it back.
+THINKING = "thinking"
 
 
 @dataclass(frozen=True)
@@ -146,13 +149,35 @@ class Run:
             if len(ids) > 1 + self.approvals.get(operation, 0)
         }
 
+    def responses(self) -> list[tuple[int, list[str]]]:
+        """The lease epoch and the block types of each model response, in the log's order.
+
+        A response whose content could not be stored has no blocks. Anything
+        in the list that is not a block with a type is passed over.
+        """
+        found = []
+        for step in self.steps:
+            if step["kind"] != "model_response":
+                continue
+            content = step["payload"].get("content")
+            blocks = content if isinstance(content, list) else []
+            types = [str(b["type"]) for b in blocks if isinstance(b, dict) and "type" in b]
+            found.append((int(step["lease_epoch"]), types))
+        return found
+
     def summary(self) -> str:
         job = self.job
         issues = ", ".join(f"{op.split(':')[-1]}={ids}" for op, ids in self.issues.items()) or "-"
+        responses = self.responses()
+        # What the thinking counts of a results line are made from.
+        epochs = [epoch for epoch, _ in responses]
+        thinking = [epoch for epoch, types in responses if THINKING in types]
         return (
             f"{job['id']} {job['status']:<10} takeovers={job['takeovers']}"
-            f" tokens={job['tokens_used']} {self.seconds:.1f}s"
-            f" approvals={sum(self.approvals.values())} issues: {issues} {self.note}"
+            f" claims={job['lease_epoch']} tokens={job['tokens_used']} {self.seconds:.1f}s"
+            f" approvals={sum(self.approvals.values())}"
+            f" responses at epochs {epochs} thinking at {thinking}"
+            f" issues: {issues} {self.note}"
         )
 
 
@@ -225,6 +250,57 @@ def failpoint_problems(run: Run, failpoint: str, fired: int) -> list[str]:
     if recovered != wanted_recovered:
         found.append(f"the call's results have recovered={recovered}, not {wanted_recovered}")
     return found
+
+
+def block_types(run: Run) -> dict[str, int]:
+    """How many blocks of each type the job's model responses hold."""
+    counted: dict[str, int] = {}
+    for _, types in run.responses():
+        for kind in types:
+            counted[kind] = counted.get(kind, 0) + 1
+    return dict(sorted(counted.items()))
+
+
+def sent_thinking_back_after_a_takeover(run: Run) -> bool:
+    """Whether a worker that took the job over sent a `thinking` block back and was answered.
+
+    A request holds the whole conversation. So a response at a later lease
+    epoch than the first one with a `thinking` block means: a worker that
+    never received the block rebuilt it from the step log, sent it, and the
+    API answered. The job must have succeeded.
+
+    Every claim raises the lease epoch, and a claim after a wait for the
+    provider or after an approval is not a takeover. The job row counts
+    both, so a later epoch is taken as a takeover only when every claim
+    after the first was one. A job with another kind of claim is left out:
+    the count may be too low and is never too high.
+    """
+    job = run.job
+    if job["status"] != "succeeded" or job["lease_epoch"] - 1 != job["takeovers"]:
+        return False
+    responses = run.responses()
+    first = min((epoch for epoch, types in responses if THINKING in types), default=None)
+    return first is not None and any(epoch > first for epoch, _ in responses)
+
+
+def thinking_record(runs: list[Run]) -> dict[str, Any]:
+    """What a set of jobs shows about `thinking` blocks. It is recorded and never judged.
+
+    A model decides by itself whether it sends such a block, so a count of
+    0 is a result and not a failure. The block types of every response are
+    recorded with it, so a 0 can be told from a block under another name.
+    """
+    types: dict[str, int] = {}
+    for run in runs:
+        for kind, count in block_types(run).items():
+            types[kind] = types.get(kind, 0) + count
+    return {
+        "jobs_with_a_thinking_block": sum(THINKING in block_types(run) for run in runs),
+        "jobs_that_sent_one_back_after_a_takeover": sum(
+            sent_thinking_back_after_a_takeover(run) for run in runs
+        ),
+        "block_types": dict(sorted(types.items())),
+    }
 
 
 def jobs_taken_over(runs: list[Run]) -> int:
