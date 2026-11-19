@@ -1,6 +1,6 @@
 # Runs against the Claude API
 
-Eight jobs ran with the worker on the Claude API instead of the fake
+Eight single jobs ran with the worker on the Claude API instead of the fake
 provider. They show that the runtime works with a real model. They are not
 the evidence for a guarantee: that is in [Results](README.md).
 
@@ -49,13 +49,18 @@ sequenceDiagram
 Each pass line was fixed before its run. The first job failed twice before
 it passed, at the first model call, on a wrong API key.
 
-## What these runs do not show
+## Kill runs on the API
+
+After these eight, the kill runs passed on three models, 33 jobs each, with
+workers killed at random times and at two failpoints:
+[Kill runs](../kill-runs.md#runs).
+
+## What these eight runs do not show
 
 - No run with a mechanism switched off. One such run on the API is in
   [Kill runs](../kill-runs.md#with-the-intent-write-switched-off).
 - One model, and each job once. A real model does not give the same answer
   twice.
 - No refusal by the model and no rate limit was met.
-- The kill was at one point, in a model call. Kills at random times and at
-  two failpoints ran on the API later: [Kill runs](../kill-runs.md#runs).
+- The kill was at one point, in a model call.
 - The job files are kept on that machine, not in the repository.

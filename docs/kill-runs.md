@@ -109,9 +109,8 @@ its result. The two failpoints aim there
 
 ## Runs
 
-One run per row, 2026-11-19, commit `adc388d`, started from the Manual runs
-workflow on GitHub Actions (Linux x86_64, 4 CPUs). Three workers, seed
-`20261119`, 3 + 20 + 5 + 5 jobs.
+One run per row: 2026-11-19, commit `adc388d`, the Manual runs workflow on
+GitHub Actions (Linux x86_64, 4 CPUs), seed `20261119`, 3 + 20 + 5 + 5 jobs.
 
 | Provider, model | Window | Kills that hit the holder | Tokens, all jobs | Most in one job | Run |
 |---|---|---|---|---|---|
@@ -121,8 +120,9 @@ workflow on GitHub Actions (Linux x86_64, 4 CPUs). Three workers, seed
 | Claude API, `claude-fable-5-2` | 7.98 s | 20 of 20 | 142,234 | 4,582 | [44608054848](https://github.com/sindredg/agent-runtime/actions/runs/44608054848) |
 
 In every row: 4 of 4 tests passed, every job whose holder was killed was
-taken over, each failpoint fired in 5 of 5 jobs, no approval was asked for,
-and no operation id has two issues. Status: tested.
+taken over, and each failpoint fired in 5 of 5 jobs. No approval was asked
+for, no job had more than one `create_issue` operation, and no operation id
+has two issues. Status: tested.
 
 ### With the intent write switched off
 
@@ -145,6 +145,6 @@ The same commit with the intent write removed, as branch
 - A kill during a model's second call of a tool. The failpoints fire in the
   job's first `create_issue` call.
 - Whether a real model's answer held a `thinking` block. The results do not
-  record block types.
+  record block types ([issue 113](https://github.com/sindredg/agent-runtime/issues/113)).
 - More than one run per model. GitHub Actions deletes a run's log after 90
   days; a copy is kept outside the repository.
