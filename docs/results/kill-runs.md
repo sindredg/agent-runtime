@@ -52,9 +52,10 @@ returns none. On `claude-fable-5-2`:
 
 In 15 jobs a worker that never received the block rebuilt it from the step
 log, sent it, and the API answered. All 15 succeeded. In the other jobs the
-takeover came before the first block, or no answer held one. One run, with
-no switched-off run yet. The API's documentation says this model checks a
-block it gets back; no run here shows it refuse one
+takeover came before the first block, or no answer held one.
+
+One run, with no switched-off run yet. The API's documentation says this
+model checks a block it gets back; no run here shows it refuse one
 ([issue 122](https://github.com/sindredg/agent-runtime/issues/122)).
 
 ### With the intent write switched off
