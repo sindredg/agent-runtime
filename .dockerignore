@@ -7,5 +7,6 @@
 !LICENSE
 !src/
 !migrations/
+!packages/
 !services/
 **/__pycache__/

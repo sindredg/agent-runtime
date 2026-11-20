@@ -25,6 +25,10 @@ flowchart LR
   the API sends no CORS header.
 - IPv6 addresses are not accepted as names, so `[::1]` is refused.
 
+The check is the package `packages/allowed_hosts/`. The fake provider and the
+fake tracker run it too, with fixed names: their service name, `localhost`
+and `127.0.0.1`.
+
 ## Routes
 
 | Route | Returns |

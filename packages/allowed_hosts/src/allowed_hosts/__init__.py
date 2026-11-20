@@ -1,25 +1,34 @@
-"""Answer only requests addressed to the API by one of its names.
+"""Answer only requests addressed to a service by one of its names.
 
-The API has no authentication and listens on localhost. A browser still
-reaches localhost for any page it shows:
+The API and the two fakes have no authentication and are published on
+localhost. A browser still reaches localhost for any page it shows:
 
 - A page can point a name it controls at 127.0.0.1 (DNS rebinding). Its
-  requests then carry that name in `Host`, and the browser treats the API
-  as the page's own site. Such a request is refused with 400.
+  requests then carry that name in `Host`, and the browser treats the
+  service as the page's own site. Such a request is refused with 400.
 - A page of another site, also one on another port of localhost, can send
-  a form to the API. A change it sends carries that site in `Origin`, which
-  is not the API's own, and is refused with 403. A read is left to the
-  browser, which keeps the answer from the page: no CORS header is sent.
+  a form to the service. A change it sends carries that site in `Origin`,
+  which is not the service's own, and is refused with 403. A read is left to
+  the browser, which keeps the answer from the page: no CORS header is sent.
+
+A program on the host is not stopped: it can send any header.
 """
 
 import json
 import re
-from collections.abc import Iterable
+from collections.abc import Awaitable, Callable, Iterable, MutableMapping
+from typing import Any
 from urllib.parse import urlsplit
 
-from starlette.types import ASGIApp, Receive, Scope, Send
+# The ASGI types, written out so the package needs nothing but the standard
+# library. They match Starlette's.
+Scope = MutableMapping[str, Any]
+Message = MutableMapping[str, Any]
+Receive = Callable[[], Awaitable[Message]]
+Send = Callable[[Message], Awaitable[None]]
+ASGIApp = Callable[[Scope, Receive, Send], Awaitable[None]]
 
-WRONG_HOST = "the request's Host is not one the API answers to"
+WRONG_HOST = "the request's Host is not one this service answers to"
 FOREIGN_ORIGIN = "a change sent from another site's page is refused"
 _READS = frozenset({"GET", "HEAD", "OPTIONS"})
 # A name or IPv4 address and an optional port, nothing else.
@@ -52,8 +61,8 @@ class AllowedHosts:
             await _refuse(send, 400, WRONG_HOST)
             return
         origins = _values(scope, b"origin")
-        # The API's own origin is the address the request was sent to. "null",
-        # another port and anything that is not a URL are another site.
+        # The service's own origin is the address the request was sent to.
+        # "null", another port and anything that is not a URL are another site.
         if scope["method"] not in _READS and any(
             urlsplit(origin).netloc.lower() != hosts[0].lower() for origin in origins
         ):

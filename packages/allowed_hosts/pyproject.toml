@@ -1,0 +1,12 @@
+[project]
+name = "allowed-hosts"
+version = "0.0.0"
+description = "ASGI middleware that answers only requests addressed to the service by its own names."
+requires-python = "==3.15.*"
+license = "Apache-2.0"
+# Standard library only.
+dependencies = []
+
+[build-system]
+requires = ["uv_build==0.13.8"]
+build-backend = "uv_build"

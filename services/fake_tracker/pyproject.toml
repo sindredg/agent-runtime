@@ -5,11 +5,16 @@ description = "Stand-in for an issue tracker: the outside system a tool changes 
 requires-python = "==3.15.*"
 license = "Apache-2.0"
 dependencies = [
+    # The Host and Origin check the API uses. A workspace member.
+    "allowed-hosts",
     "fastapi==0.162.6",
     # Request bodies are validated with it. FastAPI installs it anyway.
     "pydantic==2.14.3",
     "uvicorn==0.54.0",
 ]
+
+[tool.uv.sources]
+allowed-hosts = { workspace = true }
 
 [build-system]
 requires = ["uv_build==0.13.8"]

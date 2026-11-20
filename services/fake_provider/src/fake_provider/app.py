@@ -26,6 +26,7 @@ from fastapi import Body, FastAPI, Request
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from allowed_hosts import AllowedHosts
 from fake_provider.messages import build_message, encode_sse, estimate_tokens, stream_events
 from fake_provider.requests import RequestError, check_request, turn_index
 from fake_provider.scenario import Scenario, load_scenarios
@@ -35,6 +36,9 @@ from fake_provider.scenario import Scenario, load_scenarios
 REQUEST_LOG_SIZE = 10_000
 # The longest busy window one call can set: one hour.
 MAX_BUSY_SECONDS = 3600
+# The names the stack and the tests reach it by. Any other Host is refused,
+# so a web page that points its own name at 127.0.0.1 cannot use it.
+HOSTS = ("fake-provider", "localhost", "127.0.0.1")
 # The error type the Claude API sends with each busy status.
 BUSY_ERRORS = {429: "rate_limit_error", 529: "overloaded_error"}
 
@@ -96,6 +100,7 @@ def create_app(
 ) -> FastAPI:
     """The app. `clock` times the busy window; tests pass their own."""
     app = FastAPI(title="fake-provider")
+    app.add_middleware(AllowedHosts, hosts=HOSTS)
     known = default_scenarios() if scenarios is None else scenarios
     log: deque[dict[str, Any]] = deque(maxlen=REQUEST_LOG_SIZE)
     counter = iter(range(1, 2**62))

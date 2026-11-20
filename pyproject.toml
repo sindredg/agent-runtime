@@ -7,6 +7,8 @@ requires-python = "==3.15.*"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 dependencies = [
+    # The Host and Origin check, shared with the two fakes. A workspace member.
+    "allowed-hosts",
     # Schema migrations, run by the one-shot migrate service.
     "alembic==1.20.1",
     # The official SDK for the Messages API. It parses the event stream and
@@ -51,9 +53,10 @@ requires = ["uv_build==0.13.8"]
 build-backend = "uv_build"
 
 [tool.uv.workspace]
-members = ["services/fake_provider", "services/fake_tracker"]
+members = ["packages/allowed_hosts", "services/fake_provider", "services/fake_tracker"]
 
 [tool.uv.sources]
+allowed-hosts = { workspace = true }
 fake-provider = { workspace = true }
 fake-tracker = { workspace = true }
 
@@ -67,7 +70,13 @@ script_location = "%(here)s/migrations"
 
 [tool.ruff]
 line-length = 100
-src = ["src", "tests", "services/fake_provider/src", "services/fake_tracker/src"]
+src = [
+    "src",
+    "tests",
+    "packages/allowed_hosts/src",
+    "services/fake_provider/src",
+    "services/fake_tracker/src",
+]
 
 [tool.ruff.lint]
 # E/W pycodestyle, F pyflakes, I import order, B bugbear, UP pyupgrade,
@@ -85,6 +94,7 @@ files = [
     "tests",
     "migrations",
     "scripts",
+    "packages/allowed_hosts/src",
     "services/fake_provider/src",
     "services/fake_tracker/src",
 ]

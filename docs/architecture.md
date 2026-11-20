@@ -34,6 +34,7 @@ flowchart LR
 | `migrate` | `migrations/`, `src/runtime/store/migrate.py` | Runs the migrations as the owner, sets the login of the [app role](database-roles.md), and exits. `api` and `worker` start after it. |
 | `fake-provider` | `services/fake_provider/` | Answers `POST /v1/messages` from scenario files and logs each request. |
 | `fake-tracker` | `services/fake_tracker/` | A stand-in issue tracker. Keeps each issue with its operation id. |
+| Host check | `packages/allowed_hosts/` | Shared by `api` and both fakes: a request must name the service in `Host` ([API](api.md)). |
 | `gitea` | `docker-compose.lab.yml` | A real issue tracker for the [lab demo](lab-demo.md). Not in `make up`. |
 | Provider client | `src/runtime/provider/` | The worker's one way to call a model: the official SDK behind a `Provider` interface. |
 | Tools | `src/runtime/tools/` | `run_shell` and `list_dir` run in a container per call. `read_file` and `create_issue` run in the worker; `trackers.py` holds the two trackers. |

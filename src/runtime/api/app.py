@@ -2,7 +2,7 @@
 and approve or deny a tool call that waits for a person.
 
 There is no authentication. The service listens on localhost and answers
-only requests addressed to it by an allowed name (`hosts.py`).
+only requests addressed to it by an allowed name (package `allowed_hosts`).
 """
 
 import asyncio
@@ -20,7 +20,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from runtime.api.hosts import AllowedHosts
+from allowed_hosts import AllowedHosts
 from runtime.api.models import MAX_SEQ, Answer, JobSubmission, JobView, StepList, StepView
 from runtime.config import ApiConfig, allowed_hosts
 from runtime.store.engine import create_engine
