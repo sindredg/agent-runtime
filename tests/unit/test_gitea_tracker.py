@@ -160,13 +160,15 @@ def test_another_author_in_the_list_is_unknown(gitea: Gitea) -> None:
 def test_the_user_name_is_matched_without_case_as_gitea_matches_it(gitea: Gitea) -> None:
     gitea.add(marked("b", "job-1:toolu_1"), author="lab-bot")
     gitea.login = "Lab-Bot"
-    assert tool(gitea).check(call()) == ToolResult("created issue 1: t")
+    # The number is the tracker's, the title is the call's own.
+    assert tool(gitea).check(call()) == ToolResult("created issue 1: CI is red")
 
 
 def test_the_check_reads_every_page(gitea: Gitea) -> None:
     gitea.add(marked("b", "job-1:toolu_1"), title="old one")
     fill(gitea, 2 * PAGE + 10)
-    assert tool(gitea).check(call()) == ToolResult("created issue 1: old one")
+    # Issue 1 is the oldest, on the last page. Its stored title is not repeated.
+    assert tool(gitea).check(call()) == ToolResult("created issue 1: CI is red")
     assert [int(r.url.params["page"]) for r in gitea.issue_requests()] == [1, 2, 3]
 
 
