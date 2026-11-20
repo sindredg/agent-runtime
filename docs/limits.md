@@ -1,7 +1,6 @@
 # Known limits
 
-What the design accepts, and what is not built. Reasons are in the
-[decision records](adr/).
+What the design accepts, and what is not built. Reasons: [ADRs](adr/).
 
 ## The main one: fencing protects the database, not the outside world
 
@@ -138,8 +137,9 @@ refused, but the tool ran. An idempotency key on the other side closes this.
 
 - No authentication. Anyone who can reach the API can submit, approve, deny
   and cancel. That includes every local user and process of the host.
-- The Host and Origin check stops a browser page of another site. It does not
-  stop a program on the host, which can send any header.
+- The API and both fakes refuse a foreign `Host` and a change from another
+  site's page. A local program sends any header: it can park jobs on the fake
+  provider, read its request log, and fill or empty the fake tracker.
 - Postgres is published on `127.0.0.1` with default passwords for both
   [roles](database-roles.md). A local process can write jobs and steps
   directly, past the fence and the gate. As the owner it can switch the

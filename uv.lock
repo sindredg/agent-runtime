@@ -5,6 +5,7 @@ requires-python = "==3.15.*"
 [manifest]
 members = [
     "agent-runtime",
+    "allowed-hosts",
     "fake-provider",
     "fake-tracker",
 ]
@@ -15,6 +16,7 @@ version = "0.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "alembic" },
+    { name = "allowed-hosts" },
     { name = "anthropic" },
     { name = "asyncpg" },
     { name = "fastapi" },
@@ -40,6 +42,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "alembic", specifier = "==1.20.1" },
+    { name = "allowed-hosts", editable = "packages/allowed_hosts" },
     { name = "anthropic", specifier = "==2.8.0" },
     { name = "asyncpg", specifier = "==0.32.0" },
     { name = "fastapi", specifier = "==0.162.6" },
@@ -75,6 +78,11 @@ sdist = { url = "https://files.pythonhosted.org/packages/93/1c/00909e0fbebad2121
 wheels = [
     { url = "https://files.pythonhosted.org/packages/11/3c/8740f5b4e1bd57333e4f84265b9b6363da4f7cf70f5622dd1e2fde7a0bd5/alembic-1.20.1-py3-none-any.whl", hash = "sha256:9970712cfb81ea26c8658d378aaa5b8f6ff9146e5bb111d70497c164016cf598", size = 270355, upload-time = "2026-10-22T03:24:37.667Z" },
 ]
+
+[[package]]
+name = "allowed-hosts"
+version = "0.0.0"
+source = { editable = "packages/allowed_hosts" }
 
 [[package]]
 name = "annotated-doc"
@@ -259,6 +267,7 @@ name = "fake-provider"
 version = "0.0.0"
 source = { editable = "services/fake_provider" }
 dependencies = [
+    { name = "allowed-hosts" },
     { name = "fastapi" },
     { name = "pydantic" },
     { name = "uvicorn" },
@@ -266,6 +275,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "allowed-hosts", editable = "packages/allowed_hosts" },
     { name = "fastapi", specifier = "==0.162.6" },
     { name = "pydantic", specifier = "==2.14.3" },
     { name = "uvicorn", specifier = "==0.54.0" },
@@ -276,6 +286,7 @@ name = "fake-tracker"
 version = "0.0.0"
 source = { editable = "services/fake_tracker" }
 dependencies = [
+    { name = "allowed-hosts" },
     { name = "fastapi" },
     { name = "pydantic" },
     { name = "uvicorn" },
@@ -283,6 +294,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "allowed-hosts", editable = "packages/allowed_hosts" },
     { name = "fastapi", specifier = "==0.162.6" },
     { name = "pydantic", specifier = "==2.14.3" },
     { name = "uvicorn", specifier = "==0.54.0" },

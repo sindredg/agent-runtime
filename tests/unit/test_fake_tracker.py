@@ -7,6 +7,9 @@ from fastapi.testclient import TestClient
 
 from fake_tracker.app import MAX_BODY_LENGTH, MAX_ISSUES, create_app
 
+# The fake answers only the names the stack and the tests use.
+LOCAL = "http://localhost"
+
 
 def issue(**changes: Any) -> dict[str, Any]:
     return {
@@ -18,7 +21,7 @@ def issue(**changes: Any) -> dict[str, Any]:
 
 @pytest.fixture
 def client() -> TestClient:
-    return TestClient(create_app())
+    return TestClient(create_app(), base_url=LOCAL)
 
 
 def test_a_created_issue_gets_a_number_and_is_listed(client: TestClient) -> None:
@@ -100,7 +103,7 @@ def test_issues_can_be_cleared(client: TestClient) -> None:
 
 def test_a_full_tracker_refuses_new_issues(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("fake_tracker.app.MAX_ISSUES", 2)
-    client = TestClient(create_app())
+    client = TestClient(create_app(), base_url=LOCAL)
     assert MAX_ISSUES > 2
     assert [client.post("/issues", json=issue()).status_code for _ in range(3)] == [201, 201, 507]
     assert len(client.get("/issues").json()) == 2

@@ -27,12 +27,16 @@ TWO_TURNS = parse_scenario(
         }
     )
 )
+# The fake answers only the names the stack and the tests use.
+LOCAL = "http://localhost"
 HEADERS = {"x-api-key": "test", "anthropic-version": "2026-10-21"}
 USER = {"role": "user", "content": "go"}
 
 
 def client(scenarios: dict[str, Scenario] | None = None) -> TestClient:
-    return TestClient(create_app({"two": TWO_TURNS} if scenarios is None else scenarios))
+    return TestClient(
+        create_app({"two": TWO_TURNS} if scenarios is None else scenarios), base_url=LOCAL
+    )
 
 
 def request(**changes: Any) -> dict[str, Any]:
@@ -360,7 +364,9 @@ class Clock:
 
 def busy_client() -> tuple[TestClient, Clock]:
     clock = Clock()
-    return TestClient(create_app({"two": TWO_TURNS, "other": TWO_TURNS}, clock=clock)), clock
+    return TestClient(
+        create_app({"two": TWO_TURNS, "other": TWO_TURNS}, clock=clock), base_url=LOCAL
+    ), clock
 
 
 def test_a_busy_window_answers_429_with_retry_after_until_it_ends() -> None:

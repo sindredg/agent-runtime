@@ -53,7 +53,9 @@ def test_another_host_is_refused_on_every_route(host: str) -> None:
     for method, path in [("GET", "/healthz"), ("GET", f"/jobs/{JOB}"), ("POST", "/jobs")]:
         response = api.request(method, path, headers={"host": host}, json={})
         assert response.status_code == 400, (method, path, host)
-        assert response.json() == {"detail": "the request's Host is not one the API answers to"}
+        assert response.json() == {
+            "detail": "the request's Host is not one this service answers to"
+        }
 
 
 @pytest.mark.parametrize(

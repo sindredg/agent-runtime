@@ -18,10 +18,15 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
 
+from allowed_hosts import AllowedHosts
+
 # Characters in an issue body, and issues kept. Both only bound the memory a
 # test run can use up.
 MAX_BODY_LENGTH = 64 * 1024
 MAX_ISSUES = 100_000
+# The names the stack and the tests reach it by. Any other Host is refused,
+# so a web page that points its own name at 127.0.0.1 cannot use it.
+HOSTS = ("fake-tracker", "localhost", "127.0.0.1")
 
 
 class NewIssue(BaseModel):
@@ -42,6 +47,7 @@ def _json(content: Any, status: int = 200) -> Response:
 
 def create_app() -> FastAPI:
     app = FastAPI(title="fake-tracker")
+    app.add_middleware(AllowedHosts, hosts=HOSTS)
     issues: list[dict[str, Any]] = []
     numbers = count(1)
 
