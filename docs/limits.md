@@ -52,8 +52,9 @@ refused, but the tool ran. An idempotency key on the other side closes this.
   ([issue 103](https://github.com/sindredg/agent-runtime/issues/103)).
 - On Gitea, the `create_issue` check misses an issue whose marker line a
   person edited or wrote below, and is fooled by a bot issue edited to end
-  with another call's marker. It answers unknown past 1,000 issues by its user
-  ([ADR 0019](adr/0019-find-a-gitea-issue-by-a-marker-line-not-by-search.md)).
+  with another call's marker. It trusts that each page's `X-Total-Count`
+  counts the list that page came from, and answers unknown past 1,000 issues
+  by its user ([ADR 0019](adr/0019-find-a-gitea-issue-by-a-marker-line-not-by-search.md)).
 - The operation id protects a call the runtime runs again. A model that is
   told a call failed and asks again makes a new call with a new id.
 - A tool in the worker process that is running when its worker loses the
@@ -115,8 +116,7 @@ refused, but the tool ran. An idempotency key on the other side closes this.
 - A halt waits for what it cannot race: container removals and the fenced
   write that ends the job. A slow Docker daemon can push a cancel or a
   deadline past 5 s.
-- A cancel that arrives as the job finishes can find it `succeeded`. The API
-  had answered 202.
+- A cancel answered 202 can still end with the job `succeeded`, as it finishes.
 - The deadline timer reads the database clock once, then counts on the
   monotonic clock. A wall clock step while it waits moves the stop by as much.
 - The 5 s a stop leaves around a sandboxed call is a margin, not a bound. A

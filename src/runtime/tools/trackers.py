@@ -114,6 +114,15 @@ def marks(body: str, operation_id: str) -> bool:
     return end == marker or end.endswith(f"\n{marker}")
 
 
+def _number(entry: Any) -> int:
+    """The issue number of a list entry. Raises `Unclear` if it has no whole number."""
+    number = entry.get("number") if isinstance(entry, dict) else None
+    # bool is an int in Python, and JSON true is no issue number.
+    if not isinstance(number, int) or isinstance(number, bool):
+        raise Unclear("an entry has no issue number")
+    return number
+
+
 def _count(response: httpx2.Response) -> int:
     """Gitea's count of all issues the list holds, from `X-Total-Count`."""
     text = response.headers.get("X-Total-Count", "")
@@ -157,7 +166,10 @@ class GiteaTracker:
         issues this tool opened, whatever the settings say.
         """
         user = self._user(http)
-        seen, first_total = 0, None
+        # Issue numbers, not entries: an issue listed on two pages would
+        # otherwise stand in for one that was never listed (issue 126).
+        seen: set[int] = set()
+        first_total = None
         for page in range(1, MAX_PAGES + 1):
             entries, total = self._page(http, user, page)
             # A deletion while the list is read moves issues up past the
@@ -166,12 +178,16 @@ class GiteaTracker:
                 raise Unclear(f"the count changed from {first_total} to {total} during the list")
             first_total = total
             for entry in entries:
-                if self._is_ours(entry, user, operation_id):
+                ours = self._is_ours(entry, user, operation_id)
+                number = _number(entry)
+                if ours:
                     return _issue(entry, "number")
-            seen += len(entries)
+                if number in seen:
+                    raise Unclear(f"issue {number} is listed twice")
+                seen.add(number)
             if len(entries) < PAGE:
-                if seen != total:
-                    raise Unclear(f"saw {seen} of {total} issues")
+                if len(seen) != total:
+                    raise Unclear(f"saw {len(seen)} of {total} issues")
                 return None
         raise Unclear(f"more than {MAX_PAGES * PAGE} issues by {user}")
 

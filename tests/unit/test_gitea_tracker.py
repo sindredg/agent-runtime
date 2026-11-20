@@ -200,6 +200,66 @@ def test_an_issue_deleted_during_the_list_is_unknown_not_a_skipped_issue(gitea: 
     assert tool(gitea).check(call()) is CheckOutcome.UNKNOWN
 
 
+def test_an_issue_listed_twice_is_unknown_even_when_the_count_adds_up(gitea: Gitea) -> None:
+    """Page 2 repeats page 1's last issue and leaves out the one wanted (issue 126).
+
+    The entries add up to X-Total-Count, so a check that counts entries
+    answers "not done", and the call runs again while its issue exists.
+    """
+    gitea.add(marked("b", "job-1:toolu_1"))
+    fill(gitea, PAGE + 5)
+    newest_first = list(reversed(gitea.issues))
+    page_2 = [newest_first[PAGE - 1], *newest_first[PAGE:-1]]
+    assert len(page_2) == len(newest_first) - PAGE
+    gitea.page_answer[2] = httpx2.Response(
+        200, json=page_2, headers={"X-Total-Count": str(len(newest_first))}
+    )
+    assert tool(gitea).check(call()) is CheckOutcome.UNKNOWN
+
+
+def test_a_deletion_and_a_creation_between_pages_are_unknown(gitea: Gitea) -> None:
+    """The wanted issue is skipped and another listed twice, under a steady count.
+
+    The wanted issue is first on page 2. Before page 2, a newer issue is
+    deleted: the wanted one moves up onto page 1, already read. Page 2's
+    count is taken as if another issue had been opened. That issue opens
+    before page 3, and page 3 repeats page 2's last issue.
+    """
+    fill(gitea, 60)
+    gitea.add(marked("b", "job-1:toolu_1"))
+    fill(gitea, PAGE)
+
+    def delete_then_create(page: int) -> None:
+        if page == 1:
+            del gitea.issues[-1]
+            gitea.count_offset = 1
+        if page == 2:
+            gitea.count_offset = 0
+            gitea.add(marked("b", "job-x:toolu_new"))
+
+    gitea.after_page = delete_then_create
+    assert tool(gitea).check(call()) is CheckOutcome.UNKNOWN
+    assert len(gitea.issue_requests()) == 3
+
+
+@pytest.mark.parametrize("number", [None, "7", 7.0, True], ids=["missing", "text", "float", "bool"])
+def test_an_entry_without_a_whole_issue_number_is_unknown(gitea: Gitea, number: Any) -> None:
+    """Distinct issues are counted by number, so an entry needs one."""
+    fill(gitea, 3)
+    entries = list(reversed(gitea.issues))
+    entries[1] = {**entries[1], "number": number}
+    gitea.page_answer[1] = httpx2.Response(200, json=entries, headers={"X-Total-Count": "3"})
+    assert tool(gitea).check(call()) is CheckOutcome.UNKNOWN
+
+
+@pytest.mark.parametrize("number", ["1", None])
+def test_the_issue_found_needs_a_whole_number_too(gitea: Gitea, number: Any) -> None:
+    gitea.add(marked("b", "job-1:toolu_1"))
+    entries = [{**gitea.issues[0], "number": number}]
+    gitea.page_answer[1] = httpx2.Response(200, json=entries, headers={"X-Total-Count": "1"})
+    assert tool(gitea).check(call()) is CheckOutcome.UNKNOWN
+
+
 @pytest.mark.parametrize("offset", [1, -1], ids=["more-than-seen", "fewer-than-seen"])
 def test_a_count_that_does_not_match_the_issues_seen_is_unknown(gitea: Gitea, offset: int) -> None:
     fill(gitea, 3)
