@@ -29,8 +29,15 @@ Tested. `tests/chaos/test_kills.py`, 200 runs.
 
 With the mechanism off: with resume switched off, so that the log is not
 replayed, 13 of 20 short runs failed. The provider was asked turns 0, 1, 0,
-1, 2. That run left out the failpoint runs: no switched-off run reached them
-([issue 117](https://github.com/sindredg/agent-runtime/issues/117)).
+1, 2.
+
+The failpoint runs with resume off, at `11b6792` ([run](https://github.com/sindredg/agent-runtime/actions/runs/44808424822)):
+
+| Failpoint | Outcome |
+|---|---|
+| After the tool's intent | Fails: the provider was asked turns 0, 1, 0, 1, 2 |
+| After the tool ran, after its result | Fail: the same, and two issues for one operation id |
+| After the claim, after the model request, mid-stream | Pass. The kill comes before any completed step, so starting over is the same as resuming. |
 
 ## An unsafe tool call does not run twice without approval
 
@@ -46,8 +53,7 @@ and the [limits of tool calls](../limits.md#tool-calls).
   once more. One issue.
 - One run with the tracker frozen, so the check gets no answer: the job
   waits in `needs_approval`. After the approval the tracker holds two issues
-  for one approval. No switched-off run reached this case
-  ([issue 118](https://github.com/sindredg/agent-runtime/issues/118)).
+  for one approval.
 
 Against a real tracker, Gitea in a container (`make lab`,
 [Lab demo](../lab-demo.md)): 2 of 2 cases. In each the worker stopped
@@ -61,6 +67,7 @@ With the mechanism off:
 | The tools' own idempotency flags: every tool idempotent | Stopped after the tool ran: two issues for one operation id |
 | The Gitea check, forced to "not done" | Stopped after the call ran: two issues in Gitea |
 | The marker line in the issue body | Two issues in Gitea in one case, an issue without its marker in the other |
+| A check that cannot tell, treated as not done, at `11b6792` ([run](https://github.com/sindredg/agent-runtime/actions/runs/44808435953)) | The job succeeded without waiting for a person. The test fails on `needs_approval`. |
 
 ## A stale worker cannot corrupt a job
 
@@ -117,5 +124,9 @@ With the mechanism off:
   had passed. After one approval the command ran again and the job
   succeeded.
 
-Neither of these two has a switched-off run at `1f57ee4`
-([issue 120](https://github.com/sindredg/agent-runtime/issues/120)).
+With the mechanism off, at `11b6792`:
+
+| Removed | Outcome |
+|---|---|
+| The hand-back on a stop ([run](https://github.com/sindredg/agent-runtime/actions/runs/44808467134)) | The job stayed `running`, with no other claim within 10 s. The test fails. |
+| The removal and the wait after a takeover ([run](https://github.com/sindredg/agent-runtime/actions/runs/44808477135)) | The killed worker's container was still running after the takeover. The test fails. |
