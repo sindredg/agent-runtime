@@ -5,13 +5,15 @@ text does not carry it.
 """
 
 import asyncio
+import contextlib
+from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
 
 from runtime.cli import build_parser
 from runtime.config import ApiConfig, ConfigError, ProviderConfig, WorkerConfig
-from runtime.store import migrate
+from runtime.store import migrate, roles
 from runtime.store.engine import DatabaseUrlError, create_engine, sqlalchemy_url
 from runtime.store.roles import wait_for_app_role
 from runtime.tools.trackers import _issue
@@ -127,8 +129,9 @@ def test_migrate_hides_the_password_it_binds(monkeypatch: pytest.MonkeyPatch) ->
         ["--database-url", f"postgresql://runtime:{SECRET}@h/runtime", "verify", "--all"],
         [f"postgresql://runtime:{SECRET}@h/runtime"],
         ["status", "01a1d655-88bd-7468-afc4-5ca3a1947906", SECRET],
+        ["status", "01a1d655-88bd-7468-afc4-5ca3a1947906", f"--json={SECRET}"],
     ],
-    ids=["unknown-option", "option-before-command", "url-as-command", "extra-argument"],
+    ids=["unknown-option", "option-before-command", "url-as-command", "extra-argument", "flag"],
 )
 def test_a_refused_argument_is_not_repeated(
     capsys: pytest.CaptureFixture[str], argv: list[str]
@@ -139,3 +142,24 @@ def test_a_refused_argument_is_not_repeated(
     err = capsys.readouterr().err
     assert "usage:" in err
     assert SECRET not in err
+
+
+def test_another_type_error_in_the_start_check_is_tried_again(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Only the driver's refusal of a query key ends the check; other faults keep their text."""
+    stop = asyncio.Event()
+
+    class Engine:
+        @contextlib.asynccontextmanager
+        async def connect(self) -> AsyncIterator[None]:
+            yield None
+
+    async def broken(conn: Any) -> None:
+        stop.set()
+        raise TypeError("a fault in the check itself")
+
+    monkeypatch.setattr(roles, "check_app_role", broken)
+    started = asyncio.run(wait_for_app_role(Engine(), stop, retry_seconds=0.01))  # type: ignore[arg-type]
+    assert started is False
+    assert "a fault in the check itself" in caplog.text

@@ -14,6 +14,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import sys
 import time
 from collections.abc import Iterator, Sequence
@@ -67,10 +68,13 @@ class _Parser(argparse.ArgumentParser):
     """
 
     def error(self, message: str) -> NoReturn:
-        if message.startswith("unrecognized arguments"):
-            message = "unrecognized arguments"
-        elif "invalid choice" in message:
-            message = message.split("invalid choice", 1)[0] + "invalid choice"
+        if message.startswith(("unrecognized arguments", "ambiguous option")):
+            # These name the typed text without quotes.
+            message = message.split(":", 1)[0]
+        else:
+            # The others quote it: "invalid choice: '...'", "ignored explicit
+            # argument '...'". The list of choices goes with it; usage shows them.
+            message = re.sub(r"'.*'\)?", "...", message, flags=re.DOTALL)
         super().error(message)
 
 
