@@ -67,7 +67,7 @@ switched-off:
 # The lab demo: create_issue against Gitea in a container, and a worker that
 # stops itself in the middle of the call. Sets Gitea up (users, repository,
 # a token that can only write issues), then runs the two cases. Fake provider.
-# Gitea stays up at http://127.0.0.1:3000; `make up` brings the normal stack back.
+# At the end Gitea stops, its data kept, and the normal stack is back.
 lab:
 	docker compose -f docker-compose.yml -f docker-compose.lab.yml build
 	uv run --frozen pytest -v -s tests/lab

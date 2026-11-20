@@ -6,7 +6,7 @@
 #
 # `make lab` builds it and runs tests/lab, which sets Gitea up first: the
 # workers need the token it makes. The workers stay on the fake provider.
-# `make up` afterwards brings the normal stack back.
+# At the end tests/lab stops Gitea and brings the normal stack back.
 name: agent-runtime
 
 services:
@@ -22,6 +22,10 @@ services:
       GITEA__server__START_SSH_SERVER: "false"
       # Users are made by tests/lab, not by sign-up.
       GITEA__service__DISABLE_REGISTRATION: "true"
+    # Its own network, which only the workers join: Gitea shares none with
+    # Postgres, the API or the fakes.
+    networks:
+      - lab
     volumes:
       - lab-gitea-data:/var/lib/gitea
       - lab-gitea-config:/etc/gitea
@@ -48,6 +52,10 @@ services:
       replicas: 2
     # A worker that stopped at the failpoint comes back.
     restart: on-failure
+    # The stack's network for Postgres and the fakes, and the lab's for Gitea.
+    networks:
+      - default
+      - lab
     environment:
       TRACKER_KIND: gitea
       TRACKER_URL: http://gitea:3000
@@ -62,9 +70,15 @@ services:
       # Where the worker stops itself; tests/lab sets it for each case.
       FAILPOINT: ${FAILPOINT:-}
       FAILPOINT_TOOL: create_issue
+      # No scope may reach Gitea's network either.
+      SANDBOX_DENY_NETWORKS: agent-runtime_default,agent-runtime_lab
     depends_on:
       gitea:
         condition: service_healthy
+
+networks:
+  lab:
+    name: agent-runtime_lab
 
 volumes:
   lab-gitea-data:
