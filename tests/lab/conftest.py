@@ -30,8 +30,9 @@ DATABASE_URL = os.environ.get(
 # The repository owner, who also reads the issues back, and the user the
 # worker's token belongs to. The names match docker-compose.lab.yml.
 ADMIN, BOT, REPO = "lab-admin", "lab-bot", "shop"
-# New on each run unless the operator sets one. Never printed: the
-# repository is public, so its issues can be read without it.
+# New on each run unless the operator sets one. Not printed by a passing
+# run; the repository is public, so its issues can be read without it. A
+# failing `gitea admin user` call can show it in pytest's traceback.
 ADMIN_PASSWORD = os.environ.get("LAB_GITEA_PASSWORD") or secrets.token_urlsafe(24)
 TOKEN_NAME = "lab-demo"  # noqa: S105 - the token's name, not a secret
 WORKERS = 2
