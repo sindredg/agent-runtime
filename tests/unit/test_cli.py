@@ -819,3 +819,12 @@ def test_verify_prints_no_part_of_a_url_it_cannot_read(url: str) -> None:
     assert main(["verify", "--database-url", url, "--all"], out=out, err=err) == 2
     assert err.getvalue() == "runtime: cannot check: the database URL cannot be read\n"
     assert "x9" not in out.getvalue() + err.getvalue()
+
+
+def test_verify_reports_a_url_parameter_the_driver_refuses_as_cannot_check() -> None:
+    """Not a traceback, and not exit 1: that status means a mismatch was found."""
+    out, err = io.StringIO(), io.StringIO()
+    url = "postgresql://runtime_app:not-the-password-x9@127.0.0.1:9/runtime?command_timeout=soon"
+    assert main(["verify", "--database-url", url, "--all"], out=out, err=err) == 2
+    assert err.getvalue().startswith("runtime: cannot check the database: ")
+    assert "x9" not in out.getvalue() + err.getvalue()

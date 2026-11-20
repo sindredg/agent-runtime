@@ -100,6 +100,8 @@ def test_it_opens_the_issue_with_the_operation_id_as_the_last_line(gitea: Gitea)
     result = tool(gitea).run(call())
     assert result == ToolResult("created issue 1: CI is red")
     assert gitea.issues[0]["body"] == f"test_x failed\n\n{MARKER}job-1:toolu_1"
+    # The result repeats the call's own title, so that the title was sent is checked here.
+    assert gitea.issues[0]["title"] == "CI is red"
     assert [r.method for r in gitea.requests] == ["POST"]
 
 

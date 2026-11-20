@@ -82,8 +82,8 @@ async def verify(
                 _report(job_id, check, out, quiet=quiet)
             await conn.rollback()
     # TypeError: asyncpg refuses a URL parameter it does not know, such as
-    # libpq's `sslmode`.
-    except (SQLAlchemyError, OSError, TypeError) as error:
+    # libpq's `sslmode`. ValueError: it refuses the value of one it knows.
+    except (SQLAlchemyError, OSError, TypeError, ValueError) as error:
         print(f"runtime: cannot check the database: {_reason(error)}", file=err)
         return EXIT_MISMATCH if mismatched else EXIT_CANNOT_CHECK
     finally:

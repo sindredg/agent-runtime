@@ -35,12 +35,20 @@ def _created(issue: Issue, title: str) -> ToolResult:
 def create_issue_tool(tracker: Tracker, *, transport: httpx2.BaseTransport | None = None) -> Tool:
     """The tool, for `tracker`. `transport` replaces the network in tests."""
 
-    def run(call: ToolCall) -> ToolResult:
+    def sendable(call: ToolCall) -> tuple[str, str] | None:
+        """The title and body the run sends, or None for input it sends nothing for."""
         title, body = call.input.get("title"), call.input.get("body")
         if not isinstance(title, str) or not title or not isinstance(body, str):
+            return None
+        return title, body
+
+    def run(call: ToolCall) -> ToolResult:
+        sent = sendable(call)
+        if sent is None:
             return ToolResult(
                 "input must have a non-empty string `title` and a string `body`", True
             )
+        title, body = sent
         if not _SENDABLE_ID.fullmatch(call.operation_id):
             return ToolResult("the call's id has characters a tracker cannot match", True)
         try:
@@ -88,10 +96,10 @@ def create_issue_tool(tracker: Tracker, *, transport: httpx2.BaseTransport | Non
             return CheckOutcome.UNKNOWN
         if found is None:
             return CheckOutcome.NOT_DONE
-        title = call.input.get("title")
-        # The run sends nothing without a title, so an issue with this id and
-        # no title in the call is not this call's.
-        return _created(found, title) if isinstance(title, str) and title else CheckOutcome.UNKNOWN
+        sent = sendable(call)
+        # The run sends nothing for such input, so an issue with this id is
+        # not this call's. A person is asked.
+        return CheckOutcome.UNKNOWN if sent is None else _created(found, sent[0])
 
     return Tool(
         name="create_issue",

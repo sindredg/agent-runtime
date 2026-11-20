@@ -219,6 +219,27 @@ def test_the_title_in_the_result_is_the_calls_not_the_trackers_answer(tracker: T
     assert tool(tracker).run(CALL) == ToolResult("created issue 7: CI is red")
 
 
+@pytest.mark.parametrize(
+    "bad_input",
+    [
+        {"body": "test_x failed"},
+        {"title": "", "body": "b"},
+        {"title": "CI is red"},
+        {"title": "t", "body": None},
+    ],
+    ids=["no title", "empty title", "no body", "body is not text"],
+)
+def test_the_check_never_answers_done_for_a_call_the_run_would_not_send(
+    tracker: Tracker, bad_input: dict[str, Any]
+) -> None:
+    """The run sends nothing for such input, so an issue under its id is not this call's."""
+    built = tool(tracker)
+    built.run(CALL)
+    bad = ToolCall(Path("unused"), bad_input, CALL.operation_id, 1)
+    assert built.run(bad).is_error
+    assert built.check(bad) is CheckOutcome.UNKNOWN
+
+
 def test_the_check_answers_not_done_when_the_tracker_has_no_such_issue(tracker: Tracker) -> None:
     built = tool(tracker)
     built.run(ToolCall(Path("unused"), CALL.input, "another-job:toolu_1", 1))
