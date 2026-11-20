@@ -73,6 +73,7 @@ the step as `running -> waiting (provider_busy) until ...`.
 - Workers share no limit on provider calls. Jobs that were refused together
   are spread only by the random part. A shared limiter is planned.
 - A job can wait until its deadline. Nothing caps the number of waits.
-- Any 429 but a spend cap waits, also one that waiting cannot lift.
+- Any 429 but a spend cap waits, also one that waiting cannot lift
+  ([issue 142](https://github.com/sindredg/agent-runtime/issues/142)).
 - The tests use the fake provider's busy window (`PUT /_fake/busy`). The
   Claude API's own rate limits have not been met in a run.
