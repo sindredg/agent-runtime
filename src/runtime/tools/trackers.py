@@ -178,9 +178,10 @@ class GiteaTracker:
                 raise Unclear(f"the count changed from {first_total} to {total} during the list")
             first_total = total
             for entry in entries:
-                if self._is_ours(entry, user, operation_id):
-                    return _issue(entry, "number")
+                ours = self._is_ours(entry, user, operation_id)
                 number = _number(entry)
+                if ours:
+                    return _issue(entry, "number")
                 if number in seen:
                     raise Unclear(f"issue {number} is listed twice")
                 seen.add(number)
