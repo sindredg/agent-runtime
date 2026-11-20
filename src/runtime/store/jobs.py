@@ -164,9 +164,9 @@ def claim_statement(worker_id: str, lease: timedelta) -> Update:
     `failed`.
 
     The statement reads the database clock at most once, so every column
-    follows one decision. The database clock, never the worker's: it is read when
-    the statement runs, not when the transaction began (`now()`), which
-    would shorten the lease by whatever ran before.
+    follows one decision. The database clock, never the worker's: it is
+    read when the statement runs, not when the transaction began (`now()`),
+    which would shorten the lease by whatever ran before.
     """
     clock, now = _one_reading()
     queued = _literal(JobStatus.QUEUED.value)
@@ -458,8 +458,9 @@ async def cancel_job(conn: AsyncConnection, job_id: UUID) -> tuple[Job, bool]:
     lease columns follow one decision. A reading taken before the cancel
     waits for the row lock is kept: a lease that ran out meanwhile can count
     as live, and the cancel then asks the worker to stop. A claim ends the
-    job once the lease is over. A cancel that saw a job no worker held reads
-    the clock only after the wait, if at all.
+    job once the lease is over. A cancel that saw a job waiting for a worker
+    (`queued`, `waiting`, `needs_approval`) reads the clock only after the
+    wait, if at all.
     """
     clock, now = _one_reading()
     unheld = _unheld(now)

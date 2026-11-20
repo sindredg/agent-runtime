@@ -1,4 +1,4 @@
-"""A claim and a cancel read the database clock once per statement (issue 127).
+"""A claim and a cancel read the database clock at most once per statement (issue 127).
 
 Each decides once per row whether a lease or a deadline is over, and status,
 both lease columns, the epoch, the takeover count and the error follow that
@@ -144,11 +144,12 @@ SHORT_LEASE = timedelta(seconds=2)
 
 async def cancel_behind(
     engine: AsyncEngine, job_id: UUID, hold: Callable[[AsyncConnection], Awaitable[datetime]]
-) -> tuple[Any, bool]:
+) -> tuple[Any, bool, datetime]:
     """Cancel the job while `hold` keeps its row locked, until the lease it set is over.
 
     `hold` changes the row in an open transaction and returns the lease's end.
     That transaction commits only once the database clock is past it.
+    Returns the cancel's job and answer, and that lease end.
     """
     async with engine.connect() as holder, engine.connect() as canceller:
         await holder.begin()
@@ -161,12 +162,17 @@ async def cancel_behind(
         cancelling = asyncio.create_task(cancel())
         try:
             await wait_for_a_lock_wait(holder)
-            # The lease runs out while the cancel waits.
-            behind = lease_end - await database_now(holder)
-            await asyncio.sleep(max(behind.total_seconds(), 0) + 0.1)
-            assert await database_now(holder) > lease_end
+            # The lease runs out while the cancel waits. Polled, not slept
+            # once: a wall clock step can move the database clock back.
+            for _ in range(100):
+                if await database_now(holder) > lease_end:
+                    break
+                await asyncio.sleep(0.1)
+            else:
+                raise AssertionError("the lease never ran out by the database clock")
             await holder.commit()
-            return await asyncio.wait_for(cancelling, timeout=5)
+            job, done = await asyncio.wait_for(cancelling, timeout=5)
+            return job, done, lease_end
         finally:
             # On a failure above, the cancel must not outlive its connection.
             cancelling.cancel()
@@ -192,7 +198,7 @@ def test_a_cancel_that_waited_for_a_renewal_keeps_its_reading(database_url: str)
     lease look live, never over. The next claim ends the job.
     """
 
-    async def body(engine: AsyncEngine) -> tuple[Any, bool, Any]:
+    async def body(engine: AsyncEngine) -> tuple[Any, bool, datetime, Any]:
         async with engine.begin() as conn:
             job = await new_job(conn)
             assert await claim_job(conn, worker_id="w1", lease=LEASE) is not None
@@ -208,16 +214,16 @@ def test_a_cancel_that_waited_for_a_renewal_keeps_its_reading(database_url: str)
             ).scalar_one()
             return renewed
 
-        cancelled, done = await cancel_behind(engine, job.id, renew)
+        cancelled, done, renewed = await cancel_behind(engine, job.id, renew)
         async with engine.begin() as conn:
             assert await claim_job(conn, worker_id="w2", lease=LEASE) is None
             after = await get_job(conn, job.id)
-        return cancelled, done, after
+        return cancelled, done, renewed, after
 
-    cancelled, done, after = with_engine(database_url, body)
+    cancelled, done, renewed, after = with_engine(database_url, body)
 
     assert (cancelled.status, done) == (JobStatus.RUNNING, False)
-    assert cancelled.lease_owner == "w1"
+    assert (cancelled.lease_owner, cancelled.lease_expires_at) == ("w1", renewed)
     assert cancelled.cancel_requested
     assert after.status is JobStatus.CANCELLED
     assert (after.lease_owner, after.lease_expires_at) == (None, None)
@@ -242,7 +248,8 @@ def test_a_cancel_that_saw_a_queued_job_reads_the_clock_after_the_wait(database_
             assert claimed.lease_expires_at is not None
             return claimed.lease_expires_at
 
-        return await cancel_behind(engine, job.id, claim)
+        cancelled, done, _ = await cancel_behind(engine, job.id, claim)
+        return cancelled, done
 
     cancelled, done = with_engine(database_url, body)
 
