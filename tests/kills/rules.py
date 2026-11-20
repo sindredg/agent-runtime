@@ -35,7 +35,8 @@ TOOL = "create_issue"
 # The longest window a run may be given, in seconds. A job has five minutes on the API.
 MAX_WINDOW = 300.0
 # The block type a model's reasoning comes back in. A later request sends it
-# back unchanged; Claude Fable 5.2 checks it on every account.
+# back unchanged. The API's documentation says Claude Fable 5.2 checks such a
+# block; no run here has shown it refuse one.
 THINKING = "thinking"
 # A step that moves a held job to one of these is written at the lease epoch
 # it leaves. The claim after it is not a takeover.
