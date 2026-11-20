@@ -71,6 +71,11 @@ seldom reaches the cut of a tool result
 ([issue 61](https://github.com/sindredg/agent-runtime/issues/61)); a
 sandbox test covers it.
 
+Seven more ran at `11b6792`, 2026-11-20, one per entry of
+`scripts/switched_off.py`: from the Manual runs workflow, on GitHub-hosted
+`ubuntu-26.04` runners, fake provider, 1 run each. 12 of 12 tests ended as
+the list says. Each run's public log, kept 90 days, is linked from its page.
+
 ## How a kill run works
 
 ```mermaid
