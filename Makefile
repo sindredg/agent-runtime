@@ -90,7 +90,10 @@ kills:
 # KILLS_MODEL=claude-haiku-5-5`. Recorded runs start from the Manual runs
 # workflow (ADR 0020). Stops after the first test that fails. `make up` puts the
 # workers back on the fake.
+# KILLS_MODEL reaches the recipe through the environment, never pasted into
+# a shell line, and must look like a model id.
+kills-claude: export KILLS_MODEL := $(KILLS_MODEL)
 kills-claude:
-	@test -n "$(KILLS_MODEL)" || { echo "Name the model: make kills-claude KILLS_MODEL=claude-haiku-5-5" >&2; exit 1; }
+	@printf '%s\n' "$$KILLS_MODEL" | grep -Eqx 'claude-[a-z0-9.-]+' || { echo "Name the model: make kills-claude KILLS_MODEL=claude-haiku-5-5" >&2; exit 1; }
 	docker compose -f docker-compose.yml -f docker-compose.kills.yml -f docker-compose.claude.yml up --build --wait
-	KILLS_PROVIDER=claude KILLS_MODEL=$(KILLS_MODEL) uv run --frozen pytest -x -v -s tests/kills $(KILLS_SELECT)
+	KILLS_PROVIDER=claude uv run --frozen pytest -x -v -s tests/kills $(KILLS_SELECT)
