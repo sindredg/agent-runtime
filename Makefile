@@ -4,6 +4,13 @@
 # container for each sandboxed tool call. Every compose command needs it.
 export DOCKER_GID ?= $(shell stat -c %g /var/run/docker.sock)
 
+# The model of `make kills-claude`, as raw text: $(value ...) keeps make from
+# expanding a $(shell ...) in it, and override applies that to a value from
+# the command line too. ifdef does not expand it either.
+ifdef KILLS_MODEL
+override export KILLS_MODEL := $(value KILLS_MODEL)
+endif
+
 # The default target runs the unit tests.
 all: test
 
@@ -90,11 +97,9 @@ kills:
 # KILLS_MODEL=claude-haiku-5-5`. Recorded runs start from the Manual runs
 # workflow (ADR 0020). Stops after the first test that fails. `make up` puts the
 # workers back on the fake.
-# KILLS_MODEL is taken as raw text: $(value ...) keeps make from expanding it,
-# and override applies that to a value from the command line too. It reaches
-# the recipe through the environment, never pasted into a shell line, and the
-# whole string must be a model id: no newline, no other character.
-kills-claude: override export KILLS_MODEL := $(value KILLS_MODEL)
+# KILLS_MODEL reaches the recipe through the environment, never pasted into a
+# shell line, and the whole string must be a model id: no newline, no other
+# character. It is taken as raw text where it is defined, below.
 kills-claude:
 	@case "$$KILLS_MODEL" in claude-?*) ;; *) echo "Name the model: make kills-claude KILLS_MODEL=claude-haiku-5-5" >&2; exit 1;; esac
 	@case "$$KILLS_MODEL" in *[!a-z0-9.-]*) echo "Not a model id: lower-case letters, digits, dots and hyphens only" >&2; exit 1;; esac
