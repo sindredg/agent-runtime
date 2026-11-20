@@ -44,6 +44,9 @@ The code is `worker/halt.py`.
   another worker has locked.
 - The claim cancels a `running` job whose lease ran out with a cancel
   requested, and one a stopping worker released to `queued` with it.
+- The cancel reads the database clock once, before it waits for the row. A
+  lease that runs out during that wait counts as live: the cancel sets
+  `cancel_requested`, and the next claim ends the job.
 - A job that waits for a person is failed at its deadline the same way: no
   answer is a no.
 

@@ -29,6 +29,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.ext.asyncio import AsyncConnection
 from sqlalchemy.sql.elements import ColumnElement, Label
+from sqlalchemy.sql.selectable import CTE
 
 from runtime.store.payload import check_json
 from runtime.store.schema import job_columns, jobs, steps
@@ -137,6 +138,19 @@ def _literal(value: object) -> Any:
     return literal(value, literal_execute=True)
 
 
+def _one_reading() -> tuple[CTE, ColumnElement[datetime]]:
+    """One reading of the database clock for a whole statement, and the expression that uses it.
+
+    `clock_timestamp()` is read again at every call, so a statement that
+    called it in each of its SET columns could see a lease end or a deadline
+    pass between two of them and write a row that disagrees with itself
+    (issue 127). Postgres never folds a WITH query that calls a volatile
+    function into the statement: it runs once, and every use reads its row.
+    """
+    clock = select(func.clock_timestamp().label("now")).cte("clock").prefix_with("MATERIALIZED")
+    return clock, select(clock.c.now).scalar_subquery()
+
+
 def claim_statement(worker_id: str, lease: timedelta) -> Update:
     """The one statement that is a claim. Separate so a test can inspect its plan.
 
@@ -147,7 +161,13 @@ def claim_statement(worker_id: str, lease: timedelta) -> Update:
     requested is `cancelled`; one past its deadline is `failed`; a takeover
     of a job that has already been taken over TAKEOVER_LIMIT times is
     `failed`.
+
+    The statement reads the database clock once, so every column follows
+    one decision. The database clock, never the worker's: it is read when
+    the statement runs, not when the transaction began (`now()`), which
+    would shorten the lease by whatever ran before.
     """
+    clock, now = _one_reading()
     queued = _literal(JobStatus.QUEUED.value)
     waiting = _literal(JobStatus.WAITING.value)
     running = _literal(JobStatus.RUNNING.value)
@@ -159,11 +179,11 @@ def claim_statement(worker_id: str, lease: timedelta) -> Update:
                 # The database clock decides when a wait is over (ADR 0018).
                 # A `waiting` job without `not_before` does not match, as
                 # with an expired lease: NULL is not earlier than anything.
-                and_(jobs.c.status == waiting, jobs.c.not_before <= func.clock_timestamp()),
+                and_(jobs.c.status == waiting, jobs.c.not_before <= now),
                 # The database clock decides whether a lease is over. A
                 # `running` job without a lease does not match: NULL is not
                 # earlier than anything.
-                and_(jobs.c.status == running, jobs.c.lease_expires_at < func.clock_timestamp()),
+                and_(jobs.c.status == running, jobs.c.lease_expires_at < now),
             )
         )
         .order_by(jobs.c.created_at, jobs.c.id)
@@ -180,11 +200,12 @@ def claim_statement(worker_id: str, lease: timedelta) -> Update:
     # In SET, a column name is the value before the update.
     takeover = jobs.c.status == running
     cancelled = jobs.c.cancel_requested
-    overdue = and_(~cancelled, jobs.c.deadline <= func.clock_timestamp())
+    overdue = and_(~cancelled, jobs.c.deadline <= now)
     at_limit = and_(~cancelled, ~overdue, takeover, jobs.c.takeovers >= TAKEOVER_LIMIT)
     ended = or_(cancelled, overdue, at_limit)
     return (
         update(jobs)
+        .add_cte(clock)
         .where(jobs.c.id == oldest_claimable)
         .values(
             status=case(
@@ -193,10 +214,7 @@ def claim_statement(worker_id: str, lease: timedelta) -> Update:
                 else_=JobStatus.RUNNING.value,
             ),
             lease_owner=case((ended, None), else_=worker_id),
-            # The database clock, never the worker's. clock_timestamp() is the
-            # time the statement runs; now() is the time the transaction
-            # began, which would shorten the lease by whatever ran before.
-            lease_expires_at=case((ended, None), else_=func.clock_timestamp() + lease),
+            lease_expires_at=case((ended, None), else_=now + lease),
             # A claim that ends the job hands it to nobody, so it is not
             # counted. A stale worker is fenced off all the same: the job is
             # no longer `running`.
@@ -408,7 +426,7 @@ class JobNotFound(Exception):
     """No job has this id."""
 
 
-def _unheld() -> ColumnElement[bool]:
+def _unheld(now: ColumnElement[datetime]) -> ColumnElement[bool]:
     """A job that no worker holds: waiting for one, or `running` under a lease that is over.
 
     A worker whose lease is over can no longer write: every write is fenced
@@ -419,7 +437,7 @@ def _unheld() -> ColumnElement[bool]:
         jobs.c.status.in_([_literal(status.value) for status in _UNHELD]),
         and_(
             jobs.c.status == _literal(JobStatus.RUNNING.value),
-            jobs.c.lease_expires_at < func.clock_timestamp(),
+            jobs.c.lease_expires_at < now,
         ),
     )
 
@@ -434,10 +452,18 @@ async def cancel_job(conn: AsyncConnection, job_id: UUID) -> tuple[Job, bool]:
     its worker sees the flag within a second and stops it. A job that is
     already `cancelled` is returned as it is. Raises JobNotFound, or
     InvalidTransition for a job that ended otherwise.
+
+    The statement reads the database clock once, so status and both lease
+    columns follow one decision. A cancel that waits for the row lock keeps
+    the reading it took before: it can only take a lease that ran out
+    meanwhile for live, and then asks the worker to stop. A claim ends the
+    job once the lease is over.
     """
-    unheld = _unheld()
+    clock, now = _one_reading()
+    unheld = _unheld(now)
     result = await conn.execute(
         update(jobs)
+        .add_cte(clock)
         .where(
             jobs.c.id == job_id,
             jobs.c.status.not_in([status.value for status in FINAL_STATUSES]),
@@ -480,7 +506,7 @@ def overdue_statement() -> Select[tuple[UUID]]:
     """The jobs that no worker holds and whose deadline passed. Separate so a test can plan it."""
     return (
         select(jobs.c.id)
-        .where(_unheld(), jobs.c.deadline <= func.clock_timestamp())
+        .where(_unheld(func.clock_timestamp()), jobs.c.deadline <= func.clock_timestamp())
         # Rows another worker is ending, claiming or cancelling are left to
         # it: no waiting, and no two workers lock the same rows in turn.
         .with_for_update(skip_locked=True)
