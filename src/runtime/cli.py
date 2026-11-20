@@ -72,9 +72,10 @@ class _Parser(argparse.ArgumentParser):
             # These name the typed text without quotes.
             message = message.split(":", 1)[0]
         else:
-            # The others quote it: "invalid choice: '...'", "ignored explicit
-            # argument '...'". The list of choices goes with it; usage shows them.
-            message = re.sub(r"'.*'\)?", "...", message, flags=re.DOTALL)
+            # The others quote it with repr(): in single quotes, or in double
+            # quotes when it holds a single quote. Everything from the first
+            # quote on goes, the list of choices too; usage shows them.
+            message = re.sub(r"""['"].*""", "...", message, flags=re.DOTALL)
         super().error(message)
 
 

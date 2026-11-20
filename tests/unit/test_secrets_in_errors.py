@@ -6,12 +6,13 @@ text does not carry it.
 
 import asyncio
 import contextlib
+import io
 from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
 
-from runtime.cli import build_parser
+from runtime.cli import build_parser, main
 from runtime.config import ApiConfig, ConfigError, ProviderConfig, WorkerConfig
 from runtime.store import migrate, roles
 from runtime.store.engine import DatabaseUrlError, create_engine, sqlalchemy_url
@@ -163,3 +164,31 @@ def test_another_type_error_in_the_start_check_is_tried_again(
     started = asyncio.run(wait_for_app_role(Engine(), stop, retry_seconds=0.01))  # type: ignore[arg-type]
     assert started is False
     assert "a fault in the check itself" in caplog.text
+
+
+@pytest.mark.parametrize("quote", ["'", '"'])
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--database-url", "postgresql://u:{secret}@h/db", "verify", "--all"],
+        ["verify", "--all=postgresql://u:{secret}@h/db"],
+        ["status", "--json={secret}", "01a1d655-88bd-7468-afc4-5ca3a1947906"],
+    ],
+    ids=["option-before-command", "flag-with-value", "status-flag"],
+)
+def test_a_refused_argument_with_a_quote_in_it_is_not_repeated(
+    capsys: pytest.CaptureFixture[str], argv: list[str], quote: str
+) -> None:
+    """repr() quotes a value that holds a single quote with double quotes."""
+    secret = f"{SECRET}{quote}tail"
+    with pytest.raises(SystemExit):
+        build_parser().parse_args([part.format(secret=secret) for part in argv])
+    assert SECRET not in capsys.readouterr().err
+
+
+def test_verify_does_not_name_a_query_key_the_driver_refuses() -> None:
+    out, err = io.StringIO(), io.StringIO()
+    url = f"postgresql://runtime:x@127.0.0.1:9/runtime?{SECRET}=tail"
+    assert main(["verify", "--database-url", url, "--all"], out=out, err=err) == 2
+    assert err.getvalue().startswith("runtime: cannot check the database: TypeError")
+    assert SECRET not in out.getvalue() + err.getvalue()
