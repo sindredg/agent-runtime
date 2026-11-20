@@ -307,7 +307,9 @@ def test_claim_statement_uses_the_claim_index(database_url: str) -> None:
     assert "Index Scan using jobs_claim_order" in plan
     assert "LockRows" in plan
     # The lease check is part of the scan, so the statement asks for both kinds.
-    assert "lease_expires_at < clock_timestamp()" in plan
+    # It compares with the statement's one clock reading (issue 127).
+    assert "CTE clock" in plan
+    assert "lease_expires_at < (InitPlan" in plan
 
 
 # Takeover
