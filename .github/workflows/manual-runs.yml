@@ -112,13 +112,12 @@ jobs:
       MODEL: ${{ inputs.model }}
     steps:
       # Only the choice values can reach here today. The check keeps it so if
-      # the input ever becomes free text.
+      # the input ever becomes free text. `case` tests the whole string: grep
+      # would pass a value with one good line among others.
       - name: Check the model name
         run: |
-          printf '%s\n' "$MODEL" | grep -Eqx 'claude-[a-z0-9.-]+' || {
-            echo "Not a model id." >&2
-            exit 1
-          }
+          case "$MODEL" in claude-?*) ;; *) echo "Not a model id." >&2; exit 1;; esac
+          case "$MODEL" in *[!a-z0-9.-]*) echo "Not a model id." >&2; exit 1;; esac
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false

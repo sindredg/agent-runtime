@@ -90,10 +90,13 @@ kills:
 # KILLS_MODEL=claude-haiku-5-5`. Recorded runs start from the Manual runs
 # workflow (ADR 0020). Stops after the first test that fails. `make up` puts the
 # workers back on the fake.
-# KILLS_MODEL reaches the recipe through the environment, never pasted into
-# a shell line, and must look like a model id.
-kills-claude: export KILLS_MODEL := $(KILLS_MODEL)
+# KILLS_MODEL is taken as raw text: $(value ...) keeps make from expanding it,
+# and override applies that to a value from the command line too. It reaches
+# the recipe through the environment, never pasted into a shell line, and the
+# whole string must be a model id: no newline, no other character.
+kills-claude: override export KILLS_MODEL := $(value KILLS_MODEL)
 kills-claude:
-	@printf '%s\n' "$$KILLS_MODEL" | grep -Eqx 'claude-[a-z0-9.-]+' || { echo "Name the model: make kills-claude KILLS_MODEL=claude-haiku-5-5" >&2; exit 1; }
+	@case "$$KILLS_MODEL" in claude-?*) ;; *) echo "Name the model: make kills-claude KILLS_MODEL=claude-haiku-5-5" >&2; exit 1;; esac
+	@case "$$KILLS_MODEL" in *[!a-z0-9.-]*) echo "Not a model id: lower-case letters, digits, dots and hyphens only" >&2; exit 1;; esac
 	docker compose -f docker-compose.yml -f docker-compose.kills.yml -f docker-compose.claude.yml up --build --wait
 	KILLS_PROVIDER=claude uv run --frozen pytest -x -v -s tests/kills $(KILLS_SELECT)
