@@ -62,7 +62,7 @@ chaos:
 # that guard it, and fails unless each ends as the list says (ADR 0021).
 # Changes the checkout: `git checkout -- .` afterwards. Fake provider.
 switched-off:
-	uv run --frozen python scripts/switched_off.py run "$(SWITCHED_OFF)"
+	uv run --frozen python scripts/switched_off.py run "$$SWITCHED_OFF"
 
 # The lab demo: create_issue against Gitea in a container, and a worker that
 # stops itself in the middle of the call. Sets Gitea up (users, repository,
