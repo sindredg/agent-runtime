@@ -73,7 +73,12 @@ def test_a_model_id_reaches_the_kill_runner_through_the_environment(tmp_path: Pa
     stub.mkdir()
     seen = tmp_path / "uv-env"
     (stub / "docker").write_text("#!/bin/sh\nexit 0\n")
-    (stub / "uv").write_text(f"#!/bin/sh\nenv > {seen}\n")
+    # Only the two variables: the environment can hold a key.
+    (stub / "uv").write_text(
+        "#!/bin/sh\n"
+        "printf 'KILLS_MODEL=%s\\nKILLS_PROVIDER=%s\\n'"
+        f' "$KILLS_MODEL" "$KILLS_PROVIDER" > {seen}\n'
+    )
     for program in ("docker", "uv"):
         (stub / program).chmod(0o755)
     done = subprocess.run(
