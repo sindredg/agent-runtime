@@ -40,6 +40,8 @@ One `UPDATE` in `store/jobs.py` ([ADR 0002](adr/0002-postgres-as-the-job-queue.m
 - It sets `lease_owner`, sets `lease_expires_at` from the database clock, and
   increments `lease_epoch`.
 - Taking a `running` job also increments `takeovers`.
+- It reads the database clock at most once. Status, lease, epoch, takeovers
+  and error all follow that one reading.
 
 ## Lease and heartbeat
 
