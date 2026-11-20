@@ -145,7 +145,8 @@ def _one_reading() -> tuple[CTE, ColumnElement[datetime]]:
     called it in each of its SET columns could see a lease end or a deadline
     pass between two of them and write a row that disagrees with itself
     (issue 127). Postgres never folds a WITH query that calls a volatile
-    function into the statement: it runs once, and every use reads its row.
+    function into the statement: it runs at most once, when first used, and
+    every use reads its row.
     """
     clock = select(func.clock_timestamp().label("now")).cte("clock").prefix_with("MATERIALIZED")
     return clock, select(clock.c.now).scalar_subquery()
@@ -162,8 +163,8 @@ def claim_statement(worker_id: str, lease: timedelta) -> Update:
     of a job that has already been taken over TAKEOVER_LIMIT times is
     `failed`.
 
-    The statement reads the database clock once, so every column follows
-    one decision. The database clock, never the worker's: it is read when
+    The statement reads the database clock at most once, so every column
+    follows one decision. The database clock, never the worker's: it is read when
     the statement runs, not when the transaction began (`now()`), which
     would shorten the lease by whatever ran before.
     """
@@ -453,11 +454,12 @@ async def cancel_job(conn: AsyncConnection, job_id: UUID) -> tuple[Job, bool]:
     already `cancelled` is returned as it is. Raises JobNotFound, or
     InvalidTransition for a job that ended otherwise.
 
-    The statement reads the database clock once, so status and both lease
-    columns follow one decision. A cancel that waits for the row lock keeps
-    the reading it took before: it can only take a lease that ran out
-    meanwhile for live, and then asks the worker to stop. A claim ends the
-    job once the lease is over.
+    The statement reads the database clock at most once, so status and both
+    lease columns follow one decision. A reading taken before the cancel
+    waits for the row lock is kept: a lease that ran out meanwhile can count
+    as live, and the cancel then asks the worker to stop. A claim ends the
+    job once the lease is over. A cancel that saw a job no worker held reads
+    the clock only after the wait, if at all.
     """
     clock, now = _one_reading()
     unheld = _unheld(now)

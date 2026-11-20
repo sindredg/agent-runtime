@@ -13,14 +13,14 @@ sweeps put the end of the lease, or the deadline, after each read in turn.
 """
 
 import asyncio
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
 import asyncpg
 import pytest
-from sqlalchemy import make_url, text, update
+from sqlalchemy import func, make_url, text, update
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from runtime.store.jobs import (
@@ -137,6 +137,51 @@ def test_a_cancel_decides_once_whether_the_lease_is_over(clock_url: str, offset:
     assert read_count == 1
 
 
+# Long enough that the cancel takes its reading before the lease ends, also on
+# a slow runner; short enough for the test to wait it out.
+SHORT_LEASE = timedelta(seconds=2)
+
+
+async def cancel_behind(
+    engine: AsyncEngine, job_id: UUID, hold: Callable[[AsyncConnection], Awaitable[datetime]]
+) -> tuple[Any, bool]:
+    """Cancel the job while `hold` keeps its row locked, until the lease it set is over.
+
+    `hold` changes the row in an open transaction and returns the lease's end.
+    That transaction commits only once the database clock is past it.
+    """
+    async with engine.connect() as holder, engine.connect() as canceller:
+        await holder.begin()
+        lease_end = await hold(holder)
+
+        async def cancel() -> tuple[Any, bool]:
+            async with canceller.begin():
+                return await cancel_job(canceller, job_id)
+
+        cancelling = asyncio.create_task(cancel())
+        try:
+            await wait_for_a_lock_wait(holder)
+            # The lease runs out while the cancel waits.
+            behind = lease_end - await database_now(holder)
+            await asyncio.sleep(max(behind.total_seconds(), 0) + 0.1)
+            assert await database_now(holder) > lease_end
+            await holder.commit()
+            return await asyncio.wait_for(cancelling, timeout=5)
+        finally:
+            # On a failure above, the cancel must not outlive its connection.
+            cancelling.cancel()
+            await asyncio.gather(cancelling, return_exceptions=True)
+
+
+def new_job(conn: AsyncConnection) -> Awaitable[Any]:
+    return create_job(
+        conn,
+        spec={"task": "hello"},
+        token_budget=1000,
+        deadline=datetime.now(UTC) + timedelta(hours=1),
+    )
+
+
 def test_a_cancel_that_waited_for_a_renewal_keeps_its_reading(database_url: str) -> None:
     """A cancel blocked on the row decides with the reading it took before it waited.
 
@@ -147,61 +192,62 @@ def test_a_cancel_that_waited_for_a_renewal_keeps_its_reading(database_url: str)
     lease look live, never over. The next claim ends the job.
     """
 
-    async def body(engine: AsyncEngine) -> tuple[Any, bool, datetime, Any]:
+    async def body(engine: AsyncEngine) -> tuple[Any, bool, Any]:
         async with engine.begin() as conn:
-            job = await create_job(
-                conn,
-                spec={"task": "hello"},
-                token_budget=1000,
-                deadline=datetime.now(UTC) + timedelta(hours=1),
-            )
-            claimed = await claim_job(conn, worker_id="w1", lease=LEASE)
-            assert claimed is not None
+            job = await new_job(conn)
+            assert await claim_job(conn, worker_id="w1", lease=LEASE) is not None
 
-        async with engine.connect() as holder, engine.connect() as canceller:
-            await holder.begin()
-            renewed = (
+        async def renew(holder: AsyncConnection) -> datetime:
+            renewed: datetime = (
                 await holder.execute(
-                    text(
-                        "UPDATE jobs SET lease_expires_at = clock_timestamp()"
-                        " + interval '200 milliseconds' WHERE id = :id"
-                        " RETURNING lease_expires_at"
-                    ),
-                    {"id": job.id},
+                    update(jobs)
+                    .where(jobs.c.id == job.id)
+                    .values(lease_expires_at=func.clock_timestamp() + SHORT_LEASE)
+                    .returning(jobs.c.lease_expires_at)
                 )
             ).scalar_one()
+            return renewed
 
-            async def cancel() -> tuple[Any, bool]:
-                async with canceller.begin():
-                    return await cancel_job(canceller, job.id)
-
-            cancelling = asyncio.create_task(cancel())
-            try:
-                await wait_for_a_lock_wait(holder)
-                # The renewed lease runs out while the cancel waits.
-                behind = renewed - await database_now(holder)
-                await asyncio.sleep(max(behind.total_seconds(), 0) + 0.1)
-                assert await database_now(holder) > renewed
-                await holder.commit()
-                cancelled, done = await asyncio.wait_for(cancelling, timeout=5)
-            finally:
-                # On a failure above, the cancel must not outlive its connection.
-                cancelling.cancel()
-                await asyncio.gather(cancelling, return_exceptions=True)
-
+        cancelled, done = await cancel_behind(engine, job.id, renew)
         async with engine.begin() as conn:
-            ended = await claim_job(conn, worker_id="w2", lease=LEASE)
-            assert ended is None
+            assert await claim_job(conn, worker_id="w2", lease=LEASE) is None
             after = await get_job(conn, job.id)
-        return cancelled, done, renewed, after
+        return cancelled, done, after
 
-    cancelled, done, renewed, after = with_engine(database_url, body)
+    cancelled, done, after = with_engine(database_url, body)
 
     assert (cancelled.status, done) == (JobStatus.RUNNING, False)
-    assert (cancelled.lease_owner, cancelled.lease_expires_at) == ("w1", renewed)
+    assert cancelled.lease_owner == "w1"
     assert cancelled.cancel_requested
     assert after.status is JobStatus.CANCELLED
     assert (after.lease_owner, after.lease_expires_at) == (None, None)
+
+
+def test_a_cancel_that_saw_a_queued_job_reads_the_clock_after_the_wait(database_url: str) -> None:
+    """A cancel that first saw a job no worker held takes its reading after the wait.
+
+    A worker claims the queued job while the cancel waits for the row, with
+    a lease that runs out before the claim commits. The cancel reads the
+    clock only when it rechecks the claimed row, finds the lease over, and
+    cancels the job at once.
+    """
+
+    async def body(engine: AsyncEngine) -> tuple[Any, bool]:
+        async with engine.begin() as conn:
+            job = await new_job(conn)
+
+        async def claim(holder: AsyncConnection) -> datetime:
+            claimed = await claim_job(holder, worker_id="w1", lease=SHORT_LEASE)
+            assert claimed is not None
+            assert claimed.lease_expires_at is not None
+            return claimed.lease_expires_at
+
+        return await cancel_behind(engine, job.id, claim)
+
+    cancelled, done = with_engine(database_url, body)
+
+    assert (cancelled.status, done) == (JobStatus.CANCELLED, True)
+    assert (cancelled.lease_owner, cancelled.lease_expires_at) == (None, None)
 
 
 async def wait_for_a_lock_wait(conn: AsyncConnection) -> None:
