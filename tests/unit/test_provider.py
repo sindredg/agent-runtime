@@ -196,9 +196,20 @@ def test_a_connection_failure_is_retryable() -> None:
     assert raised.value.status is None
 
 
-def stream_error(kind: str) -> bytes:
-    body = {"type": "error", "error": {"type": kind, "message": "nope"}}
-    return encode_sse("error", body)
+def stream_error(kind: str, details: dict[str, str] | None = None) -> bytes:
+    detail: dict[str, object] = {"type": kind, "message": "nope"}
+    if details is not None:
+        detail["details"] = details
+    return encode_sse("error", {"type": "error", "error": detail})
+
+
+def test_a_spend_cap_inside_a_stream_is_not_waited_out() -> None:
+    """The same test as for the 429 status: waiting does not lift a spend cap."""
+    capped = stream_error("rate_limit_error", {"error_code": "enforced_spend_limit_reached"})
+    with pytest.raises(ProviderError) as raised:
+        complete(lambda request: sse([*STREAM[:3], capped]))
+    assert raised.value.busy is False
+    assert raised.value.retryable is False
 
 
 @pytest.mark.parametrize(
