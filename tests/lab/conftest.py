@@ -13,7 +13,7 @@ import secrets
 import subprocess
 import time
 from collections.abc import Iterator
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -180,8 +180,9 @@ class Lab:
 
 
 @pytest.fixture(scope="session")
-def lab() -> Iterator[Lab]:
+def lab(request: pytest.FixtureRequest) -> Iterator[Lab]:
     print(f"\nSetting up Gitea at {GITEA_URL} ({ADMIN}/{REPO}, token for {BOT})", flush=True)
+    started = datetime.now(UTC)
     lab = Lab()
     lab.set_up()
     try:
@@ -189,8 +190,13 @@ def lab() -> Iterator[Lab]:
     finally:
         lab.api.close()
         lab.gitea.close()
-        # Gitea stops, with its data kept for a restart (docs/lab-demo.md).
-        # Then the stack of `make up`: one worker, on the fake tracker.
-        run(*COMPOSE, "stop", "gitea")
-        run("docker", "compose", "up", "--detach", "--wait", "--no-build")
+        if request.session.testsfailed:
+            # The lab workers are replaced below, and their logs with them.
+            print(f"\nLab worker logs:\n{lab.worker_logs(started)}", flush=True)
+        try:
+            # Gitea stops, with its data kept for a restart (docs/lab-demo.md).
+            run(*COMPOSE, "stop", "gitea")
+        finally:
+            # The stack of `make up`: one worker, on the fake tracker.
+            run("docker", "compose", "up", "--detach", "--wait", "--no-build")
         print("\nGitea is stopped. docs/lab-demo.md says how to start it again.", flush=True)

@@ -229,7 +229,7 @@ jobs:
             ps --status running --quiet gitea)
           test -z "$running"
           worker=$(docker compose ps --quiet worker)
-          test "$(echo "$worker" | wc -l)" -eq 1
+          test "$(printf '%s' "$worker" | grep -c .)" -eq 1
           docker exec "$worker" printenv TRACKER_URL | grep -qx 'http://fake-tracker:8000'
       - name: Service logs
         if: failure()
