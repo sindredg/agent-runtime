@@ -42,7 +42,8 @@ sequenceDiagram
 
 `python -m runtime.store.migrate` does both. The password never sits in a
 migration. Compose puts the same value into the URL of the API and the
-worker without encoding it, so it has to be URL-safe.
+worker without encoding it, so it has to be URL-safe. One that is not stops
+the service with an error that does not repeat the URL.
 
 ## The start check
 

@@ -668,7 +668,7 @@ def test_a_question_number_is_a_positive_whole_number(
     with pytest.raises(SystemExit) as stopped:
         run(command, JOB_ID, number)
     assert stopped.value.code == 2
-    assert "is not a question number" in capsys.readouterr().err
+    assert "not a question number" in capsys.readouterr().err
 
 
 def test_approval_steps_show_the_call_and_the_reason() -> None:
