@@ -176,13 +176,18 @@ def test_a_cancel_that_waited_for_a_renewal_keeps_its_reading(database_url: str)
                     return await cancel_job(canceller, job.id)
 
             cancelling = asyncio.create_task(cancel())
-            await wait_for_a_lock_wait(holder)
-            # The renewed lease runs out while the cancel waits.
-            behind = renewed - await database_now(holder)
-            await asyncio.sleep(max(behind.total_seconds(), 0) + 0.1)
-            assert await database_now(holder) > renewed
-            await holder.commit()
-            cancelled, done = await asyncio.wait_for(cancelling, timeout=5)
+            try:
+                await wait_for_a_lock_wait(holder)
+                # The renewed lease runs out while the cancel waits.
+                behind = renewed - await database_now(holder)
+                await asyncio.sleep(max(behind.total_seconds(), 0) + 0.1)
+                assert await database_now(holder) > renewed
+                await holder.commit()
+                cancelled, done = await asyncio.wait_for(cancelling, timeout=5)
+            finally:
+                # On a failure above, the cancel must not outlive its connection.
+                cancelling.cancel()
+                await asyncio.gather(cancelling, return_exceptions=True)
 
         async with engine.begin() as conn:
             ended = await claim_job(conn, worker_id="w2", lease=LEASE)
@@ -265,4 +270,34 @@ def test_a_claim_decides_once_whether_the_deadline_passed(
         assert (row.lease_owner, row.lease_expires_at) == ("w2", FIRST_READ + LEASE)
         assert (row.lease_epoch, row.takeovers) == (epoch + 1, takeovers + int(takeover))
         assert row.error is None
+    assert read_count == 1
+
+
+@pytest.mark.parametrize("offset", CLAIM_OFFSETS)
+def test_a_claim_decides_once_whether_a_wait_is_over(clock_url: str, offset: int) -> None:
+    """A `waiting` job whose `not_before` passes `offset` reads in: taken whole, or left."""
+    not_before = BASE + offset * TICK
+
+    async def body(engine: AsyncEngine) -> tuple[Any, int]:
+        async with engine.begin() as conn:
+            job = await create_job(
+                conn, spec={"task": "hello"}, token_budget=1000, deadline=BASE + timedelta(days=1)
+            )
+            await set_row(
+                conn, job.id, status=JobStatus.WAITING.value, not_before=not_before, lease_epoch=2
+            )
+        async with engine.begin() as conn:
+            await use_stand_in(conn)
+            row = (await conn.execute(claim_statement("w2", LEASE))).one_or_none()
+            return row, await reads(conn)
+
+    row, read_count = with_engine(clock_url, body)
+
+    if not_before <= FIRST_READ:
+        assert row is not None
+        assert row.status == JobStatus.RUNNING.value
+        assert (row.lease_owner, row.lease_expires_at) == ("w2", FIRST_READ + LEASE)
+        assert (row.lease_epoch, row.takeovers, row.not_before) == (3, 0, None)
+    else:
+        assert row is None
     assert read_count == 1
