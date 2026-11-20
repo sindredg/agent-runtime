@@ -41,7 +41,7 @@ their own.
 
 The runs at `88e652a` count `thinking` blocks
 ([Kill runs](../kill-runs.md#recorded-not-judged)). The fake provider
-returns none. On `claude-fable-5-2`, which checks a block it gets back:
+returns none. On `claude-fable-5-2`:
 
 | Test | Jobs with a block | Sent one back after a takeover |
 |---|---|---|
@@ -52,9 +52,11 @@ returns none. On `claude-fable-5-2`, which checks a block it gets back:
 
 In 15 jobs a worker that never received the block rebuilt it from the step
 log, sent it, and the API answered. All 15 succeeded. In the other jobs the
-takeover came before the first block, or no answer held one. One run, with
-no switched-off run yet: a block changed before it goes back is
-[issue 122](https://github.com/sindredg/agent-runtime/issues/122).
+takeover came before the first block, or no answer held one.
+
+One run, with no switched-off run yet. The API's documentation says this
+model checks a block it gets back; no run here shows it refuse one
+([issue 122](https://github.com/sindredg/agent-runtime/issues/122)).
 
 ### With the intent write switched off
 
