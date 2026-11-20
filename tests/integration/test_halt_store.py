@@ -204,7 +204,8 @@ def test_the_workers_timer_fails_a_parked_job_within_seconds_of_its_deadline(
         stop = asyncio.Event()
         timer = asyncio.create_task(keep_failing_overdue(engine, stop, interval=0.2))
         try:
-            while True:
+            # Bounded, so a timer that never fails the job fails the test.
+            for _ in range(400):
                 async with engine.connect() as conn:
                     found = await get_job(conn, job.id)
                     now = await database_now(conn)
@@ -212,6 +213,7 @@ def test_the_workers_timer_fails_a_parked_job_within_seconds_of_its_deadline(
                 if found.status is S.FAILED:
                     return (now - job.deadline).total_seconds()
                 await asyncio.sleep(0.05)
+            raise AssertionError("the timer never failed the job")
         finally:
             stop.set()
             await timer

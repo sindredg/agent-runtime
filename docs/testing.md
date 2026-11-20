@@ -64,6 +64,9 @@ mechanism switched off, which had to fail. The outcomes are in
 |---|---|
 | `ESCAPE_DOCKER_DEFAULTS=1` | The escape attempts run as root with Docker's default container settings |
 | `ESCAPE_NO_RULES=1` | The scope tests run with a guard that has no rules |
+| `make switched-off SWITCHED_OFF=<name>` | One named edit from `scripts/switched_off.py`, its tests, and a verdict per test ([ADR 0021](adr/0021-run-switched-off-runs-from-a-reviewed-list.md)) |
+
+Recorded switched-off runs start from the Manual runs workflow, from `main`.
 
 ## Failure switches
 

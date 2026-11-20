@@ -28,3 +28,4 @@ dist/
 
 # Results and worker logs written by the kill runs.
 .kills/
+.switched-off/

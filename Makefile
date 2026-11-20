@@ -1,4 +1,4 @@
-.PHONY: all up up-claude down clean logs test integration escape chaos lab kills kills-claude
+.PHONY: all up up-claude down clean logs test integration escape chaos lab kills kills-claude switched-off
 
 # The group that owns the Docker socket. The worker joins it to start a
 # container for each sandboxed tool call. Every compose command needs it.
@@ -56,6 +56,13 @@ chaos:
 	chmod 777 .chaos
 	docker compose -f docker-compose.yml -f docker-compose.chaos.yml up --build --wait
 	uv run --frozen pytest -v -s tests/chaos
+
+# One switched-off run from scripts/switched_off.py, named by SWITCHED_OFF:
+# switches one mechanism off in the checkout, starts the stack, runs the tests
+# that guard it, and fails unless each ends as the list says (ADR 0021).
+# Changes the checkout: `git checkout -- .` afterwards. Fake provider.
+switched-off:
+	uv run --frozen python scripts/switched_off.py run "$$SWITCHED_OFF"
 
 # The lab demo: create_issue against Gitea in a container, and a worker that
 # stops itself in the middle of the call. Sets Gitea up (users, repository,
