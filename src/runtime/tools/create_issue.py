@@ -22,8 +22,14 @@ from runtime.tools.trackers import Issue, Refused, Tracker
 _SENDABLE_ID = re.compile(r"[A-Za-z0-9_.:-]{1,200}")
 
 
-def _created(issue: Issue) -> ToolResult:
-    return ToolResult(f"created issue {issue.number}: {issue.title}")
+def _created(issue: Issue, title: str) -> ToolResult:
+    """The result of a call whose issue exists.
+
+    The number is the tracker's. The title is the call's own: whoever can
+    edit the issue in the tracker would otherwise write into the model's
+    conversation, through a result nobody is asked about.
+    """
+    return ToolResult(f"created issue {issue.number}: {title}")
 
 
 def create_issue_tool(tracker: Tracker, *, transport: httpx2.BaseTransport | None = None) -> Tool:
@@ -39,7 +45,7 @@ def create_issue_tool(tracker: Tracker, *, transport: httpx2.BaseTransport | Non
             return ToolResult("the call's id has characters a tracker cannot match", True)
         try:
             with tracker.client(transport) as http:
-                return _created(tracker.create(http, title, body, call.operation_id))
+                return _created(tracker.create(http, title, body, call.operation_id), title)
         except Refused as error:
             if 400 <= error.status < 500:
                 # The tracker refused the request: no issue.
@@ -80,7 +86,12 @@ def create_issue_tool(tracker: Tracker, *, transport: httpx2.BaseTransport | Non
                 found = tracker.find(http, call.operation_id)
         except Exception:  # Any failure to ask is an unclear answer.
             return CheckOutcome.UNKNOWN
-        return CheckOutcome.NOT_DONE if found is None else _created(found)
+        if found is None:
+            return CheckOutcome.NOT_DONE
+        title = call.input.get("title")
+        # The run sends nothing without a title, so an issue with this id and
+        # no title in the call is not this call's.
+        return _created(found, title) if isinstance(title, str) and title else CheckOutcome.UNKNOWN
 
     return Tool(
         name="create_issue",
