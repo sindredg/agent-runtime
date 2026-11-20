@@ -85,7 +85,10 @@ jobs:
         run: make switched-off
       - name: Results
         if: always()
-        run: cat .kills/*/results.jsonl .chaos/results.jsonl 2>/dev/null || echo "No results file."
+        run: |
+          for file in .kills/*/results.jsonl .chaos/results.jsonl; do
+            if [ -f "$file" ]; then echo "== $file"; cat "$file"; fi
+          done
       - name: Service logs
         if: failure()
         run: docker compose logs --no-color

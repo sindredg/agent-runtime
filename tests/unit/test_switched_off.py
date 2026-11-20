@@ -85,14 +85,18 @@ def junit(tmp_path: Path, case: str) -> Path:
 @pytest.mark.parametrize(
     ("case", "verdict"),
     [
-        ('<failure message="AssertionError: assert 9 &lt;= 5">assert total &lt;= BUDGET</failure>',
-         "ok"),
+        ('<failure message="AssertionError: assert 9 &lt;= 5">&gt;   assert total &lt;= BUDGET'
+         "</failure>", "ok"),
         ('<failure message="AssertionError">assert job.status == "failed"</failure>', "WRONG"),
+        # The named assertion only as context: pytest prints the source above
+        # the failing line, which it marks with ">".
+        ('<failure message="AssertionError: assert 1 == 2">'
+         "    assert total &lt;= BUDGET\n&gt;   assert job.status == 2</failure>", "WRONG"),
         ('<error message="fixture failed">stack never came up</error>', "WRONG"),
         ('<skipped message="no stack" />', "WRONG"),
         ("", "WRONG"),
     ],
-    ids=["named-failure", "other-assertion", "error", "skipped", "passed"],
+    ids=["named-failure", "other-assertion", "named-only-as-context", "error", "skipped", "passed"],
 )  # fmt: skip
 def test_only_a_failure_on_the_named_assertion_counts(
     tmp_path: Path, case: str, verdict: str

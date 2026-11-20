@@ -240,10 +240,21 @@ def outcomes(junit: Path) -> dict[str, tuple[str, str]]:
             element = case.find(kind)
             if element is not None:
                 result = "failed" if kind == "failure" else kind
-                text = f"{element.get('message', '')}\n{element.text or ''}"
+                text = _failing_lines(element.get("message", ""), element.text or "")
                 break
         found[node] = (result, text)
     return found
+
+
+def _failing_lines(message: str, traceback: str) -> str:
+    """The failure's message and the statements that failed, nothing else.
+
+    pytest's traceback shows the test's source up to the failing line, so the
+    named assertion can appear in it as context while another one failed.
+    pytest marks each failing statement with '>' at the start of its line.
+    """
+    marked = [line for line in traceback.splitlines() if line.startswith(">")]
+    return "\n".join([message, *marked])
 
 
 def judge(entry: SwitchedOff, found: dict[str, tuple[str, str]]) -> list[str]:
@@ -269,6 +280,13 @@ def _sh(*args: str) -> None:
 def run(name: str) -> int:
     entry = ENTRIES[name]
     print(f"switched off: {name} (issue {entry.issue}): {entry.what}", flush=True)
+    changed = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=no"],  # noqa: S607
+        cwd=ROOT, capture_output=True, text=True, check=True,
+    ).stdout  # fmt: skip
+    if changed:
+        print(f"WRONG: the checkout has changes; the run would not be HEAD's code:\n{changed}")
+        return 1
     _sh("git", "rev-parse", "HEAD")
     texts = {edit.path: edited(edit) for edit in entry.edits}
     for path, text in texts.items():

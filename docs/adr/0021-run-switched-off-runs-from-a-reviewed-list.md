@@ -42,14 +42,17 @@ A list on `main`, run by the Manual runs workflow.
   that did not run, or a failure on another assertion is red.
 - A unit test on every PR checks that each edit matches once and still
   compiles, that each test exists, and that the workflow offers the same names.
-- `suite: switched-off` with a `switched_off` choice. It runs only from
-  `main`, only on the fake provider, in a job that holds no secret.
+- `suite: switched-off` with a `switched_off` choice. Main's workflow
+  refuses it from another branch, and runs it on the fake provider, in a job
+  that holds no secret.
 
 ## Consequences
 
 - An expectation is fixed in the list before a run. A run that ends otherwise
   is a finding for the results page. The list is not edited to make it green.
 - The run log is public: the commit, the edit and one verdict per test.
+- A branch can change its own copy of the workflow and drop the refusal.
+  Such a run holds no secret either, and only a run from `main` is recorded.
 - A keyed switched-off run still uses a `must-fail/*` branch (ADR 0020).
 - The edits are written against today's code. A refactor that moves one
   fails the unit test, and the entry is updated in that PR.
