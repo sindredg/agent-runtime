@@ -17,6 +17,7 @@ from fake_tracker.app import create_app as create_tracker
 FOREIGN = "rebound.example:8001"
 BUSY = {"seconds": 3600, "status": 429, "retry_after": 3600}
 ISSUE = {"title": "t", "body": "b", "operation_id": "op-1"}
+HEADERS = {"x-api-key": "test", "anthropic-version": "2026-10-21"}
 # The requests of issue 132's table, each with a foreign Host and an Origin
 # that matches it, the way a rebound page sends them.
 PROVIDER_REQUESTS: list[tuple[str, str, Any]] = [
@@ -51,14 +52,14 @@ def test_a_refused_request_changes_nothing() -> None:
     TestClient(tracker, base_url=f"http://{FOREIGN}").post("/issues", json=ISSUE)
     assert TestClient(tracker, base_url="http://localhost").get("/issues").json() == []
     provider = create_provider()
-    TestClient(provider, base_url=f"http://{FOREIGN}").put("/_fake/busy", json=BUSY)
+    message = {"model": "hello", "max_tokens": 10, "messages": [{"role": "user", "content": "hi"}]}
+    foreign = TestClient(provider, base_url=f"http://{FOREIGN}")
+    foreign.put("/_fake/busy", json=BUSY)
+    foreign.post("/v1/messages", json=message, headers=HEADERS)
     local = TestClient(provider, base_url="http://127.0.0.1:8001")
+    # The refused message was not logged, and the busy window was not set.
     assert local.get("/_fake/requests").json() == []
-    answer = local.post(
-        "/v1/messages",
-        json={"model": "hello", "max_tokens": 10, "messages": [{"role": "user", "content": "hi"}]},
-    )
-    assert answer.status_code != 429
+    assert local.post("/v1/messages", json=message, headers=HEADERS).status_code == 200
 
 
 @pytest.mark.parametrize(
