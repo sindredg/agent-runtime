@@ -194,7 +194,9 @@ jobs:
       # Every entry gets its verdict: a red one does not cancel the others.
       fail-fast: false
       matrix:
-        entry: ${{ fromJSON(needs.fake-names.outputs.names) }}
+        # The fallback only keeps the expression valid if it is ever read with an
+        # empty output; the job's `if` and `needs` come first.
+        entry: ${{ fromJSON(needs.fake-names.outputs.names || '[""]') }}
     env:
       SWITCHED_OFF: ${{ matrix.entry }}
     steps:

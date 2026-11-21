@@ -725,9 +725,15 @@ def index(found: list[str], text: str) -> int:
     return at
 
 
+# Every way a job can name a secret.
+SECRET_FORMS = ("secrets.", "secrets[", "toJSON(secrets", "secrets: inherit")
+
+
 def test_the_job_on_the_fake_provider_holds_no_secret() -> None:
     fake = job("fake")
-    assert "secrets." not in fake
+    assert not [form for form in SECRET_FORMS if form in fake]
+    # The job with the key names its secret one way only.
+    assert not [form for form in SECRET_FORMS[1:] if form in WORKFLOW]
     assert "environment:" not in fake
     assert "SWITCHED_OFF_PROVIDER" not in fake
     assert WORKFLOW.count("secrets.") == job("claude").count("secrets.") == 3
@@ -796,16 +802,19 @@ def test_the_check_reads_an_entrys_edits_of_one_file_together(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Each edit by itself matches the file once; the second no longer matches after the first."""
-    (tmp_path / "a.py").write_text("x = 1\n")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "a.py").write_text("x = 1\n")
     (tmp_path / "tests" / "unit").mkdir(parents=True)
     (tmp_path / "tests" / "unit" / "test_x.py").write_text("def test_y():\n    assert x\n")
     edits = (
-        switched_off.Edit("a.py", "x = 1\n", "x = 2\n"),
-        switched_off.Edit("a.py", "x = 1\n", "x = 3\n"),
+        switched_off.Edit("src/a.py", "x = 1\n", "x = 2\n"),
+        switched_off.Edit("src/a.py", "x = 1\n", "x = 3\n"),
     )
     entry = replace(ENTRY, stack="none", edits=edits, expect=(switched_off.Expect(NODE, "x"),))
     monkeypatch.setattr(switched_off, "ENTRIES", {"twice": entry})
-    assert switched_off.check(tmp_path) == ["twice: a.py: the edit's text occurs 0 times, not once"]
+    assert switched_off.check(tmp_path) == [
+        "twice: src/a.py: the edit's text occurs 0 times, not once"
+    ]
     monkeypatch.setattr(switched_off, "ENTRIES", {"once": replace(entry, edits=edits[:1])})
     assert switched_off.check(tmp_path) == []
 
@@ -915,7 +924,8 @@ def run_lines(name: str) -> list[str]:
     for line in job(name).splitlines():
         if line.strip().startswith("run:"):
             found.append(line)
-            block = line.strip() == "run: |"
+            # A literal or folded block: its lines are shell too.
+            block = line.strip() in {f"run: {style}" for style in ("|", "|-", ">", ">-")}
         elif block and line.startswith("          "):
             found.append(line)
         else:
@@ -926,7 +936,7 @@ def run_lines(name: str) -> list[str]:
 def test_the_jobs_of_every_entry_hold_no_secret_and_read_no_input_but_the_suite() -> None:
     for name in ALL:
         text = job(name)
-        assert "secrets." not in text
+        assert not [form for form in SECRET_FORMS if form in text]
         assert "environment:" not in text
         assert "SWITCHED_OFF_PROVIDER" not in text
         assert [line for line in text.splitlines() if "inputs." in line] == [
@@ -944,7 +954,7 @@ def test_the_names_of_the_matrix_come_from_mains_list_of_the_fake_provider() -> 
     assert index(names, "switched_off.py names fake") > index(names, "actions/checkout@")
     entries = job("fake-entries")
     assert "    needs: fake-names\n" in entries
-    assert "        entry: ${{ fromJSON(needs.fake-names.outputs.names) }}\n" in entries
+    assert "        entry: ${{ fromJSON(needs.fake-names.outputs.names || '[\"\"]') }}\n" in entries
     assert "      fail-fast: false\n" in entries
     assert "      SWITCHED_OFF: ${{ matrix.entry }}\n" in entries
     assert "    name: switched-off ${{ matrix.entry }} on the fake provider\n" in entries
@@ -990,3 +1000,102 @@ def test_a_run_makes_every_edit_and_starts_only_its_stack(
     assert {path: (tmp_path / path).read_text() for path in expected} == expected
     for edit in entry.edits:
         assert edit.new in expected[edit.path]
+
+
+def test_the_workflow_reads_the_repository_only_and_keeps_no_credentials() -> None:
+    """One `permissions` block, the top-level one, and each checkout drops its token."""
+    assert "\npermissions:\n  contents: read\n\njobs:\n" in WORKFLOW
+    assert WORKFLOW.count("permissions:") == 1
+    lines = WORKFLOW.splitlines()
+    checkouts = [i for i, line in enumerate(lines) if "actions/checkout@" in line]
+    assert len(checkouts) == 4
+    for at in checkouts:
+        assert [line.strip() for line in lines[at + 1 : at + 3]] == [
+            "with:",
+            "persist-credentials: false",
+        ]
+
+
+# What an edit may change, and what an entry may be called
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/home/runner/work/src/runtime/worker/agent.py",
+        "src/../tests/unit/test_backoff.py",
+        "tests/unit/test_backoff.py",
+        "scripts/switched_off.py",
+    ],
+)
+def test_an_edit_outside_the_code_and_its_migrations_is_refused(
+    path: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entry = replace(ENTRY, edits=(switched_off.Edit(path, "x", "y"),))
+    problem = f"an edit may change src/ or migrations/ only, not {path!r}"
+    assert problem in switched_off.run_problems(entry)
+    # The check names it without reading the file.
+    monkeypatch.setattr(switched_off, "ENTRIES", {"outside": entry})
+    monkeypatch.setattr(switched_off, "edited_files", lambda *a: pytest.fail("read"))
+    assert f"outside: {problem}" in switched_off.check()
+
+
+def test_every_entry_edits_the_code_or_its_migrations_only() -> None:
+    assert len(switched_off.ENTRIES) == 35
+    for entry in switched_off.ENTRIES.values():
+        assert switched_off.edit_path_problems(entry) == []
+    paths = {edit.path for e in switched_off.ENTRIES.values() for edit in e.edits}
+    assert switched_off.CHAIN_MIGRATION in paths
+
+
+def test_a_test_outside_its_suite_by_a_dot_dot_part_is_refused() -> None:
+    sneaky = "tests/unit/../integration/test_x.py::test_y"
+    for stack in ("none", "lab"):
+        node = sneaky.replace("unit", "lab") if stack == "lab" else sneaky
+        entry = replace(ENTRY, stack=stack, expect=(switched_off.Expect(node, "x"),))
+        assert any("only, not" in found for found in switched_off.run_problems(entry))
+
+
+@pytest.mark.parametrize("name", ["Budget-off", "budget off", "budget_off", "x;rm", ""])
+def test_an_entry_name_outside_the_pattern_is_refused(
+    monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    monkeypatch.setattr(switched_off, "ENTRIES", {name: switched_off.ENTRIES["budget-off"]})
+    assert switched_off.check() == [
+        f"{name!r}: a name is lowercase letters, digits and hyphens only"
+    ]
+
+
+# A rehearsal: every step on the fake provider, captured here, none run
+
+
+def test_a_rehearsal_starts_the_kill_runs_on_the_fake_provider_and_passes_on_no_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for edit in KEYED.edits:
+        (tmp_path / edit.path).parent.mkdir(parents=True, exist_ok=True)
+    calls: list[tuple[list[str], dict[str, str]]] = []
+
+    def sh(*args: str, env: Any) -> None:
+        calls.append((list(args), dict(env)))
+
+    def pytest_run(args: list[str], **more: Any) -> Any:
+        calls.append((list(args), dict(more["env"])))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(switched_off, "ROOT", tmp_path)
+    monkeypatch.setattr(switched_off, "_git", lambda *args: "" if args[0] == "status" else HEAD)
+    monkeypatch.setattr(switched_off, "_sh", sh)
+    monkeypatch.setattr(switched_off.subprocess, "run", pytest_run)
+    monkeypatch.delenv("SWITCHED_OFF_PROVIDER", raising=False)
+    monkeypatch.setenv("CLAUDE_API_KEY", "sk-ant-not-a-key")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-not-a-key-either")
+    # No record and no junit file: a wrong rehearsal, after every step ran.
+    assert switched_off.run(NAME, rehearsal=True) == 1
+    commands = [args for args, _ in calls]
+    assert commands[1][:3] == ["docker", "compose", "-f"]
+    assert commands[2][:4] == ["uv", "run", "--frozen", "pytest"]
+    assert not [args for args in commands if "docker-compose.claude.yml" in args]
+    for _, env in calls:
+        assert not {"CLAUDE_API_KEY", "ANTHROPIC_API_KEY"} & env.keys()
+    assert [env["KILLS_PROVIDER"] for _, env in calls[1:]] == ["fake", "fake"]

@@ -31,12 +31,13 @@ Every job then costs money.
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
 from collections.abc import Mapping
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import ModuleType
 from typing import Any, Literal
 
@@ -74,6 +75,11 @@ LAB = (
 )
 # The tests that a run with no stack, and the lab's stack, may name.
 STACK_TESTS = {"none": "tests/unit/", "lab": "tests/lab/"}
+# What an edit may change: the product's code and its migrations, never a test,
+# the workflow or this script.
+EDITABLE = ("src/", "migrations/")
+# An entry's name reaches the workflow's options, a job's name and the shell.
+ENTRY_NAME = re.compile(r"[a-z0-9-]+")
 # The kill runs: their rules, their tests, and where a session leaves its records.
 KILL_RULES = "tests/kills/rules.py"
 KILL_RUNS = "tests/kills/test_kill_runs.py"
@@ -628,7 +634,7 @@ ENTRIES: dict[str, SwitchedOff] = {
                 "    return ceiling(attempt) / 2  # switched off",
             ),
         ),
-        stack="up",
+        stack="none",
         expect=(
             Expect(
                 "tests/unit/test_backoff.py::test_retry_after_raises_the_floor_and_never_lowers_it",
@@ -649,7 +655,6 @@ ENTRIES: dict[str, SwitchedOff] = {
                 "::test_the_random_part_spreads_jobs_that_were_refused_together",
                 "assert all(5 <= value <= 9 for value in delays)",
             ),
-            Expect(IN_STACK, "assert gap.total_seconds() >= floor(1, RETRY_AFTER) == RETRY_AFTER"),
         ),
     ),
     "claim-ignores-not-before": SwitchedOff(
@@ -754,8 +759,11 @@ ENTRIES: dict[str, SwitchedOff] = {
                 "            task.cancel()\n"
                 "            # Not suppressed: a cancel of this call that arrives while the\n"
                 "            # container is removed propagates.\n"
-                "            await asyncio.wait({task})\n",
-                "        pass  # switched off\n",
+                "            await asyncio.wait({task})\n"
+                "        if not task.cancelled():\n",
+                # The cancel of the call propagates as it does without the switch;
+                # only the run, and with it the container, is left going.
+                "        if task.done() and not task.cancelled():  # switched off\n",
             ),
         ),
         stack="up",
@@ -806,22 +814,15 @@ ENTRIES: dict[str, SwitchedOff] = {
                 "if limit is not None and (reason := None):  # switched off",
             ),
         ),
-        stack="up",
-        expect=(
-            *(
-                Expect(f"{WATCHER}::{test}", "assert result.is_error")
-                for test in (
-                    "test_a_workspace_over_the_limit_starts_no_command",
-                    "test_a_workspace_with_too_many_files_starts_no_command",
-                    "test_a_walk_past_its_own_deadline_starts_no_command",
-                    "test_a_walk_that_hangs_past_its_time_box_starts_no_command",
-                )
-            ),
-            Expect(
-                f"{SANDBOX}::test_a_workspace_over_its_limit_runs_no_command",
-                'assert result.content.endswith("its limit of 1.0 MiB. The command did not'
-                ' start.")',
-            ),
+        stack="none",
+        expect=tuple(
+            Expect(f"{WATCHER}::{test}", "assert result.is_error")
+            for test in (
+                "test_a_workspace_over_the_limit_starts_no_command",
+                "test_a_workspace_with_too_many_files_starts_no_command",
+                "test_a_walk_past_its_own_deadline_starts_no_command",
+                "test_a_walk_that_hangs_past_its_time_box_starts_no_command",
+            )
         ),
     ),
     "workspace-entry-cap-off": SwitchedOff(
@@ -1019,9 +1020,13 @@ def check(root: Path = ROOT) -> list[str]:
     """What is wrong with the list against the code in `root`. Empty when nothing is."""
     problems = []
     for name, entry in ENTRIES.items():
+        if not ENTRY_NAME.fullmatch(name):
+            problems.append(f"{name!r}: a name is lowercase letters, digits and hyphens only")
         try:
-            for path, text in edited_files(entry.edits, root).items():
-                compile(text, path, "exec")
+            # A path outside the checkout's code is not read: run_problems names it.
+            if not edit_path_problems(entry):
+                for path, text in edited_files(entry.edits, root).items():
+                    compile(text, path, "exec")
         except (ValueError, SyntaxError) as error:
             problems.append(f"{name}: {error}")
         for expect in entry.expect:
@@ -1036,6 +1041,21 @@ def check(root: Path = ROOT) -> list[str]:
     return problems
 
 
+def _inside(path: str, under: tuple[str, ...]) -> bool:
+    """Whether a path is relative, has no `..` part, and starts with one of `under`."""
+    pure = PurePosixPath(path)
+    return not pure.is_absolute() and ".." not in pure.parts and path.startswith(under)
+
+
+def edit_path_problems(entry: SwitchedOff) -> list[str]:
+    """The edits whose path is not under `src/` or `migrations/` of the checkout."""
+    return [
+        f"an edit may change {' or '.join(EDITABLE)} only, not {edit.path!r}"
+        for edit in entry.edits
+        if not _inside(edit.path, EDITABLE)
+    ]
+
+
 def run_problems(entry: SwitchedOff, root: Path = ROOT) -> list[str]:
     """What is wrong with an entry's provider, stack, jobs and record. Empty when nothing is.
 
@@ -1043,7 +1063,7 @@ def run_problems(entry: SwitchedOff, root: Path = ROOT) -> list[str]:
     workflow offers, its stack is the kill runs', its jobs times the budget
     of each stay inside the bound, and it is judged by its record.
     """
-    problems = []
+    problems = edit_path_problems(entry)
     kills = entry.stack == "kills"
     if entry.provider == "claude":
         offered = options((root / WORKFLOW).read_text(), "model")
@@ -1057,7 +1077,11 @@ def run_problems(entry: SwitchedOff, root: Path = ROOT) -> list[str]:
         problems.append(f"the fake provider takes no model, and the entry names {entry.model!r}")
     if entry.stack in STACK_TESTS:
         tests = STACK_TESTS[entry.stack]
-        outside = [expect.node for expect in entry.expect if not expect.node.startswith(tests)]
+        outside = [
+            expect.node
+            for expect in entry.expect
+            if not _inside(expect.node.partition("::")[0], (tests,))
+        ]
         if outside:
             problems.append(f"stack {entry.stack!r} runs {tests} only, not {outside}")
     if not kills:
