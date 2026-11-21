@@ -20,7 +20,6 @@ TIMEOUT = 10.0
 @dataclass(frozen=True, slots=True)
 class Issue:
     number: int
-    title: str
 
 
 class Refused(Exception):
@@ -52,11 +51,8 @@ class Tracker(Protocol):
 
 
 def _issue(entry: Any, number_key: str) -> Issue:
-    """An issue from a tracker's JSON. Raises if the entry is not one."""
-    title = entry["title"]
-    if not isinstance(title, str):
-        raise TypeError("the title is not a string")
-    return Issue(int(entry[number_key]), title)
+    """An issue from a tracker's JSON: its number. Raises if the entry is not one."""
+    return Issue(int(entry[number_key]))
 
 
 @dataclass(frozen=True, slots=True)

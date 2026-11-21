@@ -64,6 +64,9 @@ against the database ([ADR 0016](adr/0016-verify-reads-the-database-not-the-api.
 It prints each mismatch as job, step and reason. Exit status 0: every chain
 holds, 1: a mismatch, 2: a job could not be checked.
 
+A connection error shows the database's first line, which names the user. A
+password typed in the user's place of the URL is printed.
+
 ## What it does not catch
 
 - A role that can switch the triggers off, deletes the last steps and sets
