@@ -72,6 +72,16 @@ An entry names its provider. One on the Claude API runs in the job that
 holds the key, and is [judged by its record](kill-runs.md#a-switched-off-run-on-the-claude-api)
 ([ADR 0022](adr/0022-run-switched-off-entries-on-the-claude-api-from-the-list.md)).
 
+## Guarded changes
+
+A pull request that removes or changes a test, changes an entry of
+`scripts/switched_off.py`, or changes what runs the tests has to say so in
+its own text ([ADR 0024](adr/0024-show-a-changed-test-in-the-pull-request.md)).
+The `Guarded changes` check prints the section and is red until the text
+holds it. Configured, not tested: it has not run on a pull request yet.
+
+`python -I scripts/guarded_changes.py main HEAD` prints a branch's section.
+
 ## Failure switches
 
 These exist for `tests/chaos`, `tests/lab` and `tests/kills`, and do nothing
