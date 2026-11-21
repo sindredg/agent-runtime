@@ -28,12 +28,17 @@ type Network = httpx2.MockTransport
 # the kernel has not sent yet, and resets the connection. Without it a
 # request that was written but not delivered is sent again by the kernel
 # after the close, for a minute or more, and can arrive long after it was
-# given up.
+# given up. The option is the socket's, so a request that was answered ends
+# with a reset too: a tracker may log one for each issue.
 ABORTIVE_CLOSE = (socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
 
 
 def given_up_at_once(transport: Network | None) -> httpx2.AsyncBaseTransport:
-    """The transport of a client whose request can be given up."""
+    """The transport of a client whose request can be given up.
+
+    A transport of its own does not go through a proxy named in the
+    environment, which the client for reading does.
+    """
     return transport or httpx2.AsyncHTTPTransport(socket_options=[ABORTIVE_CLOSE])
 
 
@@ -91,8 +96,9 @@ class FakeTracker:
         return httpx2.Client(base_url=self.url, timeout=TIMEOUT, transport=transport)
 
     def sender(self, transport: Network | None) -> httpx2.AsyncClient:
+        # No timeout per step: the tool's one deadline covers the whole request.
         return httpx2.AsyncClient(
-            base_url=self.url, timeout=TIMEOUT, transport=given_up_at_once(transport)
+            base_url=self.url, timeout=None, transport=given_up_at_once(transport)
         )
 
     async def create(
@@ -184,7 +190,7 @@ class GiteaTracker:
         return httpx2.AsyncClient(
             base_url=f"{self.url}/api/v1",
             headers=self._headers(),
-            timeout=TIMEOUT,
+            timeout=None,
             transport=given_up_at_once(transport),
         )
 

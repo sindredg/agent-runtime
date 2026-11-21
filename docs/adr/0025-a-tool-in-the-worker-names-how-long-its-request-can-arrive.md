@@ -73,6 +73,8 @@ The tool names a bound, and a takeover waits it out.
   call, the gap of [ADR 0004](0004-fence-writes-with-the-lease-epoch-and-a-row-lock.md),
   and a machine suspended during the call, whose clock stops with it.
 - The reset is shown for plain HTTP. Over TLS it is not tried.
+- The request that opens the issue does not go through a proxy named in the
+  environment. The lookup does.
 - A call that a worker of an earlier version started has no deadline. The
   wait still applies to it, with nothing behind it.
 - The deadline bounds what is sent, not when the thread returns: a slow name

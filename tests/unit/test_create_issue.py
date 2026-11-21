@@ -421,9 +421,9 @@ class Silent(ThreadingHTTPServer):
 
 class Waits(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
-        self.rfile.read(int(self.headers["Content-Length"]))
         server = cast(Silent, self.server)
         try:
+            self.rfile.read(int(self.headers["Content-Length"]))
             server.ended.append("end" if self.connection.recv(1) == b"" else "data")
         except ConnectionResetError:
             server.ended.append("reset")
