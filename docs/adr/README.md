@@ -26,7 +26,6 @@ flowchart LR
     A14 --> A17[0017 bounded walk]
     A5 --> A19[0019 Gitea check:<br/>a marker line]
     A4 --> A23[0023 a running job<br/>has a lease]
-    A21[0021 switched-off runs<br/>from a list] --> A24[0024 a changed test<br/>shows in the pull request]
     A3[0003 SDK and<br/>a fake provider]
 ```
 
@@ -57,7 +56,6 @@ An arrow means the later record builds on, or follows from, the earlier one.
 | [0021](0021-run-switched-off-runs-from-a-reviewed-list.md) | Run switched-off runs from a reviewed list in the Manual runs workflow | Yes, [seven runs](../results/README.md#runs-with-a-mechanism-switched-off) at `11b6792` |
 | [0022](0022-run-switched-off-entries-on-the-claude-api-from-the-list.md) | Run switched-off entries on the Claude API from the reviewed list | Yes, [run once](../results/kill-runs.md#with-the-stored-signature-changed) on `claude-fable-5-2` |
 | [0023](0023-a-running-job-has-a-lease.md) | A `running` job has a lease, and the database refuses one without | Yes, migration 0009 |
-| [0024](0024-show-a-changed-test-in-the-pull-request.md) | Show a changed test in the pull request, by a check the pull request cannot change | No. [Issue 157](https://github.com/sindredg/agent-runtime/issues/157) |
 
 Each record states what was built at the time it was written. What is built
 now is described in [Architecture](../architecture.md).
