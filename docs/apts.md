@@ -25,6 +25,8 @@ The requirements were read at commit
 [`9e4b4d8`](https://github.com/OWASP/APTS/tree/9e4b4d841a014f5d631b52b24ae48df2bf01c9dd)
 of the APTS repository, which states version 0.1.0. The repository has no
 tag for the version, so the commit is the reference.
+Code lines are read at commit `878cb3a`. Other frameworks:
+[Framework mapping](framework-mapping.md).
 
 ## Status
 
@@ -37,13 +39,13 @@ tag for the version, so the commit is the reference.
 
 ## Scope
 
-| Requirement | What it asks | What the runtime does | Status | Evidence |
-|---|---|---|---|---|
-| SE-001, target list | A machine-readable scope, validated before testing; no test on a scope that fails | `scope` in the job spec. A bad scope, IPv6, or one that touches the deny list is refused at submit with 422. | tested | `test_scope.py`, `test_api.py`, in the [suites](results/README.md#the-suites) |
-| SE-001, the rest | Test windows, attack types, asset criticality, the signed authorization, escalation contacts | A deadline and the tools that need approval. The rest is not in the spec. | gap | |
-| SE-006 | A scope check before every network action; a failed check stops the action and is logged | A packet filter in the call's network namespace drops what is out of scope and counts it. It sees addresses and ports, not URLs or redirects. | tested | [Scope and sandbox](results/sandbox.md) |
-| SE-009 | A hard deny list, checked before the scope, unchanged during an engagement | A fixed list, checked at submit, plus the runtime's own Docker networks, read at worker start. Both are checked before each call and first in the filter. | tested | [Scope and sandbox](results/sandbox.md) |
-| SE-012 | Connect to the validated address without a second resolution | A name is resolved once per call, written into the intent and pinned in the call's hosts file. TTLs are not read. | tested, for the pinning | [Scope and sandbox](results/sandbox.md) |
+| Requirement | What it asks | What the runtime does | Status | Code | Evidence |
+|---|---|---|---|---|---|
+| SE-001, target list | A machine-readable scope, validated before testing; no test on a scope that fails | `scope` in the job spec. A bad scope, IPv6, or one that touches the deny list is refused at submit with 422. | tested | [spec.py:43](../src/runtime/spec.py#L43), [scope.py:75](../src/runtime/scope.py#L75) | [test_scope.py:73](../tests/unit/test_scope.py#L73), [test_api.py:239](../tests/integration/test_api.py#L239) |
+| SE-001, the rest | Test windows, attack types, asset criticality, the signed authorization, escalation contacts | A deadline and the tools that need approval. The rest is not in the spec. | gap | [spec.py:30](../src/runtime/spec.py#L30) | |
+| SE-006 | A scope check before every network action; a failed check stops the action and is logged | A packet filter in the call's network namespace drops what is out of scope and counts it. It sees addresses and ports, not URLs or redirects. | tested | [scope.py:204](../src/runtime/scope.py#L204), [runner.py:200](../src/runtime/sandbox/runner.py#L200) | [Scope and sandbox](results/sandbox.md), [test_scope.py:93](../tests/escape/test_scope.py#L93) |
+| SE-009 | A hard deny list, checked before the scope, unchanged during an engagement | A fixed list, checked at submit, plus the runtime's own Docker networks, read at worker start. Both are checked before each call and first in the filter. | tested | [scope.py:43](../src/runtime/scope.py#L43), [runner.py:345](../src/runtime/sandbox/runner.py#L345) | [Scope and sandbox](results/sandbox.md), [test_scope.py:138](../tests/escape/test_scope.py#L138) |
+| SE-012 | Connect to the validated address without a second resolution | A name is resolved once per call, written into the intent and pinned in the call's hosts file. TTLs are not read. | tested, for the pinning | [scope.py:163](../src/runtime/scope.py#L163) | [Scope and sandbox](results/sandbox.md), [test_scope.py:118](../tests/escape/test_scope.py#L118) |
 
 The deny list holds link-local (with the metadata address) and Docker's DNS
 server. Other production networks are on it only if listed in
@@ -51,11 +53,11 @@ server. Other production networks are on it only if listed in
 
 ## Sandbox and tools
 
-| Requirement | What it asks | What the runtime does | Status | Evidence |
-|---|---|---|---|---|
-| SC-019 | The agent's environment bounded from outside: files, network, processes, system calls | A container per call: no capabilities, not root, read-only root, CPU, memory and process limits. A blocked action is a failed result. | tested | [Scope and sandbox](results/sandbox.md), [bad tool output](results/controls.md#bad-tool-output) |
-| SC-020 | The allowed tools enforced outside the model | The worker offers a fixed set of tools from its code. A call of any other name gets an error result and nothing runs. | tested | `test_worker.py`, in the [suites](results/README.md#the-suites) |
-| AR-020 | The audit trail out of the agent's reach | Tool containers have no route to Postgres: the runtime's networks are on every deny list. The worker writes the log. | tested | [Scope and sandbox](results/sandbox.md) |
+| Requirement | What it asks | What the runtime does | Status | Code | Evidence |
+|---|---|---|---|---|---|
+| SC-019 | The agent's environment bounded from outside: files, network, processes, system calls | A container per call: no capabilities, not root, read-only root, CPU, memory and process limits. A blocked action is a failed result. | tested | [runner.py:249](../src/runtime/sandbox/runner.py#L249) | [Scope and sandbox](results/sandbox.md), [bad tool output](results/controls.md#bad-tool-output), [test_escape.py:70](../tests/escape/test_escape.py#L70) |
+| SC-020 | The allowed tools enforced outside the model | The worker offers a fixed set of tools from its code. A call of any other name gets an error result and nothing runs. | tested | [\_\_init\_\_.py:15](../src/runtime/tools/__init__.py#L15), [agent.py:244](../src/runtime/worker/agent.py#L244) | [test_worker.py:133](../tests/integration/test_worker.py#L133) |
+| AR-020 | The audit trail out of the agent's reach | Tool containers have no route to Postgres: the runtime's networks are on every deny list. The worker writes the log. | tested | [runner.py:345](../src/runtime/sandbox/runner.py#L345) | [Scope and sandbox](results/sandbox.md), [test_scope_in_stack.py:35](../tests/integration/test_scope_in_stack.py#L35) |
 
 The workspace has a soft size limit, not a disk quota: a command writes on
 until the next measurement ([Sandbox](sandbox.md#workspace-size)). The hard
@@ -63,13 +65,13 @@ limit is [issue 78](https://github.com/sindredg/agent-runtime/issues/78).
 
 ## Halt and approval
 
-| Requirement | What it asks | What the runtime does | Status | Evidence |
-|---|---|---|---|---|
-| SC-009, HO-008 | A halt within 5 s on command and when the control plane is lost, with the state kept | Cancel and the deadline stop the job and kill a running command with its container. A worker that loses its lease stops at its deadline. | tested, for cancel and deadline | [Budget, deadline and cancel](results/controls.md#budget-deadline-and-cancel) |
-| HO-001, HO-010 | A person's approval before high-risk or irreversible actions | A tool's definition or the job's spec makes each call wait for a person. The answer names the question. | tested | [Approval](results/controls.md#approval-before-a-tool-call) |
-| HO-003 | A time limit per decision, and a safe default when nobody answers | A job that waits for an answer is failed at its deadline and the call never runs. One deadline per job. | tested | [Approval](results/controls.md#approval-before-a-tool-call) |
-| HO-006 | An operator's pause, with the state kept for resuming | No pause command. A waiting job holds no worker, and a stopped worker hands its job back at a step boundary. | gap | |
-| SC-014 | Each reversible action tracked, with an automated rollback | Each call has its intent and result in the step log. Nothing about rollback. | gap | |
+| Requirement | What it asks | What the runtime does | Status | Code | Evidence |
+|---|---|---|---|---|---|
+| SC-009, HO-008 | A halt within 5 s on command and when the control plane is lost, with the state kept | Cancel and the deadline stop the job and kill a running command with its container. A worker that loses its lease stops at its deadline. | tested, for cancel and deadline | [halt.py:61](../src/runtime/worker/halt.py#L61), [agent.py:839](../src/runtime/worker/agent.py#L839) | [Budget, deadline and cancel](results/controls.md#budget-deadline-and-cancel), [test_halt_worker.py:60](../tests/integration/test_halt_worker.py#L60) |
+| HO-001, HO-010 | A person's approval before high-risk or irreversible actions | A tool's definition or the job's spec makes each call wait for a person. The answer names the question. | tested | [approval.py:20](../src/runtime/worker/approval.py#L20), [agent.py:411](../src/runtime/worker/agent.py#L411) | [Approval](results/controls.md#approval-before-a-tool-call), [test_approval.py:140](../tests/integration/test_approval.py#L140) |
+| HO-003 | A time limit per decision, and a safe default when nobody answers | A job that waits for an answer is failed at its deadline and the call never runs. One deadline per job. | tested | [jobs.py:519](../src/runtime/store/jobs.py#L519) | [Approval](results/controls.md#approval-before-a-tool-call), [test_approval.py:250](../tests/chaos/test_approval.py#L250) |
+| HO-006 | An operator's pause, with the state kept for resuming | No pause command. A waiting job holds no worker, and a stopped worker hands its job back at a step boundary. | gap | [agent.py:677](../src/runtime/worker/agent.py#L677) | |
+| SC-014 | Each reversible action tracked, with an automated rollback | Each call has its intent and result in the step log. Nothing about rollback. | gap | [agent.py:560](../src/runtime/worker/agent.py#L560), [agent.py:575](../src/runtime/worker/agent.py#L575) | |
 
 Approval is per tool, not per action: with `run_shell` named, every command
 asks. No reason is recorded with an answer, and not who gave it. Details:
@@ -77,14 +79,14 @@ asks. No reason is recorded with an answer, and not who gave it. Details:
 
 ## Step log
 
-| Requirement | What it asks | What the runtime does | Status | Evidence |
-|---|---|---|---|---|
-| AR-001 | Every event in a structured, schema-validated log | One row per model call, tool intent and result, question, answer and error. Payloads are JSON, not checked against a schema per kind. | gap | |
-| AR-002 | Every state transition logged with old state, new state and cause | A cancel and a park write a `status_changed` step. An answer has its own step; a claim, a release and a finish have none. | tested, for a cancel and a park. Gap for the rest. | `test_status_changed.py`, in the [suites](results/README.md#the-suites) |
-| AR-012 | A tamper-evident log: a hash chain, continuous sequence numbers | A trigger chains each step by hash and refuses a gap, a change and a delete. `runtime verify` recomputes it and finds a change by the owner. | tested | [Durability](results/durability.md#the-step-log-cannot-be-changed-without-detection) |
+| Requirement | What it asks | What the runtime does | Status | Code | Evidence |
+|---|---|---|---|---|---|
+| AR-001 | Every event in a structured, schema-validated log | One row per model call, tool intent and result, question, answer and error. Payloads are JSON, not checked against a schema per kind. | gap | [steps.py:22](../src/runtime/store/steps.py#L22) | |
+| AR-002 | Every state transition logged with old state, new state and cause | A cancel and a park write a `status_changed` step. An answer has its own step; a claim, a release and a finish have none. | tested, for a cancel and a park. Gap for the rest. | [jobs.py:108](../src/runtime/store/jobs.py#L108) | [test_status_changed.py:70](../tests/integration/test_status_changed.py#L70), [test_status_changed.py:108](../tests/integration/test_status_changed.py#L108) |
+| AR-012 | A tamper-evident log: a hash chain, continuous sequence numbers | A trigger chains each step by hash and refuses a gap, a change and a delete. `runtime verify` recomputes it and finds a change by the owner. | tested | [0007_step_log_chain.py:84](../migrations/versions/0007_step_log_chain.py#L84), [verify.py:56](../src/runtime/verify.py#L56) | [Durability](results/durability.md#the-step-log-cannot-be-changed-without-detection), [test_step_log_chain.py:366](../tests/integration/test_step_log_chain.py#L366) |
 
 ## Not in APTS
 
-| Control | What the runtime does | Status | Evidence |
-|---|---|---|---|
-| No blind repeat of a side-effecting call after a crash | The call's intent and the tool's check decide. When nobody can tell, a person is asked ([ADR 0005](adr/0005-rerun-an-interrupted-tool-call-only-when-it-is-safe.md)). | tested | [Durability](results/durability.md#an-unsafe-tool-call-does-not-run-twice-without-approval) |
+| Control | What the runtime does | Status | Code | Evidence |
+|---|---|---|---|---|
+| No blind repeat of a side-effecting call after a crash | The call's intent and the tool's check decide. When nobody can tell, a person is asked ([ADR 0005](adr/0005-rerun-an-interrupted-tool-call-only-when-it-is-safe.md)). | tested | [recovery.py:43](../src/runtime/worker/recovery.py#L43), [agent.py:560](../src/runtime/worker/agent.py#L560) | [Durability](results/durability.md#an-unsafe-tool-call-does-not-run-twice-without-approval), [test_kills.py:173](../tests/chaos/test_kills.py#L173) |
