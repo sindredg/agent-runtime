@@ -127,9 +127,20 @@ def test_jobs_that_are_not_queued_and_hold_no_expired_lease_are_not_claimed(
         for status in JobStatus:
             if status is not S.QUEUED:
                 job = await new_job(conn)
+                # A running job always has a lease (ADR 0023): here one that is not over.
+                running = status is S.RUNNING
                 await conn.execute(
-                    text("UPDATE jobs SET status = :status WHERE id = :id"),
-                    {"status": status, "id": job.id},
+                    text(
+                        "UPDATE jobs SET status = :status, lease_owner = :owner,"
+                        " lease_expires_at = now() + make_interval(hours => :hours)"
+                        " WHERE id = :id"
+                    ),
+                    {
+                        "status": status,
+                        "owner": "w0" if running else None,
+                        "hours": 1 if running else None,
+                        "id": job.id,
+                    },
                 )
         return await claim_job(conn, worker_id="w1")
 

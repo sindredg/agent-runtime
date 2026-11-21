@@ -151,6 +151,11 @@ def test_new_job_gets_defaults(migrated_owner_url: str) -> None:
 def test_every_job_status_and_step_kind_is_accepted(migrated_owner_url: str) -> None:
     async def body(conn: Connection) -> None:
         job_id = await conn.fetchval(INSERT_JOB, DEADLINE)
+        # A running job needs a lease (ADR 0023). Any other status may keep one.
+        await conn.execute(
+            "UPDATE jobs SET lease_owner = 'worker-1', lease_expires_at = now() WHERE id = $1",
+            job_id,
+        )
         for status in JOB_STATUSES:
             await conn.execute("UPDATE jobs SET status = $1 WHERE id = $2", status, job_id)
         for seq, kind in enumerate(STEP_KINDS, start=1):
@@ -170,6 +175,8 @@ def test_every_job_status_and_step_kind_is_accepted(migrated_owner_url: str) -> 
         "takeovers = NULL",
         "lease_owner = 'worker-1'",
         "lease_expires_at = now()",
+        # A running job without a lease: nothing would ever end it (ADR 0023).
+        "status = 'running'",
         "token_budget = NULL",
         "deadline = NULL",
         "spec = NULL",
@@ -274,3 +281,56 @@ def test_the_denial_step_kind_arrives_with_its_migration_and_leaves_with_it(
     alembic(url, "downgrade", "0004")
     with pytest.raises(asyncpg.CheckViolationError):
         on(url, lambda c: add(c, "approval_denied"))
+
+
+def test_a_running_job_without_a_lease_gets_one_that_is_over_and_then_is_refused(
+    empty_database_url: str,
+) -> None:
+    """ADR 0023: the migration repairs such a row, then the constraint refuses a new one."""
+    url = empty_database_url
+    alembic(url, "upgrade", "0008")
+
+    async def jobs_before(conn: Connection) -> dict[str, object]:
+        ids = {}
+        for name, change in [
+            ("bare", "status = 'running'"),
+            ("held", "status = 'running', lease_owner = 'worker-1',"
+                     " lease_expires_at = now() + interval '1 hour'"),
+            ("queued", "status = 'queued'"),
+        ]:  # fmt: skip
+            job_id = await conn.fetchval(INSERT_JOB, DEADLINE)
+            await conn.execute(f"UPDATE jobs SET {change} WHERE id = $1", job_id)  # noqa: S608
+            ids[name] = job_id
+        return ids
+
+    ids = on(url, jobs_before)
+    alembic(url, "upgrade", "0009")
+
+    async def leases(conn: Connection) -> dict[str, tuple[object, bool | None]]:
+        found = {}
+        for name, job_id in ids.items():
+            row = await conn.fetchrow(
+                "SELECT lease_owner, lease_expires_at < clock_timestamp() AS over"
+                " FROM jobs WHERE id = $1",
+                job_id,
+            )
+            assert row is not None
+            found[name] = (row["lease_owner"], row["over"])
+        return found
+
+    # The bare row has a lease that is over, so a claim takes it. The others are as they were.
+    assert on(url, leases) == {
+        "bare": ("migration 0009", True),
+        "held": ("worker-1", False),
+        "queued": (None, None),
+    }
+
+    async def bare_again(conn: Connection) -> None:
+        job_id = await conn.fetchval(INSERT_JOB, DEADLINE)
+        await conn.execute("UPDATE jobs SET status = 'running' WHERE id = $1", job_id)
+
+    with pytest.raises(asyncpg.CheckViolationError, match="jobs_running_has_lease"):
+        on(url, bare_again)
+
+    alembic(url, "downgrade", "0008")
+    on(url, bare_again)
