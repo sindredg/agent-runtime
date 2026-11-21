@@ -147,5 +147,4 @@ refused, but the tool ran. An idempotency key on the other side closes this.
 - Anyone who reaches the API can list every job, with its error and open
   question's reason, both text a target can write. A listed id gives the
   job's spec and every step.
-- There is no status page ([issue 76](https://github.com/sindredg/agent-runtime/issues/76)).
 - The size of a request body is not capped. Only the fields are limited.
