@@ -144,8 +144,8 @@ refused, but the tool ran. An idempotency key on the other side closes this.
   [roles](database-roles.md). A local process can write jobs and steps
   directly, past the fence and the gate. As the owner it can switch the
   [chain's](step-log-chain.md) triggers off and rewrite the log.
-- The job list shows every job to anyone who reaches the API, with its
-  error and its open question's reason. Both can hold text a target wrote.
-  An id from the list gives the job's spec and every step to the same reader.
+- Anyone who reaches the API can list every job, with its error and open
+  question's reason, both text a target can write. A listed id gives the
+  job's spec and every step.
 - There is no status page ([issue 76](https://github.com/sindredg/agent-runtime/issues/76)).
 - The size of a request body is not capped. Only the fields are limited.
