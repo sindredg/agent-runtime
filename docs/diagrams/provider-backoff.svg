@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="284" viewBox="0 0 480 284" role="img" aria-labelledby="title desc">
+  <title id="title">When can a worker retry a rate-limited job?</title>
+  <desc id="desc">In this example the provider requests five seconds. The runtime adds 0.1 seconds of random delay. Postgres stores the retry time when the job starts waiting. No worker holds it. Any worker can claim it at or after 5.1 seconds and retry the request.</desc>
+  <rect width="480" height="284" rx="8" fill="#0d1117"/>
+  <g font-family="system-ui, sans-serif">
+    <text x="22" y="36" font-size="20" fill="#eef2f6" font-weight="600">A rate limit with Retry-After: 5</text>
+    <text x="22" y="64" font-size="17" fill="#d6dfe9">Example delay: 5 s requested + 0.1 s jitter.</text>
+    <text x="24" y="110" font-size="18" font-weight="600" fill="#eef2f6">waiting</text>
+    <text x="24" y="135" font-size="16" fill="#d6dfe9">No worker holds the job.</text>
+    <path d="M24 154H452m-7-5 7 5-7 5" fill="none" stroke="#bdc8d6" stroke-width="2"/>
+    <circle cx="24" cy="154" r="5" fill="#bdc8d6"/>
+    <path d="M350 91v74" stroke="#ffb991" stroke-width="2" stroke-dasharray="4 4"/>
+    <circle cx="350" cy="154" r="5" fill="#ffb991"/>
+    <text x="350" y="84" font-size="16" text-anchor="middle" fill="#ffb991">not_before</text>
+    <text x="24" y="182" font-size="16" fill="#d6dfe9">0 s</text>
+    <text x="350" y="182" font-size="16" text-anchor="middle" fill="#ffb991">5.1 s</text>
+    <path d="M22 199H458" stroke="#495667"/>
+    <text x="22" y="230" font-size="18" font-weight="600" fill="#ffb991">Eligible for a claim at 5.1 s</text>
+    <text x="22" y="256" font-size="16" fill="#d6dfe9">The next worker to claim it retries the model request.</text>
+  </g>
+</svg>

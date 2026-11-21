@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="342" viewBox="0 0 480 342" role="img" aria-labelledby="title desc">
+  <title id="title">What happens to a tool call awaiting approval</title>
+  <desc id="desc">A worker records a question before the tool runs. An approval or denial queues the job. The next worker runs an approved call once or records a denied result. A job still waiting at its deadline fails.</desc>
+  <rect width="480" height="342" rx="8" fill="#0d1117"/>
+  <g fill="none" stroke="#788798" stroke-width="1.5">
+    <path d="M42 83v35q0 6 6 6h18m-6-5 6 5-6 5"/>
+    <path d="M34 83v111q0 6 6 6h26m-6-5 6 5-6 5"/>
+    <path d="M26 83v187q0 6 6 6h34m-6-5 6 5-6 5"/>
+  </g>
+  <rect x="16" y="15" width="448" height="68" rx="6" fill="#1b2531" stroke="#788798"/>
+  <g font-family="system-ui, sans-serif">
+    <g font-size="20" font-weight="600" fill="#eef2f6">
+      <text x="32" y="43">Worker asks before running the tool</text>
+      <text x="79" y="130" fill="#ffb991">Approve</text>
+      <text x="79" y="206">Deny</text>
+      <text x="79" y="282">Deadline passes without an answer</text>
+    </g>
+    <g font-size="17" fill="#d6dfe9">
+      <text x="32" y="69">The job waits in needs_approval.</text>
+      <text x="79" y="154">The API queues the job. On claim, a worker</text>
+      <text x="79" y="176">records the intent and runs the call once.</text>
+      <text x="79" y="230">The API queues the job. On claim, a worker</text>
+      <text x="79" y="252">records a denied result and skips the call.</text>
+      <text x="79" y="306">The job fails. The tool never starts.</text>
+    </g>
+  </g>
+</svg>

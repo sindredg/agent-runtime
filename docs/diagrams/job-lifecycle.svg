@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="500" height="408" viewBox="0 0 500 408" role="img" aria-labelledby="title desc">
+  <title id="title">Job states and their transitions</title>
+  <desc id="desc">Jobs start queued. A claim starts a run. Stopping a worker releases the job to queued. Approval and denial return a parked job to queued. A busy provider puts the job in waiting until a fresh claim. A running job may succeed or fail. Any open job can be cancelled or fail at its deadline.</desc>
+  <rect width="500" height="408" rx="8" fill="#0d1117"/>
+  <defs>
+    <marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="m0 0 8 4-8 4z" fill="#bdc8d6"/>
+    </marker>
+  </defs>
+  <g fill="none" stroke="#bdc8d6" stroke-width="1.5" marker-end="url(#arrow)">
+    <path d="M172 88H330"/>
+    <path d="M400 65V45q0-8-8-8H108q-8 0-8 8v18"/>
+    <path d="M342 109v27q0 8-8 8H135q-8 0-8 8v53"/>
+    <path d="M40 207v-96"/>
+    <path d="M370 109v96"/>
+    <path d="M442 207v-96"/>
+  </g>
+  <g fill="#1b2531" stroke="#788798">
+    <rect x="27" y="65" width="145" height="44" rx="6"/>
+    <rect x="332" y="65" width="138" height="44" rx="6" fill="#322722" stroke="#f3a579"/>
+    <rect x="16" y="207" width="172" height="44" rx="6"/>
+    <rect x="332" y="207" width="138" height="44" rx="6"/>
+  </g>
+  <g font-family="system-ui, sans-serif" fill="#eef2f6" text-anchor="middle">
+    <g font-size="19" font-weight="600">
+      <text x="100" y="93">queued</text>
+      <text x="401" y="93" fill="#ffb991">running</text>
+      <text x="102" y="235">needs_approval</text>
+      <text x="401" y="235">waiting</text>
+    </g>
+    <g font-size="16" fill="#d6dfe9">
+      <text x="250" y="27">Worker releases job</text>
+      <text x="250" y="79">Claim</text>
+      <text x="236" y="136">Approval required</text>
+      <text x="49" y="148" text-anchor="start">Approve</text>
+      <text x="49" y="167" text-anchor="start">or deny</text>
+      <text x="344" y="177" text-anchor="end">Provider busy</text>
+      <text x="434" y="154" text-anchor="end">Claim</text>
+      <text x="434" y="174" text-anchor="end">if due</text>
+    </g>
+  </g>
+  <path d="M20 268H480" stroke="#495667"/>
+  <g font-family="system-ui, sans-serif" font-size="17" fill="#d6dfe9">
+    <text x="22" y="292" fill="#eef2f6" font-weight="600">Final states</text>
+    <text x="22" y="322" font-weight="600">succeeded</text>
+    <text x="138" y="322">The model ends its turn.</text>
+    <text x="22" y="353" font-weight="600">failed</text>
+    <text x="138" y="353">Deadline, error or takeover limit.</text>
+    <text x="22" y="384" font-weight="600">cancelled</text>
+    <text x="138" y="384">A cancel request ends an open job.</text>
+  </g>
+</svg>

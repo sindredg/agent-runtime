@@ -1,30 +1,10 @@
 # Architecture
 
-What is built, described from the code. Reasons are in the
-[decision records](adr/). Test results are in [Results](results/README.md).
+[Decision records](adr/) explain the design. [Results](results/README.md) give the evidence.
 
 ## Components
 
-```mermaid
-flowchart LR
-    CLI[runtime CLI] -->|HTTP| API[api]
-    API --> DB[(postgres: jobs, steps)]
-    CLI -.->|runtime verify| DB
-    W1[worker] --> DB
-    W2[worker] --> DB
-    W1 -->|Messages API| P{{ANTHROPIC_BASE_URL}}
-    W2 --> P
-    P -.-> FP[fake-provider]
-    P -.-> CL[Claude API]
-    W1 --> WS[/workspace volume/]
-    W2 --> WS
-    W1 -->|create_issue| T[fake-tracker,<br/>or Gitea in the lab]
-    W2 --> T
-    W1 -->|Docker socket| D[Docker]
-    D --> C[tool container, one per call]
-    C --> WS
-    M[migrate] --> DB
-```
+![The CLI submits jobs through the API. Workers claim jobs in Postgres, call the model provider and start sandboxed tool containers.](diagrams/job-components.svg)
 
 | Component | Code | What it does |
 |---|---|---|

@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="274" viewBox="0 0 480 274" role="img" aria-labelledby="title desc">
+  <title id="title">How a job survives its worker</title>
+  <desc id="desc">Worker A records a step and stops. When its lease expires, worker B claims the job and reads its step log to continue.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="m0 0 8 4-8 4z" fill="#bdc8d6"/>
+    </marker>
+  </defs>
+  <rect width="480" height="274" rx="8" fill="#0d1117"/>
+  <g stroke="#657382" stroke-dasharray="3 5" fill="none">
+    <path d="M78 54v69 M240 54v179 M402 54v178"/>
+  </g>
+  <g fill="#1b2531" stroke="#788798">
+    <rect x="23" y="16" width="110" height="38" rx="5"/>
+    <rect x="185" y="16" width="110" height="38" rx="5"/>
+    <rect x="347" y="16" width="110" height="38" rx="5"/>
+  </g>
+  <g fill="none" stroke="#bdc8d6" stroke-width="1.5" marker-end="url(#arrow)">
+    <path d="M78 88h160"/>
+    <path d="M402 180H242"/>
+    <path d="M402 215H242"/>
+  </g>
+  <g font-family="system-ui, sans-serif" font-size="16" text-anchor="middle" fill="#eef2f6">
+    <g font-weight="600">
+      <text x="78" y="41">Worker A</text>
+      <text x="240" y="41">Postgres</text>
+      <text x="402" y="41">Worker B</text>
+    </g>
+    <text x="159" y="80">Record a step</text>
+    <rect x="20" y="105" width="116" height="28" rx="4" fill="#28313d"/>
+    <text x="78" y="125">Worker stops</text>
+    <rect x="177" y="126" width="126" height="28" rx="4" fill="#28313d"/>
+    <text x="240" y="146">Lease expires</text>
+    <text x="321" y="172">Claim the job</text>
+    <text x="321" y="207">Read step log</text>
+    <rect x="340" y="231" width="124" height="28" rx="4" fill="#3b2b25"/>
+    <text x="402" y="251" fill="#ffb991" font-weight="600">Resume job</text>
+  </g>
+</svg>
