@@ -25,6 +25,7 @@ FAKE_MODEL = "ci-triage-slow"
 # What every job may spend. The API's default budget is twenty times this.
 TOKEN_BUDGET = 50_000
 # Jobs one invocation may submit to the Claude API. The full plan is 33.
+# KILLS_JOB_LIMIT sets a lower number, and a limit on the fake provider.
 API_JOB_LIMIT = 40
 # Jobs that run first with nobody interrupting them. The longest one sets
 # the window the kill times are drawn from.
@@ -38,6 +39,15 @@ MAX_WINDOW = 300.0
 # back unchanged. The API's documentation says Claude Fable 5.2 checks such a
 # block; no run here has shown it refuse one.
 THINKING = "thinking"
+# What the error of a job holds when the API refused a `thinking` block whose
+# `signature` it could not read: the worker's words for the status, and the
+# API's two names.
+REFUSED = ("provider answered 400", "signature", "thinking")
+# The API adds this when the signature is intact and the conversation before
+# the block is not the one that produced it. That is another refusal.
+OTHER_CONVERSATION = "bound to a different conversation"
+# Characters of a failed job's error that a results line keeps.
+ERROR_LENGTH = 500
 # A step that moves a held job to one of these is written at the lease epoch
 # it leaves. The claim after it is not a takeover.
 NOT_A_TAKEOVER = ("waiting", "needs_approval")
@@ -52,6 +62,14 @@ class Settings:
     seed: str
     # Seconds the kill times are drawn from, to repeat a recorded run. None: measured.
     window: float | None = None
+    # Jobs the invocation may submit. None: any number, on the fake provider only.
+    job_limit: int | None = None
+
+    def refusal(self, submitted: int) -> str | None:
+        """Why one more job may not be submitted after `submitted` of them, or None."""
+        if self.job_limit is not None and submitted >= self.job_limit:
+            return f"{self.job_limit} jobs were submitted to the {self.provider_name}: no more"
+        return None
 
     @property
     def url(self) -> str:
@@ -103,6 +121,14 @@ def settings(env: Mapping[str, str]) -> Settings:
                 f"KILLS_WINDOW must be seconds, above 0 and at most {MAX_WINDOW:g},"
                 f" got {env['KILLS_WINDOW']!r}"
             )
+    job_limit = API_JOB_LIMIT if provider == "claude" else None
+    if "KILLS_JOB_LIMIT" in env:
+        job_limit = _count(env, "KILLS_JOB_LIMIT", API_JOB_LIMIT)
+        if provider == "claude" and job_limit > API_JOB_LIMIT:
+            raise ValueError(
+                f"KILLS_JOB_LIMIT is {job_limit}; a run on the Claude API may submit"
+                f" at most {API_JOB_LIMIT}"
+            )
     found = Settings(
         provider=provider,
         model=model,
@@ -110,6 +136,7 @@ def settings(env: Mapping[str, str]) -> Settings:
         failpoint_runs=_count(env, "KILLS_FAILPOINT_RUNS", 5),
         seed=env.get("KILLS_SEED", "20261119"),
         window=window,
+        job_limit=job_limit,
     )
     if provider == "claude" and found.planned_jobs > API_JOB_LIMIT:
         raise ValueError(
@@ -312,12 +339,98 @@ def sent_thinking_back_after_a_takeover(run: Run) -> bool:
     return any(e >= first and any(epoch > e for epoch, _ in responses) for e in taken)
 
 
+def first_signed_thinking(run: Run) -> int | None:
+    """The lease epoch of the first model response with a signed `thinking` block, or None.
+
+    Signed: the block has a `signature` that is text and not empty. That is
+    the part the API checks when the block comes back.
+    """
+    for step in run.steps:
+        if step["kind"] != "model_response":
+            continue
+        content = step["payload"].get("content")
+        for block in content if isinstance(content, list) else []:
+            if not isinstance(block, dict) or block.get("type") != THINKING:
+                continue
+            signature = block.get("signature")
+            if isinstance(signature, str) and signature:
+                return int(step["lease_epoch"])
+    return None
+
+
+def sent_a_rebuilt_thinking_block(run: Run) -> bool:
+    """Whether a later claim of the job wrote a model request after a signed `thinking` block.
+
+    Every claim rebuilds the conversation from the step log, and a request
+    holds all of it. So a `model_request` step at a later lease epoch than
+    the block means a worker rebuilt the block and went on to send it. Any
+    claim counts: a takeover, and the claim after a wait, a park or a release.
+
+    The step is written before the call. A worker stopped between the two
+    sent nothing, and the job is still counted here.
+    """
+    first = first_signed_thinking(run)
+    return first is not None and any(
+        step["kind"] == "model_request" and int(step["lease_epoch"]) > first for step in run.steps
+    )
+
+
+def answered_after_sending_one(run: Run) -> bool:
+    """Whether the API answered a request that held a rebuilt `thinking` block.
+
+    The job sent one, and has a `model_response` step at a later lease
+    epoch than the block. The job's status is not asked for: a job that was
+    answered and failed later was still answered.
+    """
+    first = first_signed_thinking(run)
+    return (
+        first is not None
+        and sent_a_rebuilt_thinking_block(run)
+        and any(
+            step["kind"] == "model_response" and int(step["lease_epoch"]) > first
+            for step in run.steps
+        )
+    )
+
+
+def refused_after_sending_one(run: Run) -> bool:
+    """Whether the job failed because the API refused the signature of a rebuilt block.
+
+    The job sent one, got no answer after it, and failed with the worker's
+    words for a 400 and the API's names for the block and its signature. A
+    400 that says the block belongs to another conversation is not counted:
+    it means the conversation was rebuilt differently, not the signature.
+    """
+    error = str(run.job.get("error") or "").casefold()
+    return (
+        sent_a_rebuilt_thinking_block(run)
+        and not answered_after_sending_one(run)
+        and run.job["status"] == "failed"
+        and all(part in error for part in REFUSED)
+        and OTHER_CONVERSATION not in error
+    )
+
+
+def errors_of_failed_jobs(runs: list[Run]) -> list[str]:
+    """Each different error of the jobs that failed, cut to ERROR_LENGTH characters."""
+    return sorted(
+        {
+            str(run.job.get("error") or "")[:ERROR_LENGTH]
+            for run in runs
+            if run.job["status"] == "failed"
+        }
+    )
+
+
 def thinking_record(runs: list[Run]) -> dict[str, Any]:
-    """What a set of jobs shows about `thinking` blocks. It is recorded and never judged.
+    """What a set of jobs shows about `thinking` blocks. No kill run is judged by it.
 
     A model decides by itself whether it sends such a block, so a count of
     0 is a result and not a failure. The block types of every response are
     recorded with it, so a 0 can be told from a block under another name.
+
+    A switched-off run reads the last three counts (scripts/switched_off.py).
+    In a normal run every job that sent a rebuilt block is answered.
     """
     types: dict[str, int] = {}
     for run in runs:
@@ -329,6 +442,11 @@ def thinking_record(runs: list[Run]) -> dict[str, Any]:
             sent_thinking_back_after_a_takeover(run) for run in runs
         ),
         "block_types": dict(sorted(types.items())),
+        "jobs_that_sent_a_rebuilt_thinking_block": sum(
+            sent_a_rebuilt_thinking_block(run) for run in runs
+        ),
+        "jobs_answered_after_sending_one": sum(answered_after_sending_one(run) for run in runs),
+        "jobs_refused_after_sending_one": sum(refused_after_sending_one(run) for run in runs),
     }
 
 
