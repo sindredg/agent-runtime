@@ -58,6 +58,8 @@ WHOLE_FILES = frozenset(
 WHOLE_DIRECTORIES = (".github/workflows/",)
 
 _HEADING_LINE = re.compile(r"^#{1,6}\s")
+# A comment in the text is not shown to its reader. One left open hides the rest.
+_COMMENT = re.compile(r"<!--.*?(-->|\Z)", re.DOTALL)
 
 
 class Unreadable(Exception):
@@ -112,30 +114,63 @@ class Module:
     support: str
 
 
-def read_module(source: bytes) -> Module:
-    """A file's tests as pytest's defaults find them: `test*` in a module or a `Test*` class."""
+def _parsed(source: bytes) -> ast.Module:
     try:
-        tree = ast.parse(source)
-    except (SyntaxError, ValueError) as error:
-        raise Unreadable(str(error)) from error
+        return ast.parse(source)
+    # RecursionError, MemoryError: a file nested too deep to read.
+    except (SyntaxError, ValueError, RecursionError, MemoryError) as error:
+        raise Unreadable(type(error).__name__) from error
+
+
+_BLOCKS = (ast.If, ast.Try, ast.TryStar, ast.With, ast.AsyncWith, ast.For, ast.AsyncFor, ast.While)
+
+
+def _inner(block: ast.stmt) -> list[ast.stmt]:
+    """The statements inside a block statement, every branch of it."""
+    found: list[ast.stmt] = []
+    for name in ("body", "orelse", "finalbody"):
+        found += getattr(block, name, [])
+    for handler in getattr(block, "handlers", []):
+        found += handler.body
+    return found
+
+
+def read_module(source: bytes) -> Module:
+    """A file's tests as pytest's defaults find them: `test*` in a module or a `Test*` class.
+
+    A test inside a block of the module, an `if` for example, is found too.
+    The block as a whole also counts as support code.
+    """
+    tree = _parsed(source)
     tests: dict[str, str] = {}
     support: list[str] = []
-    for node in tree.body:
-        if _is_test(node):
-            assert isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)  # noqa: S101
-            tests[node.name] = _test_print(node)
-        elif isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
-            rest = []
-            for member in node.body:
-                if _is_test(member):
-                    assert isinstance(member, ast.FunctionDef | ast.AsyncFunctionDef)  # noqa: S101
-                    tests[f"{node.name}::{member.name}"] = _test_print(member)
-                else:
-                    rest.append(member)
-            head = (node.name, _dumped(node.bases), _dumped(node.decorator_list), _dumped(rest))
-            support.append(repr(head))
-        else:
-            support.append(ast.dump(node))
+
+    def take(nodes: list[ast.stmt], *, top: bool) -> None:
+        for node in nodes:
+            if _is_test(node):
+                assert isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)  # noqa: S101
+                tests[node.name] = _test_print(node)
+            elif isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
+                rest = []
+                for member in node.body:
+                    if _is_test(member):
+                        assert isinstance(member, ast.FunctionDef | ast.AsyncFunctionDef)  # noqa: S101
+                        tests[f"{node.name}::{member.name}"] = _test_print(member)
+                    else:
+                        rest.append(member)
+                if top:
+                    head = (node.name, node.bases, node.decorator_list, rest)
+                    support.append(repr((head[0], *(_dumped(part) for part in head[1:]))))
+            else:
+                if top:
+                    support.append(ast.dump(node))
+                if isinstance(node, _BLOCKS):
+                    take(_inner(node), top=False)
+
+    try:
+        take(tree.body, top=True)
+    except RecursionError as error:
+        raise Unreadable("RecursionError") from error
     return Module(tests, repr(support))
 
 
@@ -149,10 +184,7 @@ class EntryList:
 
 def entry_list(source: bytes) -> EntryList:
     """The entries of the switched-off list: the literal dict assigned to `ENTRIES`."""
-    try:
-        tree = ast.parse(source)
-    except (SyntaxError, ValueError) as error:
-        raise Unreadable(str(error)) from error
+    tree = _parsed(source)
     entries: dict[str, str] | None = None
     rest: list[str] = []
     for node in tree.body:
@@ -256,7 +288,7 @@ def changes(base: Mapping[str, bytes], head: Mapping[str, bytes]) -> list[str]:
                 lines += _settings_lines(old, new)
             else:
                 lines += _whole_file_lines(path, old, new)
-        except Unreadable:
+        except Unreadable, RecursionError:
             # Not read, so not judged: the reader of the pull request looks.
             lines.append(f"- cannot be compared: {path}")
     return sorted(lines)
@@ -267,10 +299,13 @@ def section(lines: list[str]) -> str:
 
 
 def stated(body: str) -> set[str] | None:
-    """The lines under the section's heading in a pull request's text. None: no such heading."""
+    """The lines under the section's heading in a pull request's text. None: no such heading.
+
+    Only text a reader of the pull request sees counts: a comment is left out.
+    """
     found: set[str] | None = None
     inside = False
-    for raw in body.splitlines():
+    for raw in _COMMENT.sub("", body).splitlines():
         line = raw.strip()
         if line == HEADING:
             inside = True
@@ -309,17 +344,27 @@ def _commit(repo: Path, name: str) -> str:
     return found.decode().strip()
 
 
-def _blobs(repo: Path, commit: str) -> dict[str, str]:
-    """Guarded path -> blob id, for every file of the commit. A link is listed as what it holds."""
-    listed = _git(repo, "ls-tree", "-r", "-z", commit).decode("utf-8", "surrogateescape")
+LINK_MODE = "120000"
+LINK = b"link to "
+
+
+def _shown(path: bytes) -> str:
+    """A path as one printable line: other bytes and characters are written as escapes."""
+    text = path.decode("utf-8", "backslashreplace")
+    return "".join(c if c.isprintable() else c.encode("unicode_escape").decode() for c in text)
+
+
+def _blobs(repo: Path, commit: str) -> dict[str, tuple[str, str]]:
+    """Guarded path -> (mode, blob id), for every file of the commit."""
     blobs = {}
-    for record in listed.split("\0"):
+    for record in _git(repo, "ls-tree", "-r", "-z", commit).split(b"\0"):
         if not record:
             continue
-        about, path = record.split("\t", 1)
-        _mode, kind, blob = about.split(" ")
+        about, name = record.split(b"\t", 1)
+        mode, kind, blob = about.decode().split(" ")
+        path = _shown(name)
         if kind == "blob" and guarded(path):
-            blobs[path] = blob
+            blobs[path] = (mode, blob)
     return blobs
 
 
@@ -330,10 +375,15 @@ def read(repo: Path, base: str, head: str) -> tuple[dict[str, bytes], dict[str, 
     old, new = _blobs(repo, start), _blobs(repo, head)
     differing = [path for path in old.keys() | new.keys() if old.get(path) != new.get(path)]
 
-    def content(blobs: dict[str, str]) -> dict[str, bytes]:
-        return {
-            path: _git(repo, "cat-file", "blob", blobs[path]) for path in differing if path in blobs
-        }
+    def content(blobs: dict[str, tuple[str, str]]) -> dict[str, bytes]:
+        found = {}
+        for path in differing:
+            if path in blobs:
+                mode, blob = blobs[path]
+                held = _git(repo, "cat-file", "blob", blob)
+                # A link holds a path, not the file: never the same as a file.
+                found[path] = LINK + held if mode == LINK_MODE else held
+        return found
 
     return content(old), content(new)
 

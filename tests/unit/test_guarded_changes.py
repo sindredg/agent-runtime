@@ -192,6 +192,49 @@ def test_a_file_that_does_not_parse_is_named_and_not_judged(old: str, new: str) 
     assert lines(old, new) == [f"- cannot be compared: {A_TEST}"]
 
 
+IN_BLOCKS = """
+    import sys
+
+    if sys.platform == "linux":
+        def test_here():
+            assert 1
+    else:
+        def test_there():
+            assert 2
+
+    try:
+        import fast
+    except ImportError:
+        class TestSlow:
+            def test_it(self):
+                assert 3
+"""
+
+
+def test_a_test_inside_a_block_of_the_module_is_named_too() -> None:
+    gone = IN_BLOCKS.replace("def test_there():\n            assert 2", "pass")
+    assert lines(IN_BLOCKS, gone) == [
+        f"- changed support code: {A_TEST}",
+        f"- removed test: {A_TEST}::test_there",
+    ]
+    assert lines(IN_BLOCKS, IN_BLOCKS.replace("assert 3", "assert 0")) == [
+        f"- changed support code: {A_TEST}",
+        f"- changed tests: {A_TEST}: 1",
+    ]
+
+
+def test_a_function_inside_a_test_is_not_a_test() -> None:
+    old = "def test_one():\n    def test_inner():\n        pass\n    assert 1\n"
+    assert lines(old, old.replace("def test_inner():\n        pass\n    ", "")) == [
+        f"- changed tests: {A_TEST}: 1"
+    ]
+
+
+def test_a_file_nested_too_deep_to_read_is_named_and_not_judged() -> None:
+    deep = "def test_one():\n    assert " + "(" * 5000 + "1" + ")" * 5000 + "\n"
+    assert lines(TWO_TESTS, deep) == [f"- cannot be compared: {A_TEST}"]
+
+
 # --- the switched-off list ---
 
 THE_LIST = """
@@ -356,6 +399,26 @@ def test_lines_outside_the_section_do_not_count(body: str) -> None:
     assert guarded.problems(LINES, body) == [
         "the pull request's text has no '## Guarded changes' section"
     ]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "<!--\n## Guarded changes\n\n{0}\n{1}\n-->",
+        "<!--\n## Guarded changes\n\n{0}\n{1}\n## x -->",
+        "<!-- a note\n\n## Guarded changes\n\n{0}\n{1}\n",
+        "## Guarded changes\n\n{0}\n<!-- {1} -->\n",
+        "## Guarded changes\n\n{0}\n<!--\n{1}\n-->\n",
+    ],
+)
+def test_a_section_or_a_line_in_a_comment_does_not_count(body: str) -> None:
+    # A comment is not shown to whoever reads the pull request.
+    assert guarded.problems(LINES, body.format(*LINES)) != []
+
+
+def test_a_comment_elsewhere_changes_nothing() -> None:
+    body = "<!-- a template's hint -->\n" + guarded.section(LINES) + "\n<!-- more -->\n"
+    assert guarded.problems(LINES, body) == []
 
 
 def test_the_next_heading_ends_the_section() -> None:
@@ -551,11 +614,40 @@ def test_a_link_is_read_as_what_it_holds_not_followed(
     ]
 
 
+def test_a_file_that_became_a_link_is_a_changed_file(
+    repo: Repo, capsys: pytest.CaptureFixture[str]
+) -> None:
+    data = repo.root / "tests" / "unit" / "data.txt"
+    data.write_text("other.txt")
+    repo.commit({})
+    repo.git("switch", "--quiet", "--create", "work")
+    data.unlink()
+    data.symlink_to("other.txt")
+    repo.commit({})
+    assert run(repo, "main", "work") == 0
+    assert capsys.readouterr().out.splitlines()[2:] == ["- changed file: tests/unit/data.txt"]
+
+
+def test_a_path_is_printed_as_one_line_whatever_bytes_it_holds(
+    repo: Repo, capsys: pytest.CaptureFixture[str]
+) -> None:
+    odd = os.fsencode(repo.root / "tests" / "unit") + b"/a\nb\xff.yml"
+    Path(os.fsdecode(odd)).write_text("a: 1\n")
+    repo.commit({})
+    repo.git("switch", "--quiet", "--create", "work")
+    Path(os.fsdecode(odd)).write_text("a: 2\n")
+    repo.commit({})
+    assert run(repo, "main", "work") == 0
+    assert capsys.readouterr().out.splitlines()[2:] == ["- changed file: tests/unit/a\\nb\\xff.yml"]
+
+
 def test_the_script_uses_only_the_standard_library() -> None:
     # It runs with `python -I` and no project: no dependency is installed.
     done = subprocess.run(  # noqa: S603 - fixed program and script
         [sys.executable, "-I", str(SCRIPT), "HEAD", "HEAD"],
         cwd=ROOT,
+        # Not the job's own summary file, when this runs in CI.
+        env={k: v for k, v in os.environ.items() if k not in ("GITHUB_STEP_SUMMARY", "PR_BODY")},
         capture_output=True,
         text=True,
         check=False,
