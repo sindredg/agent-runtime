@@ -19,7 +19,9 @@ from runtime.store.roles import allow_login
 
 
 async def _allow_login(database_url: str, password: str) -> None:
-    engine = create_engine(database_url)
+    # The password is a bound parameter of the statement that sets it: a
+    # failure must not print it.
+    engine = create_engine(database_url, hide_parameters=True)
     try:
         async with engine.begin() as conn:
             await allow_login(conn, password)

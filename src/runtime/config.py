@@ -77,7 +77,8 @@ def _http_url(env: Mapping[str, str], name: str) -> str | None:
     except ValueError as error:
         raise ConfigError(f"{name} is not a URL: {error}") from error
     if parts.scheme not in ("http", "https") or not parts.netloc or "?" in value or "#" in value:
-        raise ConfigError(f"{name} must be an http or https URL without a query, got {value!r}")
+        # The value is not repeated: a query or a fragment may hold a token.
+        raise ConfigError(f"{name} must be an http or https URL without a query or fragment")
     return value.rstrip("/")
 
 
@@ -136,7 +137,8 @@ class ProviderConfig:
     jobs that do not name one. No model id is written in the code.
     """
 
-    api_key: str
+    # Left out of repr(), as TrackerConfig.token is.
+    api_key: str = field(repr=False)
     base_url: str | None
     model: str
     max_tokens: int
@@ -216,7 +218,8 @@ class SandboxConfig:
 
 @dataclass(frozen=True, slots=True)
 class WorkerConfig:
-    database_url: str
+    # Holds the app role's password: left out of repr().
+    database_url: str = field(repr=False)
     provider: ProviderConfig
     # Appears as `lease_owner` on the jobs this worker holds.
     worker_id: str
@@ -319,7 +322,8 @@ def allowed_hosts(env: Mapping[str, str]) -> tuple[str, ...]:
 
 @dataclass(frozen=True, slots=True)
 class ApiConfig:
-    database_url: str
+    # Holds the app role's password: left out of repr().
+    database_url: str = field(repr=False)
     # Used for a submission that does not give its own.
     default_token_budget: int
     default_timeout_seconds: int

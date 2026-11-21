@@ -12,6 +12,8 @@ import logging
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
+from runtime.store.engine import DatabaseUrlError
+
 # The name migration 0006 grants to.
 APP_ROLE = "runtime_app"
 
@@ -93,7 +95,14 @@ async def wait_for_app_role(
                 await check_app_role(conn)
         except RoleError:
             raise
-        except Exception:
+        except Exception as error:
+            if isinstance(error, TypeError) and "unexpected keyword argument" in str(error):
+                # asyncpg refuses a query key of the URL it does not know. Trying
+                # again does not help, and the key may be the tail of a password.
+                raise DatabaseUrlError(
+                    "the database URL has a query parameter the driver does not take;"
+                    " its password must be URL-safe"
+                ) from None
             log.warning("the database role could not be checked; trying again", exc_info=True)
         else:
             return True
