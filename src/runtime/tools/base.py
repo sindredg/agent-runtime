@@ -5,6 +5,7 @@ tools that are runtime code. A `SandboxTool` (`runtime.tools.sandboxed`)
 turns the model's input into a command that runs in a container of its own.
 """
 
+import math
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from enum import Enum
@@ -70,6 +71,9 @@ class CheckOutcome(Enum):
 # A check answers with the call's result when the call already happened.
 type CheckAnswer = ToolResult | CheckOutcome
 
+# The longest `ends_within` a tool may name: a day, as for a sandboxed call.
+LONGEST_TOOL_BOUND = 86_400.0
+
 
 @dataclass(frozen=True, slots=True)
 class Tool:
@@ -88,6 +92,18 @@ class Tool:
     # True when no call of the tool runs before a person approved it (ADR
     # 0011). A job's spec can ask for the same; it cannot take this away.
     needs_approval: bool = False
+    # Seconds after a call starts by which it sends nothing more that changes
+    # the system behind it (ADR 0025). The tool keeps to it itself: it runs in
+    # a thread, which nobody can stop. A worker that takes the job over waits
+    # that long after the intent before it asks `check`. None: no wait.
+    ends_within: float | None = None
+
+    def __post_init__(self) -> None:
+        bound = self.ends_within
+        if bound is not None and not (math.isfinite(bound) and 0 < bound <= LONGEST_TOOL_BOUND):
+            raise ValueError(
+                f"ends_within must be above 0 and at most {LONGEST_TOOL_BOUND:g}, got {bound!r}"
+            )
 
     def definition(self) -> dict[str, Any]:
         return tool_definition(self.name, self.description, self.input_schema)

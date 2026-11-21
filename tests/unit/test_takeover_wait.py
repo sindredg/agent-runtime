@@ -1,6 +1,7 @@
-"""The wait before a decision about an interrupted sandboxed call: what ends it, and how."""
+"""The wait before a decision about an interrupted call: its length, what ends it, and how."""
 
 import asyncio
+import math
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -12,6 +13,7 @@ import pytest
 
 from runtime.sandbox.runner import LONGEST_BOUND
 from runtime.store.held import LeaseLost
+from runtime.tools.base import LONGEST_TOOL_BOUND, Tool, ToolResult
 from runtime.worker import agent
 from runtime.worker.agent import _bound, _outlast_container, _wait_out, _wait_unless_stopped
 from runtime.worker.halt import Halt
@@ -201,3 +203,23 @@ def test_the_bound_comes_from_the_intent_and_is_never_unbounded(
 ) -> None:
     """A tool the worker does not have: only the intent's number counts."""
     assert _bound(None, {"ends_within": recorded}) == bound
+
+
+def in_worker(ends_within: float | None) -> Tool:
+    """A tool that runs in the worker, with the bound it names for its calls."""
+    return Tool("act", "Do it.", {}, lambda call: ToolResult("done"), ends_within=ends_within)
+
+
+def test_a_tool_in_the_worker_is_waited_for_as_long_as_it_says() -> None:
+    assert _bound(in_worker(12.0), {}) == 12.0
+    # The intent's number comes first: it is what the worker that started the call wrote.
+    assert _bound(in_worker(12.0), {"ends_within": 3.0}) == 3.0
+    # A tool that names no bound is not waited for, as before.
+    assert _bound(in_worker(None), {}) is None
+
+
+@pytest.mark.parametrize("bound", [0, -1.0, math.inf, math.nan, LONGEST_TOOL_BOUND + 1])
+def test_a_tool_cannot_name_a_bound_that_is_no_length_of_time(bound: float) -> None:
+    with pytest.raises(ValueError, match="ends_within must be above 0"):
+        in_worker(bound)
+    assert in_worker(LONGEST_TOOL_BOUND).ends_within == LONGEST_TOOL_BOUND <= LONGEST_BOUND
