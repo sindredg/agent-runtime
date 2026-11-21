@@ -143,7 +143,11 @@ def test_pages_follow_each_other_without_a_gap_or_a_repeat(database_url: str) ->
         made = [(await job_in(engine, S.SUCCEEDED)).id for _ in range(7)]
         pages: list[list[UUID]] = []
         before = None
-        while page := await listed(engine, limit=3, before=before):
+        # Bounded: a cursor that does not move on would loop here for ever.
+        for _ in range(5):
+            page = await listed(engine, limit=3, before=before)
+            if not page:
+                break
             pages.append([job.id for job in page])
             before = page[-1].id
         return made, pages

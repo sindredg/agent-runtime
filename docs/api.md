@@ -34,6 +34,7 @@ and `127.0.0.1`.
 | Route | Returns |
 |---|---|
 | `POST /jobs` | 201 and the job. The body is a [job file](usage.md#job-files). |
+| `GET /jobs?status=&limit=&before=` | Jobs newest first, at most `limit` (1 to 200, default 50). [Listing jobs](#listing-jobs) |
 | `GET /jobs/{id}` | The job |
 | `GET /jobs/{id}/steps?after=&limit=` | Steps with `seq` above `after`, in order, at most 1000 |
 | `GET /jobs/{id}/events` | The steps as server-sent events |
@@ -44,6 +45,19 @@ and `127.0.0.1`.
 
 FastAPI also serves `/docs`, `/redoc` and `/openapi.json`.
 
+## Listing jobs
+
+- The order is by id. Ids are UUIDv7, made by the database, so newer jobs
+  have larger ids. `created_at` can differ from that order by the length of
+  a transaction.
+- `before=<id>` returns the jobs older than that id. The last id of a page
+  asks for the next one. A page shorter than `limit` is the last.
+- An item has no spec and no lease; `GET /jobs/{id}` has them. A job in
+  `needs_approval` has `question`: its number, tool and reason, without the
+  call's input. The input is in the job's steps.
+- Anyone who reaches the API can list every job. See
+  [Limits](limits.md#api).
+
 ## Refusals
 
 | Status | When |
@@ -52,7 +66,7 @@ FastAPI also serves `/docs`, `/redoc` and `/openapi.json`.
 | 403 | A change sent with an `Origin` that is not the API's own address |
 | 404 | The job does not exist |
 | 409 | An answer the job does not wait on, or a cancel of a job that succeeded or failed |
-| 422 | A job id that is not a UUID, a parameter out of range, an unknown field, a missing question number |
+| 422 | A job id that is not a UUID, a parameter out of range, an unknown status, an unknown field, a missing question number |
 
 - The body of approve and deny is `{"question": <seq>}`. See
   [Approval](approval.md#an-answer-names-its-question).

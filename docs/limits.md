@@ -135,8 +135,8 @@ refused, but the tool ran. An idempotency key on the other side closes this.
 
 ## API
 
-- No authentication. Anyone who can reach the API can submit, approve, deny
-  and cancel. That includes every local user and process of the host.
+- No authentication. Anyone who can reach the API can submit, list, approve,
+  deny and cancel. That includes every local user and process of the host.
 - The API and both fakes refuse a foreign `Host` and a change from another
   site's page. A local program sends any header: it can park jobs on the fake
   provider, read its request log, and fill or empty the fake tracker.
@@ -144,7 +144,7 @@ refused, but the tool ran. An idempotency key on the other side closes this.
   [roles](database-roles.md). A local process can write jobs and steps
   directly, past the fence and the gate. As the owner it can switch the
   [chain's](step-log-chain.md) triggers off and rewrite the log.
-- There is no list of jobs and no status page. A job is found only by its
-  id ([issue 74](https://github.com/sindredg/agent-runtime/issues/74),
-  [issue 76](https://github.com/sindredg/agent-runtime/issues/76)).
+- The job list shows every job to anyone who reaches the API, with its
+  error and its open question's reason. Both can hold text a target wrote.
+- There is no status page ([issue 76](https://github.com/sindredg/agent-runtime/issues/76)).
 - The size of a request body is not capped. Only the fields are limited.

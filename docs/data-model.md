@@ -76,6 +76,8 @@ erDiagram
   and `running` jobs. The claim reads it.
 - Index `jobs_open_deadline` on (`deadline`) covers jobs that are not final.
   The deadline check reads it.
+- Index `jobs_status_id` on (`status`, `id`) serves the job list with a
+  status filter. Without a filter the list reads the primary key.
 
 `src/runtime/store/schema.py` mirrors the tables for building statements. A
 test fails when the two differ. It does not compare the CHECK constraints or
