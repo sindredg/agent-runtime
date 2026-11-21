@@ -42,9 +42,10 @@ Recorded runs start from the Manual runs workflow on GitHub Actions
 gh workflow run manual-runs.yml -f suite=kills -f provider=claude -f model=claude-haiku-5-5
 ```
 
-A must-fail run is a branch `must-fail/<name>` with the mechanism switched
-off, started with `--ref must-fail/<name> -f suite=kills-after-tool-ran`,
-and deleted afterwards.
+A must-fail run on the fake provider is a branch `must-fail/<name>` with the
+mechanism switched off, started with `--ref must-fail/<name> -f
+suite=kills-after-tool-ran`, and deleted afterwards. On the Claude API it is
+an entry of the reviewed list, [below](#a-switched-off-run-on-the-claude-api).
 
 ## What a job is judged by
 
@@ -83,6 +84,42 @@ block is up to the model. Each `results.jsonl` line counts, and no count fails a
   and got an answer after a takeover that followed the block. A job that
   was also released is left out: a release leaves no step.
 - `block_types`: the blocks of every response, by type.
+- `jobs_that_sent_a_rebuilt_thinking_block`: jobs with a model request at a
+  later lease epoch than a signed block. Every claim rebuilds the
+  conversation from the step log, not only a takeover.
+- `jobs_answered_after_sending_one` and `jobs_refused_after_sending_one`: of
+  those, jobs with a model response after that claim, and jobs that failed
+  on the API's 400 for the block's signature.
+- `errors_of_failed_jobs`: each different error, cut to 500 characters.
+
+### A switched-off run on the Claude API
+
+`thinking-signature-changed` in `scripts/switched_off.py` changes the first
+character of each stored signature on every claim. It runs 5 jobs of the
+`after_tool_ran` test on `claude-fable-5-2`, at most 250,000 tokens
+([ADR 0022](adr/0022-run-switched-off-entries-on-the-claude-api-from-the-list.md)).
+
+```mermaid
+flowchart LR
+    R[the run's one record] --> A{a job answered,<br/>or failed another way?}
+    A -->|yes| F[FINDING]
+    A -->|no| N{at least 3 jobs sent<br/>a changed block?}
+    N -->|no, or void| I[INCONCLUSIVE]
+    N -->|yes, each refused| P[PASS]
+```
+
+- PASS: the test fails on `assert not failures`, and the run's one record
+  says `failed`. At least 3 jobs sent a changed block, each was refused,
+  and every other job passed.
+- FINDING: a job was answered after it sent a changed block, or a job failed
+  another way. A 400 that says "bound to a different conversation" is such
+  a failure. It is recorded, and not run again until it passes.
+- INCONCLUSIVE: fewer than 3 jobs sent a changed block, the run is void, or
+  it left no record of its own.
+
+Refused means: failed on the 400 that names the `signature` of a `thinking`
+block, with no model response after that claim. `make switched-off-rehearsal`
+runs the same steps on the fake provider first, and is not a result.
 
 ## The stack
 
@@ -105,7 +142,7 @@ block is up to the model. Each `results.jsonl` line counts, and no count fails a
 - Every job carries the 50,000 token budget, and a job with another budget
   fails its run.
 - A run on the Claude API that plans more than 40 jobs does not start, and
-  the 41st submission is refused.
+  the 41st submission is refused. `KILLS_JOB_LIMIT` lowers that number.
 
 ## Runs
 

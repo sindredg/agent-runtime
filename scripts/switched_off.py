@@ -6,30 +6,59 @@ test must end: failed on a named assertion, or passed for a stated reason.
 The list is fixed before a run. A test that ends otherwise fails the run, and
 is a finding for the results page, not a reason to change the entry.
 
-The Manual runs workflow runs one entry at a time, on `main`, on the fake
-provider (ADR 0021).
+The Manual runs workflow runs one entry at a time, on `main` (ADR 0021). An
+entry names its provider. One on the Claude API runs in the job that holds
+the key, and is judged by the kill runner's record as well (ADR 0022).
 
-    python scripts/switched_off.py names     the entries, one per line
-    python scripts/switched_off.py check     every edit matches once and still compiles
-    python scripts/switched_off.py run NAME  edit the checkout, start the stack, run, judge
+    python scripts/switched_off.py names          the entries, one per line
+    python scripts/switched_off.py check          the list still fits the code
+    python scripts/switched_off.py dispatch NAME PROVIDER [MODEL]
+                                                  refuse a start that is not the entry's
+    python scripts/switched_off.py run NAME       edit the checkout, start the stack, run, judge
+    python scripts/switched_off.py rehearse NAME  an entry of the Claude API on the fake
+                                                  provider: every step of `run`, and no result
 
-`run` changes files in the checkout. Run it on a clean checkout and restore
-it with `git checkout -- .` afterwards.
+`run` and `rehearse` change files in the checkout. Run them on a clean
+checkout and restore it with `git checkout -- .` afterwards.
+
+`run` starts an entry of the Claude API only with SWITCHED_OFF_PROVIDER=claude.
+Every job then costs money.
 """
 
+import importlib.util
+import json
+import os
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from types import ModuleType
+from typing import Any, Literal
 
 ROOT = Path(__file__).resolve().parents[1]
 JUNIT = Path(".switched-off/junit.xml")
+WORKFLOW = ".github/workflows/manual-runs.yml"
 AGENT = "src/runtime/worker/agent.py"
 KILLS = "tests/chaos/test_kills.py"
 FAILPOINT = f"{KILLS}::test_a_job_survives_its_worker_stopping_at_the_failpoint"
 HALT = "tests/integration/test_halt_store.py"
+# The kill runs: their rules, their tests, and where a session leaves its records.
+KILL_RULES = "tests/kills/rules.py"
+KILL_RUNS = "tests/kills/test_kill_runs.py"
+KILL_RECORDS = ".kills"
+# The most tokens an entry on the Claude API may spend: its jobs times the budget of each.
+KEYED_TOKEN_BOUND = 250_000
+# `run` starts an entry of the Claude API only when this says `claude`.
+PROVIDER_VARIABLE = "SWITCHED_OFF_PROVIDER"
+# Never passed on to a run on the fake provider, and never to git.
+KEY_VARIABLES = ("CLAUDE_API_KEY", "ANTHROPIC_API_KEY")
+# The counts of a kill runner's record that a `Refusals` entry is judged by.
+SENT = "jobs_that_sent_a_rebuilt_thinking_block"
+ANSWERED = "jobs_answered_after_sending_one"
+REFUSED = "jobs_refused_after_sending_one"
+JUDGED = (SENT, ANSWERED, REFUSED, "failed_runs", "problems")
 
 
 @dataclass(frozen=True)
@@ -50,17 +79,55 @@ class Expect:
 
 
 @dataclass(frozen=True)
+class Refusals:
+    """What the kill runner's record of the test must show, besides the test's failure.
+
+    Every job that sent a rebuilt `thinking` block was refused by the API for
+    the block's signature, none was answered, and every other job passed.
+    """
+
+    # The `test` of the record.
+    test: str
+    # With fewer refused jobs than this the run shows too little: inconclusive.
+    at_least: int
+
+
+@dataclass(frozen=True)
 class SwitchedOff:
     issue: int
     what: str
     edits: tuple[Edit, ...]
     # `up`: the normal stack. `chaos`: three workers and a short lease.
-    stack: Literal["up", "chaos"]
+    # `kills`: the kill runs' stack, three workers and a 6 s lease.
+    stack: Literal["up", "chaos", "kills"]
     expect: tuple[Expect, ...]
+    # `claude`: the run is on the Claude API, in the job that holds the key.
+    provider: Literal["fake", "claude"] = "fake"
+    # The model of a run on the Claude API.
+    model: str | None = None
+    # The kills stack: the jobs of the test, and the most the run may submit.
+    runs: int = 0
+    record: Refusals | None = None
 
 
 NOTHING_TO_REPLAY = (
     "the kill comes before any completed step, so starting over is the same as resuming"
+)
+REPLAY = "    state = replay(spec.prompt, steps)\n"
+# On every claim: the first character of each stored signature. A block
+# without a signature, and every other block, stays as it was stored.
+CHANGED_SIGNATURES = (
+    REPLAY
+    + """\
+    for message in state.messages:  # switched off
+        content = message["content"]
+        for block in content if isinstance(content, list) else []:
+            if not isinstance(block, dict) or block.get("type") != "thinking":
+                continue
+            signature = block.get("signature")
+            if isinstance(signature, str) and signature:
+                block["signature"] = ("B" if signature[0] == "A" else "A") + signature[1:]
+"""
 )
 
 ENTRIES: dict[str, SwitchedOff] = {
@@ -87,13 +154,7 @@ ENTRIES: dict[str, SwitchedOff] = {
     "resume-off": SwitchedOff(
         issue=117,
         what="the replay of the step log on a claim",
-        edits=(
-            Edit(
-                AGENT,
-                "    state = replay(spec.prompt, steps)\n",
-                "    state = replay(spec.prompt, [])  # switched off\n",
-            ),
-        ),
+        edits=(Edit(AGENT, REPLAY, "    state = replay(spec.prompt, [])  # switched off\n"),),
         stack="chaos",
         expect=(
             Expect(f"{FAILPOINT}[after_claim]", None, NOTHING_TO_REPLAY),
@@ -197,6 +258,23 @@ ENTRIES: dict[str, SwitchedOff] = {
             ),
         ),
     ),
+    "thinking-signature-changed": SwitchedOff(
+        issue=122,
+        what="sending a stored `thinking` block back as it was stored",
+        edits=(Edit(AGENT, REPLAY, CHANGED_SIGNATURES),),
+        stack="kills",
+        expect=(
+            Expect(
+                f"{KILL_RUNS}::test_jobs_survive_their_worker_stopping_inside_the_call"
+                "[after_tool_ran]",
+                "assert not failures",
+            ),
+        ),
+        provider="claude",
+        model="claude-fable-5-2",
+        runs=5,
+        record=Refusals(test="failpoint after_tool_ran", at_least=3),
+    ),
 }
 
 
@@ -207,6 +285,35 @@ def edited(edit: Edit, root: Path = ROOT) -> str:
     if found != 1:
         raise ValueError(f"{edit.path}: the edit's text occurs {found} times, not once")
     return text.replace(edit.old, edit.new)
+
+
+def kill_rules(root: Path = ROOT) -> ModuleType:
+    """`tests/kills/rules.py` of `root`, loaded by its path. It imports nothing of the stack."""
+    name = "switched_off_kill_rules"
+    spec = importlib.util.spec_from_file_location(name, root / KILL_RULES)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"{KILL_RULES} cannot be loaded")
+    module = importlib.util.module_from_spec(spec)
+    # Registered before it runs: the dataclasses in it look their module up.
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def options(workflow: str, field: str) -> list[str]:
+    """The options of one input of the workflow, read from its text: `[a, b]` or a `- a` list."""
+    lines = workflow.splitlines()
+    start = lines.index(f"      {field}:")
+    at = next(i for i in range(start, len(lines)) if lines[i].strip().startswith("options:"))
+    inline = lines[at].split("options:", 1)[1].strip()
+    if inline:
+        return [name.strip() for name in inline.strip("[]").split(",")]
+    names = []
+    for line in lines[at + 1 :]:
+        if not line.strip().startswith("- "):
+            break
+        names.append(line.strip()[2:])
+    return names
 
 
 def check(root: Path = ROOT) -> list[str]:
@@ -226,11 +333,65 @@ def check(root: Path = ROOT) -> list[str]:
                 problems.append(f"{name}: no test {expect.node}")
             elif expect.fails_with is not None and expect.fails_with not in test_file.read_text():
                 problems.append(f"{name}: {path} has no {expect.fails_with!r}")
+        problems += [f"{name}: {problem}" for problem in run_problems(entry, root)]
+    return problems
+
+
+def run_problems(entry: SwitchedOff, root: Path = ROOT) -> list[str]:
+    """What is wrong with an entry's provider, stack, jobs and record. Empty when nothing is.
+
+    An entry on the Claude API gets the key. So its model is one the
+    workflow offers, its stack is the kill runs', its jobs times the budget
+    of each stay inside the bound, and it is judged by its record.
+    """
+    problems = []
+    kills = entry.stack == "kills"
+    if entry.provider == "claude":
+        offered = options((root / WORKFLOW).read_text(), "model")
+        if entry.model not in offered:
+            problems.append(f"the workflow offers no model {entry.model!r}")
+        if not kills:
+            problems.append(f"a run on the Claude API uses the kills stack, not {entry.stack!r}")
+        if entry.record is None:
+            problems.append("a run on the Claude API is judged by its record, and names none")
+    elif entry.model is not None:
+        problems.append(f"the fake provider takes no model, and the entry names {entry.model!r}")
+    if not kills:
+        if entry.runs or entry.record is not None:
+            problems.append("`runs` and `record` are for the kills stack")
+        return problems
+    rules = kill_rules(root)
+    if not 1 <= entry.runs <= rules.API_JOB_LIMIT:
+        problems.append(f"`runs` is {entry.runs}, not 1 to {rules.API_JOB_LIMIT}")
+    spent = entry.runs * rules.TOKEN_BUDGET
+    if entry.provider == "claude" and spent > KEYED_TOKEN_BOUND:
+        problems.append(f"{entry.runs} jobs may spend {spent} tokens, over {KEYED_TOKEN_BOUND}")
+    outside = [expect.node for expect in entry.expect if not expect.node.startswith("tests/kills/")]
+    if outside:
+        problems.append(f"the kills stack runs tests/kills only, not {outside}")
+    if entry.record is None:
+        return problems
+    missing = sorted({SENT, ANSWERED, REFUSED} - set(rules.thinking_record([])))
+    if missing:
+        problems.append(f"{KILL_RULES} records no {missing}")
+    tests = (root / KILL_RUNS).read_text()
+    problems += [f"{KILL_RUNS} records no {key}" for key in JUDGED[3:] if f'"{key}"' not in tests]
+    # The record of a failpoint test is named after its failpoint.
+    named = [f for f in rules.FAILPOINTS if entry.record.test == f"failpoint {f}"]
+    nodes = [expect.node for expect in entry.expect]
+    if not named or len(nodes) != 1 or not nodes[0].endswith(f"[{named[0]}]"):
+        problems.append(f"the record {entry.record.test!r} is not the one test's: {nodes}")
+    if not 1 <= entry.record.at_least <= entry.runs:
+        problems.append(f"`at_least` is {entry.record.at_least}, not 1 to {entry.runs}")
     return problems
 
 
 def outcomes(junit: Path) -> dict[str, tuple[str, str]]:
-    """Each test case in a junit file: node id -> (passed | failed | error | skipped, text)."""
+    """Each test case in a junit file: node id -> (passed | failed | error | skipped, text).
+
+    A test that failed and whose teardown failed too has two cases. The
+    later one counts: an error.
+    """
     found: dict[str, tuple[str, str]] = {}
     for case in ET.parse(junit).getroot().iter("testcase"):  # noqa: S314 - pytest wrote it
         path = case.get("classname", "").replace(".", "/") + ".py"
@@ -242,6 +403,8 @@ def outcomes(junit: Path) -> dict[str, tuple[str, str]]:
                 result = "failed" if kind == "failure" else kind
                 text = _failing_lines(element.get("message", ""), element.text or "")
                 break
+        if found.get(node, ("passed", ""))[0] == "error":
+            continue
         found[node] = (result, text)
     return found
 
@@ -272,47 +435,299 @@ def judge(entry: SwitchedOff, found: dict[str, tuple[str, str]]) -> list[str]:
     return lines
 
 
-def _sh(*args: str) -> None:
-    print("+", " ".join(args), flush=True)
-    subprocess.run(args, cwd=ROOT, check=True)  # noqa: S603 - fixed commands
+def new_records(
+    directory: Path, before: set[str], test: str
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """The run's own record of `test`, and why there is not exactly one.
+
+    Only a directory the run created is read: `directory` keeps the records
+    of earlier runs too. `before` are the names it held when the run started.
+    """
+    new = [d for d in sorted(directory.glob("*")) if d.is_dir() and d.name not in before]
+    if len(new) != 1:
+        return [], [f"the run left {len(new)} new directories in {directory.name}, not one"]
+    file = new[0] / "results.jsonl"
+    if not file.is_file():
+        return [], [f"{new[0].name} has no results.jsonl"]
+    records = []
+    for line in file.read_text(encoding="utf-8").splitlines():
+        try:
+            record = json.loads(line)
+        except ValueError:
+            return [], [f"a line of {new[0].name}/results.jsonl is not JSON"]
+        if isinstance(record, dict) and record.get("test") == test:
+            records.append(record)
+    if len(records) != 1:
+        return [], [f"{new[0].name}/results.jsonl has {len(records)} records of {test!r}, not one"]
+    return records, []
 
 
-def run(name: str) -> int:
+def _count(record: Mapping[str, Any], key: str) -> int | None:
+    value = record.get(key)
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def not_this_run(
+    record: Mapping[str, Any], *, runs: int, provider: str, model: str, head: str
+) -> list[str]:
+    """Why a record is not the record of this run of the entry. Empty when it is."""
+    wrong = []
+    for key, wanted in (("runs", runs), ("provider", provider), ("model", model)):
+        if record.get(key) != wanted or isinstance(record.get(key), bool):
+            wrong.append(f"the record's {key} is {record.get(key)!r}, not {wanted!r}")
+    # The runner records the short id, and that the checkout is edited.
+    short = str(record.get("commit", "")).split(" ")[0]
+    if len(short) < 7 or not head.startswith(short):
+        wrong.append(f"the record's commit is {record.get('commit')!r}, not {head[:12]}")
+    return wrong
+
+
+def judge_record(
+    entry: SwitchedOff,
+    tests: list[str],
+    records: list[dict[str, Any]],
+    trouble: list[str],
+    *,
+    head: str,
+    rules: ModuleType,
+) -> tuple[str, list[str]]:
+    """PASS, FINDING or INCONCLUSIVE for a run on the Claude API, and the reasons (ADR 0022).
+
+    `tests` are the lines of `judge`. `records` and `trouble` are what
+    `new_records` found. Only PASS is a pass. A finding is recorded and
+    never run again until it passes. An inconclusive run shows nothing
+    either way.
+    """
+    if entry.record is None or entry.model is None:
+        raise ValueError("only an entry with a record and a model is judged by its record")
+    if trouble:
+        return "INCONCLUSIVE", [f"no record to judge: {problem}" for problem in trouble]
+    record = records[0]
+    wrong = not_this_run(
+        record, runs=entry.runs, provider="Claude API", model=entry.model, head=head
+    )
+    counts = {key: _count(record, key) for key in JUDGED}
+    wrong += [f"the record has no count {key}" for key, count in counts.items() if count is None]
+    if wrong:
+        return "INCONCLUSIVE", wrong
+    if record.get("verdict") == "void":
+        return "INCONCLUSIVE", [f"the run is void: {record.get('void')}"]
+    sent, answered, refused = (counts[key] or 0 for key in (SENT, ANSWERED, REFUSED))
+    failed, problems = counts["failed_runs"] or 0, counts["problems"] or 0
+    errors = [str(error) for error in record.get("errors_of_failed_jobs") or []]
+    lines = [
+        f"{entry.runs} jobs: {sent} sent a rebuilt thinking block, {refused} of them were"
+        f" refused for its signature, {answered} were answered; {failed} jobs failed"
+        f" with {problems} problems",
+        *(f"a failed job's error: {error}" for error in errors),
+    ]
+    if answered:
+        return "FINDING", [*lines, f"the API answered {answered} jobs that sent a changed block"]
+    if failed != refused or problems != refused or sent != refused:
+        if any(rules.OTHER_CONVERSATION in error for error in errors):
+            lines.append(
+                f'the API says a block is "{rules.OTHER_CONVERSATION}": replay changed'
+                " the conversation, not only the signature"
+            )
+        return "FINDING", [*lines, "a job failed another way than by the API's refusal"]
+    if refused < entry.record.at_least:
+        few = f"{refused} jobs sent a changed block, fewer than {entry.record.at_least}"
+        return "INCONCLUSIVE", [*lines, few]
+    if record.get("verdict") != "failed" or not all(line.startswith("ok") for line in tests):
+        return "FINDING", [
+            *lines,
+            f"the test did not end as the list says; its record's verdict is"
+            f" {record.get('verdict')!r}",
+        ]
+    return "PASS", [
+        *lines,
+        "every job that sent a changed block was refused, and every other job passed",
+    ]
+
+
+def judge_rehearsal(
+    entry: SwitchedOff,
+    found: dict[str, tuple[str, str]],
+    records: list[dict[str, Any]],
+    trouble: list[str],
+    *,
+    head: str,
+    rules: ModuleType,
+) -> tuple[str, list[str]]:
+    """REHEARSAL OK or REHEARSAL WRONG for an entry of the Claude API run on the fake provider.
+
+    The fake provider sends no `thinking` block, so the edit changes
+    nothing. The one outcome that is right: the test passes, and the run's
+    one record says no job sent a rebuilt block and none failed. Anything
+    else is a fault in the run's steps, found before a run that costs money.
+    """
+    wrong = list(trouble)
+    for expect in entry.expect:
+        result, _ = found.get(expect.node, ("not run", ""))
+        if result != "passed":
+            wrong.append(f"{expect.node}: {result}, expected passed")
+    if not trouble:
+        record = records[0]
+        wrong += not_this_run(
+            record, runs=entry.runs, provider="fake provider", model=rules.FAKE_MODEL, head=head
+        )
+        if record.get("verdict") != "passed":
+            void = f" ({record['void']})" if "void" in record else ""
+            wrong.append(f"the record's verdict is {record.get('verdict')!r}{void}, not 'passed'")
+        wrong += [
+            f"the record's {key} is {record.get(key)!r}, not 0"
+            for key in JUDGED
+            if _count(record, key) != 0
+        ]
+    if wrong:
+        return "REHEARSAL WRONG", wrong
+    return "REHEARSAL OK", [
+        f"{entry.runs} jobs on the fake provider: none sent a rebuilt thinking block,"
+        " all passed. Not a result."
+    ]
+
+
+def dispatch_problem(name: str, provider: str, model: str | None) -> str | None:
+    """Why the workflow's inputs do not start this entry, or None.
+
+    The entry names its provider and model. The inputs have to say the
+    same, so the job that runs and its name are the entry's.
+    """
     entry = ENTRIES[name]
+    if provider != entry.provider:
+        return f"{name} runs on provider {entry.provider}, not {provider}"
+    if entry.provider == "claude" and model != entry.model:
+        return f"{name} runs on model {entry.model}, not {model}"
+    return None
+
+
+def start_problem(name: str, asked: str, *, rehearsal: bool) -> str | None:
+    """Why this start is refused, or None. `asked` is SWITCHED_OFF_PROVIDER, `fake` if unset."""
+    entry = ENTRIES[name]
+    if rehearsal:
+        if entry.provider != "claude":
+            return f"{name} runs on the fake provider as it is: nothing to rehearse"
+        if asked != "fake":
+            return f"a rehearsal runs on the fake provider: unset {PROVIDER_VARIABLE}"
+        return None
+    if entry.provider == "claude" and asked != "claude":
+        return (
+            f"{name} runs on the Claude API and every job costs money: set"
+            f" {PROVIDER_VARIABLE}=claude, or rehearse it on the fake provider"
+        )
+    if entry.provider == "fake" and asked != "fake":
+        return f"{name} runs on the fake provider: unset {PROVIDER_VARIABLE}"
+    return None
+
+
+def without_keys(env: Mapping[str, str]) -> dict[str, str]:
+    return {name: value for name, value in env.items() if name not in KEY_VARIABLES}
+
+
+def child_environment(entry: SwitchedOff, provider: str, env: Mapping[str, str]) -> dict[str, str]:
+    """The environment of the stack and the tests of a run, made from the entry.
+
+    No inherited `KILLS_*` variable and no failpoint reaches them: the entry
+    alone names the provider, the model and the number of jobs. The key is
+    passed on only to a run on the Claude API.
+    """
+    dropped = ("FAILPOINT", PROVIDER_VARIABLE)
+    kept = {
+        name: value
+        for name, value in without_keys(env).items()
+        if not name.startswith("KILLS_") and name not in dropped
+    }
+    if provider == "claude" and "CLAUDE_API_KEY" in env:
+        kept["CLAUDE_API_KEY"] = env["CLAUDE_API_KEY"]
+    if entry.stack == "kills":
+        kept["KILLS_PROVIDER"] = provider
+        if provider == "claude" and entry.model is not None:
+            kept["KILLS_MODEL"] = entry.model
+        # Whichever test of the kill runs the entry names runs this many
+        # jobs, and the runner refuses one more.
+        for name in ("KILLS_RUNS", "KILLS_FAILPOINT_RUNS", "KILLS_JOB_LIMIT"):
+            kept[name] = str(entry.runs)
+    return kept
+
+
+def _sh(*args: str, env: Mapping[str, str]) -> None:
+    print("+", " ".join(args), flush=True)
+    subprocess.run(args, cwd=ROOT, check=True, env=dict(env))  # noqa: S603 - fixed commands
+
+
+def _git(*args: str) -> str:
+    done = subprocess.run(  # noqa: S603 - fixed commands
+        ["git", *args],  # noqa: S607
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+        env=without_keys(os.environ),
+    )
+    return done.stdout
+
+
+def run(name: str, *, rehearsal: bool = False) -> int:
+    entry = ENTRIES[name]
+    refused = start_problem(name, os.environ.get(PROVIDER_VARIABLE, "fake"), rehearsal=rehearsal)
+    if refused is not None:
+        print(f"not started: {refused}", file=sys.stderr)
+        return 2
+    provider = "fake" if rehearsal else entry.provider
+    if rehearsal:
+        print(f"rehearsal of {name} on the fake provider: not a result", flush=True)
     print(f"switched off: {name} (issue {entry.issue}): {entry.what}", flush=True)
-    changed = subprocess.run(
-        ["git", "status", "--porcelain", "--untracked-files=no"],  # noqa: S607
-        cwd=ROOT, capture_output=True, text=True, check=True,
-    ).stdout  # fmt: skip
+    changed = _git("status", "--porcelain", "--untracked-files=no")
     if changed:
         print(f"WRONG: the checkout has changes; the run would not be HEAD's code:\n{changed}")
         return 1
-    _sh("git", "rev-parse", "HEAD")
+    head = _git("rev-parse", "HEAD").strip()
+    print(f"commit {head}", flush=True)
+    env = child_environment(entry, provider, os.environ)
+    quiet = without_keys(env)
     texts = {edit.path: edited(edit) for edit in entry.edits}
     for path, text in texts.items():
         (ROOT / path).write_text(text)
-    _sh("git", "--no-pager", "diff", "--", *texts)
+    _sh("git", "--no-pager", "diff", "--", *texts, env=quiet)
     if entry.stack == "chaos":
         (ROOT / ".chaos").mkdir(exist_ok=True)
         # The chaos workers write their records here, as with `make chaos`.
         (ROOT / ".chaos").chmod(0o777)
         compose = ["-f", "docker-compose.yml", "-f", "docker-compose.chaos.yml"]
-        _sh("docker", "compose", *compose, "up", "--build", "--wait")
+        _sh("docker", "compose", *compose, "up", "--build", "--wait", env=env)
+    elif entry.stack == "kills":
+        compose = ["-f", "docker-compose.yml", "-f", "docker-compose.kills.yml"]
+        if provider == "claude":
+            # The one file that names the Claude API. It reads the key.
+            compose += ["-f", "docker-compose.claude.yml"]
+        _sh("docker", "compose", *compose, "up", "--build", "--wait", env=env)
     else:
-        _sh("make", "up")
+        _sh("make", "up", env=env)
     (ROOT / JUNIT).parent.mkdir(exist_ok=True)
+    (ROOT / JUNIT).unlink(missing_ok=True)
+    kept = ROOT / KILL_RECORDS
+    before = {found.name for found in kept.glob("*")}
     nodes = [expect.node for expect in entry.expect]
     pytest = ["uv", "run", "--frozen", "pytest", "-v", "-s", "-p", "no:cacheprovider"]
     command = [*pytest, f"--junitxml={JUNIT}", *nodes]
     # A fixed command; the node ids come from the list above.
-    tests = subprocess.run(command, cwd=ROOT, check=False)  # noqa: S603
+    tests = subprocess.run(command, cwd=ROOT, check=False, env=env)  # noqa: S603
     print(f"pytest exit {tests.returncode}", flush=True)
-    if not (ROOT / JUNIT).is_file():
-        print("WRONG: pytest wrote no results", flush=True)
-        return 1
-    lines = judge(entry, outcomes(ROOT / JUNIT))
-    print("\n".join(lines), flush=True)
-    return 1 if any(line.startswith("WRONG") for line in lines) else 0
+    found = outcomes(ROOT / JUNIT) if (ROOT / JUNIT).is_file() else {}
+    lines = judge(entry, found) if found else ["WRONG: pytest wrote no results"]
+    if entry.record is None:
+        print("\n".join(lines), flush=True)
+        return 1 if any(line.startswith("WRONG") for line in lines) else 0
+    records, trouble = new_records(kept, before, entry.record.test)
+    rules = kill_rules()
+    if rehearsal:
+        verdict, reasons = judge_rehearsal(entry, found, records, trouble, head=head, rules=rules)
+    else:
+        print("\n".join(lines), flush=True)
+        verdict, reasons = judge_record(entry, lines, records, trouble, head=head, rules=rules)
+    print("\n".join(reasons), flush=True)
+    print(f"{verdict}: {name}", flush=True)
+    return 0 if verdict in ("PASS", "REHEARSAL OK") else 1
 
 
 def main(argv: list[str]) -> int:
@@ -324,13 +739,28 @@ def main(argv: list[str]) -> int:
             problems = check()
             print("\n".join(problems) or "every edit matches once and compiles")
             return 1 if problems else 0
+        case ["dispatch", name, provider] if name in ENTRIES:
+            return _dispatch(name, provider, None)
+        case ["dispatch", name, provider, model] if name in ENTRIES:
+            return _dispatch(name, provider, model)
         case ["run", name] if name in ENTRIES:
             return run(name)
-        case ["run", _]:
+        case ["rehearse", name] if name in ENTRIES:
+            return run(name, rehearsal=True)
+        case ["run" | "rehearse" | "dispatch", _, *_]:
             print(f"not a switched-off run; one of: {', '.join(ENTRIES)}", file=sys.stderr)
             return 2
     print(__doc__, file=sys.stderr)
     return 2
+
+
+def _dispatch(name: str, provider: str, model: str | None) -> int:
+    problem = dispatch_problem(name, provider, model)
+    if problem is not None:
+        print(f"not started: {problem}", file=sys.stderr)
+        return 1
+    print(f"{name}: provider {provider}" + (f", model {model}" if provider == "claude" else ""))
+    return 0
 
 
 if __name__ == "__main__":
