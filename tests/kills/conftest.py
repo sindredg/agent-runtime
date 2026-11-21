@@ -27,10 +27,10 @@ import httpx2
 import pytest
 
 from .rules import (
-    API_JOB_LIMIT,
     TOKEN_BUDGET,
     Run,
     Settings,
+    errors_of_failed_jobs,
     jobs_taken_over,
     settings,
     thinking_record,
@@ -158,8 +158,9 @@ class Stack:
 
     def submit(self) -> str:
         """Submit the triage job with the session's model and the fixed budget."""
-        if self.settings.provider == "claude" and self.submitted >= API_JOB_LIMIT:
-            raise RuntimeError(f"{API_JOB_LIMIT} jobs were submitted to the Claude API: no more")
+        refused = self.settings.refusal(self.submitted)
+        if refused is not None:
+            raise RuntimeError(refused)
         self.submitted += 1
         body = {**EXAMPLE, "model": self.settings.model, "token_budget": TOKEN_BUDGET}
         job_id: str = self.api.post("/jobs", json=body).raise_for_status().json()["id"]
@@ -221,6 +222,7 @@ def totals(runs: list[Run]) -> dict[str, Any]:
         "jobs_with_more_than_one_issue_operation": sum(len(run.issues) > 1 for run in runs),
         "tokens_used": sum(run.job["tokens_used"] for run in runs),
         "most_tokens_in_one_job": max((run.job["tokens_used"] for run in runs), default=0),
+        "errors_of_failed_jobs": errors_of_failed_jobs(runs),
         **thinking_record(runs),
     }
 
