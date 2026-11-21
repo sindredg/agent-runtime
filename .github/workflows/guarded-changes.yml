@@ -1,0 +1,50 @@
+name: Guarded changes
+
+# What a pull request changed in the tests, in the switched-off list and in
+# what runs them has to be stated in the pull request's own text (ADR 0024).
+#
+# pull_request_target: this file and the script are main's copies, so a pull
+# request cannot change the check that judges it. That trigger is unsafe for
+# a job that runs a pull request's code. This one never does: the pull
+# request's commits are fetched under a name of their own and read with git,
+# as text. No step may check them out, install from them or import them.
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, edited]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: guarded-changes-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  guarded:
+    name: Guarded changes
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          # The whole history: the comparison starts where the two meet.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        with:
+          version: "0.13.8"
+          enable-cache: false
+      - name: Fetch the pull request's commits
+        env:
+          NUMBER: ${{ github.event.pull_request.number }}
+        run: git fetch --no-tags origin "+refs/pull/${NUMBER}/head:refs/remotes/pull/head"
+      # The Python of .python-version, so the files parse as they do in CI.
+      # --no-project and -I: nothing is installed, and no path of the
+      # checkout is on the import path. The script needs the standard
+      # library only.
+      - name: Compare with the pull request's text
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: >-
+          uv run --no-project --python "$(cat .python-version)"
+          python -I scripts/guarded_changes.py HEAD refs/remotes/pull/head --check
