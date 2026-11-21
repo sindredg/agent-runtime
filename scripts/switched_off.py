@@ -746,7 +746,7 @@ ENTRIES: dict[str, SwitchedOff] = {
     ),
     "halt-leaves-the-call-running": SwitchedOff(
         issue=158,
-        what="the cancel of a sandboxed call that is running when the job halts",
+        what="the cancel of a running sandboxed command when its call ends early, as on a halt",
         edits=(
             Edit(
                 SANDBOXED,
@@ -889,7 +889,7 @@ ENTRIES: dict[str, SwitchedOff] = {
     ),
     "workspace-timeout-off": SwitchedOff(
         issue=158,
-        what="the time box of the measurement before a command starts",
+        what="the time box of one measurement of the workspace",
         edits=(Edit(SANDBOXED, "async with asyncio.timeout(within):", "if True:  # switched off"),),
         stack="none",
         expect=(
@@ -901,7 +901,7 @@ ENTRIES: dict[str, SwitchedOff] = {
     ),
     "workspace-stop-signal-off": SwitchedOff(
         issue=158,
-        what="the signal that tells a walk to stop when its call ends",
+        what="the signal that tells a walk to stop past its time box or on a cancel",
         edits=(Edit(SANDBOXED, "        bounds.stop.set()\n", "        pass  # switched off\n"),),
         stack="none",
         expect=(

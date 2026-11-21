@@ -337,6 +337,7 @@ def test_a_refused_start_changes_nothing(
     monkeypatch.setattr(switched_off, "_git", reached)
     monkeypatch.setattr(switched_off, "_sh", reached)
     monkeypatch.setattr(switched_off, "edited", reached)
+    monkeypatch.setattr(switched_off, "edited_files", reached)
     monkeypatch.delenv("SWITCHED_OFF_PROVIDER", raising=False)
     if asked is not None:
         monkeypatch.setenv("SWITCHED_OFF_PROVIDER", asked)
@@ -356,6 +357,7 @@ def test_an_entry_over_its_bound_is_refused_at_the_start_too(
     monkeypatch.setattr(switched_off, "_git", reached)
     monkeypatch.setattr(switched_off, "_sh", reached)
     monkeypatch.setattr(switched_off, "edited", reached)
+    monkeypatch.setattr(switched_off, "edited_files", reached)
     monkeypatch.setenv("SWITCHED_OFF_PROVIDER", "claude")
     assert switched_off.run(NAME) == 2
     assert switched_off.main(["dispatch", NAME, "claude", "claude-fable-5-2"]) == 1
@@ -955,3 +957,36 @@ def test_each_entry_is_refused_off_main_and_checked_before_it_runs() -> None:
     entry = index(each, 'switched_off.py dispatch "$SWITCHED_OFF" fake')
     assert "rehears" not in job("fake-entries")
     assert entry < index(each, "run: make switched-off")
+
+
+@pytest.mark.parametrize(
+    ("name", "started"),
+    [("tool-timeout-off", [["make", "up"]]), ("workspace-walk-stop-off", [])],
+)
+def test_a_run_makes_every_edit_and_starts_only_its_stack(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, started: list[list[str]]
+) -> None:
+    """The edits are read from the checkout and written to `tmp_path`; nothing starts."""
+    entry = switched_off.ENTRIES[name]
+    for edit in entry.edits:
+        (tmp_path / edit.path).parent.mkdir(parents=True, exist_ok=True)
+    commands: list[list[str]] = []
+
+    def sh(*args: str, env: Any) -> None:
+        commands.append(list(args))
+
+    monkeypatch.setattr(switched_off, "ROOT", tmp_path)
+    monkeypatch.setattr(switched_off, "_git", lambda *args: "" if args[0] == "status" else HEAD)
+    monkeypatch.setattr(switched_off, "_sh", sh)
+    monkeypatch.setattr(
+        switched_off.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=1)
+    )
+    monkeypatch.delenv("SWITCHED_OFF_PROVIDER", raising=False)
+    # No junit file: the run is wrong, and has edited the files and started its stack.
+    assert switched_off.run(name) == 1
+    assert commands[0][:3] == ["git", "--no-pager", "diff"]
+    assert commands[1:] == started
+    expected = switched_off.edited_files(entry.edits, ROOT)
+    assert {path: (tmp_path / path).read_text() for path in expected} == expected
+    for edit in entry.edits:
+        assert edit.new in expected[edit.path]
