@@ -6,42 +6,17 @@ job, and runs the call only after an approval
 
 ## Ask, answer, run
 
-```mermaid
-sequenceDiagram
-    participant W1 as worker 1
-    participant D as postgres
-    participant P as person (CLI or API)
-    participant W2 as worker 2
-    W1->>D: step 7: approval_requested, no tool_intent
-    W1->>D: job to needs_approval
-    P->>D: reads question 7: the tool, its input, the reason
-    alt approve
-        P->>D: POST /approve {"question": 7}: approval_given, job to queued
-        W2->>D: claim, then tool_intent marked needs_approval
-        W2->>W2: runs the call once
-        W2->>D: tool_result
-    else deny
-        P->>D: POST /deny {"question": 7}: approval_denied, job to queued
-        W2->>D: claim, then an error tool_result marked denied
-        Note over W2: no intent, no run. The model is told.
-    else no answer
-        Note over D: the job is failed at its deadline
-    end
-```
+![A worker asks before recording a tool intent. Approval permits one run, denial skips the call, and a job still waiting at its deadline fails.](diagrams/tool-approval.svg)
 
-When a job waits at the gate, nothing of the call has happened: there is no
-intent.
+The CLI shows the tool, its input and the reason for the question. To answer,
+send the question number with `runtime approve` or `runtime deny`.
+See [a job that asks](usage.md#a-job-that-asks) for an example.
 
 ## Which calls are asked about
 
-```mermaid
-flowchart LR
-    T[The tool's definition<br/>sets needs_approval] --> O{either}
-    S[The job's spec names the tool<br/>in needs_approval] --> O
-    O --> A[Every call of the tool is asked about]
-```
+Every call needs approval if the tool sets `needs_approval` or the job
+lists the tool in `needs_approval`. The job cannot turn off the tool’s flag.
 
-- Either is enough. A spec has no way to say that a tool needs none.
 - A name in the spec that is not a tool of the claiming worker fails the job
   there, before anything starts. A misspelt name would gate nothing.
 - That also fails a job that a worker with fewer tools claims or takes over.
