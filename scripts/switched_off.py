@@ -494,9 +494,9 @@ def judge_record(
     """PASS, FINDING or INCONCLUSIVE for a run on the Claude API, and the reasons (ADR 0022).
 
     `tests` are the lines of `judge`. `records` and `trouble` are what
-    `new_records` found. Only PASS is a pass. A finding is recorded and
-    never run again until it passes. An inconclusive run shows nothing
-    either way.
+    `new_records` found. Only PASS is a pass. A finding is recorded, and
+    the entry is not run again or changed to make it pass. An
+    inconclusive run shows nothing either way.
     """
     if entry.record is None or entry.model is None:
         raise ValueError("only an entry with a record and a model is judged by its record")

@@ -63,9 +63,9 @@ Keyed entries in the list on `main`, judged by the kill runner's record.
   starts before the environment admits `main` only.
 - A start with the wrong provider or model asks the reviewer first and stops
   after. That costs one approval, and no tokens.
-- A finding is recorded and not run again until it passes. An inconclusive run
-  shows nothing, and is repeated only on a new decision, with the entry
-  unchanged. Two in a row mean the entry is redesigned.
+- A finding is recorded. The entry is not run again or changed to make it pass.
+  An inconclusive run shows nothing, and is repeated only on a new decision,
+  with the entry unchanged. Two in a row mean the entry is redesigned.
 - The must-fail run with the intent write removed has no entry yet. With `main`
   only, it cannot be repeated with the key
   ([issue 150](https://github.com/sindredg/agent-runtime/issues/150)).
