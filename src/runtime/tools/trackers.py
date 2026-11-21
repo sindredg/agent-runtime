@@ -9,6 +9,8 @@ The request that creates an issue goes through a client of its own, one that
 can be given up: the tool puts one deadline on the whole request (ADR 0025).
 """
 
+import socket
+import struct
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -21,6 +23,18 @@ TIMEOUT = 10.0
 
 # What replaces the network in tests. It serves both kinds of client.
 type Network = httpx2.MockTransport
+
+# For the connection of a request that can be given up: closing it drops what
+# the kernel has not sent yet, and resets the connection. Without it a
+# request that was written but not delivered is sent again by the kernel
+# after the close, for a minute or more, and can arrive long after it was
+# given up.
+ABORTIVE_CLOSE = (socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+
+
+def given_up_at_once(transport: Network | None) -> httpx2.AsyncBaseTransport:
+    """The transport of a client whose request can be given up."""
+    return transport or httpx2.AsyncHTTPTransport(socket_options=[ABORTIVE_CLOSE])
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,7 +91,9 @@ class FakeTracker:
         return httpx2.Client(base_url=self.url, timeout=TIMEOUT, transport=transport)
 
     def sender(self, transport: Network | None) -> httpx2.AsyncClient:
-        return httpx2.AsyncClient(base_url=self.url, timeout=TIMEOUT, transport=transport)
+        return httpx2.AsyncClient(
+            base_url=self.url, timeout=TIMEOUT, transport=given_up_at_once(transport)
+        )
 
     async def create(
         self, http: httpx2.AsyncClient, title: str, body: str, operation_id: str
@@ -169,7 +185,7 @@ class GiteaTracker:
             base_url=f"{self.url}/api/v1",
             headers=self._headers(),
             timeout=TIMEOUT,
-            transport=transport,
+            transport=given_up_at_once(transport),
         )
 
     async def create(

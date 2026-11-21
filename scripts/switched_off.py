@@ -966,7 +966,7 @@ ENTRIES: dict[str, SwitchedOff] = {
         edits=(
             Edit(
                 CREATE_ISSUE,
-                "async with asyncio.timeout(create_within), tracker.sender(transport) as http:",
+                "async with asyncio.timeout(within), tracker.sender(transport) as http:",
                 "async with tracker.sender(transport) as http:  # switched off",
             ),
         ),
@@ -980,6 +980,24 @@ ENTRIES: dict[str, SwitchedOff] = {
                 f"{CREATE_ISSUE_TESTS}"
                 "::test_an_issue_the_tracker_stored_before_the_deadline_passed_is_reported_as_created",
                 "assert slow.given_up",
+            ),
+        ),
+    ),
+    "abortive-close-off": SwitchedOff(
+        issue=103,
+        what="the reset of a given-up request's connection, which drops what was not sent yet",
+        edits=(
+            Edit(
+                "src/runtime/tools/trackers.py",
+                "httpx2.AsyncHTTPTransport(socket_options=[ABORTIVE_CLOSE])",
+                "httpx2.AsyncHTTPTransport()",
+            ),
+        ),
+        stack="none",
+        expect=(
+            Expect(
+                f"{CREATE_ISSUE_TESTS}::test_giving_a_request_up_resets_its_connection",
+                'assert server.ended == ["reset"]',
             ),
         ),
     ),

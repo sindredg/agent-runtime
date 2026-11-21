@@ -8,12 +8,13 @@ sequenceDiagram
     participant T as tracker
     participant D as postgres
     participant W2 as worker 2
+    Note over W1: reads its clock: the deadline is 10 s from here
     W1->>D: tool_intent, ends_within 12
-    W1->>T: POST, one deadline of 10 s
+    W1->>T: POST
     Note over W1: loses its lease, the request goes on
     W2->>D: claims the job
     Note over W2: waits until the intent plus 12 s,<br/>by the database clock
-    Note over W1,T: the request has arrived<br/>or was given up by now
+    Note over W1,T: the request has arrived, or was given up<br/>and its connection reset
     W2->>T: check: is the issue there?
 ```
 
@@ -48,8 +49,14 @@ The tool names a bound, and a takeover waits it out.
   starts by which it sends nothing more that changes the system behind it.
   The tool keeps to it itself.
 - `create_issue` puts one deadline of 10 s on the request that opens the
-  issue. Past it the request is cancelled and its connection closed. It
-  names 12 s: the deadline and 2 s for the two clocks.
+  issue. It counts from before the intent is written, where the wait counts
+  from: a call that gets to run late has less time, and with none left
+  sends nothing.
+- Past the deadline the request is cancelled and its connection reset. An
+  ordinary close is not enough: the kernel goes on sending a request that
+  was written and not delivered, for a minute or more. Tried with a path
+  that drops data: two issues with a close, one with a reset.
+- The tool names 12 s: the deadline, and 2 s for two clocks that differ.
 - The worker writes the number into `tool_intent`. A worker that takes the
   job over waits until that long after the intent, by the database clock,
   before it asks the tool's check. It is the wait of ADR 0008.
@@ -63,8 +70,12 @@ The tool names a bound, and a takeover waits it out.
 - Not covered: a request the tracker has received and stores later than the
   bound. A check cannot see a request that is still on its way (ADR 0019).
 - Not covered: a worker paused between its lease check and the start of the
-  call, the gap of [ADR 0004](0004-fence-writes-with-the-lease-epoch-and-a-row-lock.md).
-- The lookup that follows a request without an answer only reads. It has no
-  deadline of its own.
+  call, the gap of [ADR 0004](0004-fence-writes-with-the-lease-epoch-and-a-row-lock.md),
+  and a machine suspended during the call, whose clock stops with it.
+- The reset is shown for plain HTTP. Over TLS it is not tried.
+- A call that a worker of an earlier version started has no deadline. The
+  wait still applies to it, with nothing behind it.
+- The deadline bounds what is sent, not when the thread returns: a slow name
+  lookup, and the lookup of the issue afterwards, can take longer.
 - A new tool that changes something outside has to name a bound and keep to
   it. The runtime cannot check the promise.

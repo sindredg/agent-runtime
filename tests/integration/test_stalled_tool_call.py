@@ -14,18 +14,21 @@ import asyncio
 import copy
 import json
 import threading
+import time
 from dataclasses import dataclass
 from typing import Any, cast
 
 import httpx2
+import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from runtime.provider.base import ModelRequest, ModelResponse
 from runtime.provider.messages import AnthropicProvider
+from runtime.store import held
 from runtime.store.jobs import Job, claim_job, get_job
 from runtime.store.status import JobStatus
 from runtime.store.steps import Step, StepKind, read_steps
-from runtime.tools.base import ToolRegistry
+from runtime.tools.base import Tool, ToolCall, ToolRegistry, ToolResult
 from runtime.tools.create_issue import MARGIN, create_issue_tool
 from runtime.tools.trackers import FakeTracker
 from runtime.worker.agent import run_job
@@ -201,3 +204,39 @@ def test_a_request_given_up_at_its_deadline_is_sent_again_once(stack: Stack) -> 
     # Not asked, and so not sent again, before the bound had passed.
     waited = (second_intent.created_at - first_intent.created_at).total_seconds()
     assert waited >= 1.0 + MARGIN
+
+
+def test_the_tools_deadline_counts_from_before_its_intent_is_written(
+    stack: Stack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The takeover's wait counts from the intent. A slow write of it must not buy the call time."""
+    write = held.append_step
+
+    async def slow_for_an_intent(engine: AsyncEngine, **step: Any) -> Step:
+        if step["kind"] is K.TOOL_INTENT:
+            await asyncio.sleep(0.5)
+        return await write(engine, **step)
+
+    monkeypatch.setattr(held, "append_step", slow_for_an_intent)
+    behind: list[float] = []
+
+    def run(call: ToolCall) -> ToolResult:
+        assert call.started is not None
+        behind.append(time.monotonic() - call.started)
+        return ToolResult("created issue 1: CI is red")
+
+    schema = {"type": "object"}
+    tools = ToolRegistry([Tool("create_issue", "Open an issue.", schema, run, ends_within=12.0)])
+    script = Script()
+
+    async def body(engine: AsyncEngine, _: AnthropicProvider) -> JobStatus | None:
+        async with engine.begin() as conn:
+            await stack.create(conn, {"prompt": "report the failure"})
+            claimed = await claim_job(conn, worker_id="w1")
+        assert claimed is not None
+        return await run_job(engine, script, tools, claimed, stack.settings())
+
+    assert stack.run(body) is JobStatus.SUCCEEDED
+    # The tool sees how long ago its call began: the write of the intent is in it.
+    assert len(behind) == 1
+    assert behind[0] >= 0.5

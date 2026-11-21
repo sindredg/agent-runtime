@@ -218,8 +218,10 @@ def test_a_tool_in_the_worker_is_waited_for_as_long_as_it_says() -> None:
     assert _bound(in_worker(None), {}) is None
 
 
-@pytest.mark.parametrize("bound", [0, -1.0, math.inf, math.nan, LONGEST_TOOL_BOUND + 1])
-def test_a_tool_cannot_name_a_bound_that_is_no_length_of_time(bound: float) -> None:
+@pytest.mark.parametrize(
+    "bound", [0, -1.0, math.inf, math.nan, LONGEST_TOOL_BOUND + 1, True, "12", 10**400]
+)
+def test_a_tool_cannot_name_a_bound_that_is_no_length_of_time(bound: Any) -> None:
     with pytest.raises(ValueError, match="ends_within must be above 0"):
         in_worker(bound)
     assert in_worker(LONGEST_TOOL_BOUND).ends_within == LONGEST_TOOL_BOUND <= LONGEST_BOUND

@@ -1,8 +1,12 @@
 """The create_issue tool against a stubbed tracker."""
 
 import asyncio
+import dataclasses
 import json
+import threading
 import time
+from collections.abc import Iterator
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, cast
 
@@ -374,3 +378,95 @@ def test_the_tool_names_how_long_a_takeover_waits_for_its_request(tracker: Track
     # The deadline of the request, and a margin for the two clocks it is counted on.
     assert tool(tracker).ends_within == CREATE_WITHIN + MARGIN == 12.0
     assert slow_tool(Slow(tracker, 0.0), create_within=3.0).ends_within == 3.0 + MARGIN
+
+
+def test_a_call_that_got_to_run_late_has_that_much_less_time(tracker: Tracker) -> None:
+    # The takeover's wait counts from the intent, so the deadline does too:
+    # 4.7 of this call's 5 s were gone before its thread ran.
+    slow = Slow(tracker, seconds=5.0)
+    late = dataclasses.replace(CALL, started=time.monotonic() - 4.7)
+    started = time.monotonic()
+    result = slow_tool(slow, create_within=5.0).run(late)
+
+    assert time.monotonic() - started < 2.0
+    assert slow.given_up
+    assert result.content.startswith("the tracker did not answer within 5 s")
+
+
+def test_a_call_that_starts_past_its_deadline_sends_nothing(tracker: Tracker) -> None:
+    late = dataclasses.replace(CALL, started=time.monotonic() - 5.1)
+    result = slow_tool(Slow(tracker, seconds=0.0), create_within=5.0).run(late)
+
+    assert result == ToolResult(
+        "not sent: the call started too late to end within 5 s", is_error=True
+    )
+    assert tracker.requests == []
+    assert tracker.issues == []
+
+
+class Silent(ThreadingHTTPServer):
+    """A tracker on a real socket that takes a POST and never answers it.
+
+    It records how each such connection ended: `reset` when the client
+    dropped it, `end` when the client closed it in the ordinary way.
+    """
+
+    ended: list[str]
+
+    def __init__(self) -> None:
+        super().__init__(("127.0.0.1", 0), Waits)
+        self.ended = []
+        self.daemon_threads = True
+
+
+class Waits(BaseHTTPRequestHandler):
+    def do_POST(self) -> None:
+        self.rfile.read(int(self.headers["Content-Length"]))
+        server = cast(Silent, self.server)
+        try:
+            server.ended.append("end" if self.connection.recv(1) == b"" else "data")
+        except ConnectionResetError:
+            server.ended.append("reset")
+        self.close_connection = True
+
+    def do_GET(self) -> None:
+        body = b"[]"
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: Any) -> None:
+        return None
+
+
+@pytest.fixture
+def server() -> Iterator[Silent]:
+    with Silent() as made:
+        thread = threading.Thread(target=made.serve_forever, daemon=True)
+        thread.start()
+        yield made
+        made.shutdown()
+        thread.join(timeout=5)
+
+
+def test_giving_a_request_up_resets_its_connection(server: Silent) -> None:
+    """A real connection, no stand-in: what the kernel still holds must not go out later.
+
+    An ordinary close leaves a request that was written but not delivered
+    with the kernel, which sends it again for a minute or more. A reset
+    drops it.
+    """
+    url = f"http://127.0.0.1:{server.server_address[1]}"
+    started = time.monotonic()
+    result = create_issue_tool(FakeTracker(url), create_within=0.5).run(CALL)
+
+    assert result.content.startswith("the tracker did not answer within 0.5 s")
+    # The lookup that follows was answered: no issue.
+    assert result.is_error
+    deadline = time.monotonic() + 5
+    while not server.ended and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert server.ended == ["reset"]
+    assert time.monotonic() - started < 4.0

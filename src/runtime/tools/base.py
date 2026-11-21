@@ -5,7 +5,6 @@ tools that are runtime code. A `SandboxTool` (`runtime.tools.sandboxed`)
 turns the model's input into a command that runs in a container of its own.
 """
 
-import math
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from enum import Enum
@@ -51,6 +50,11 @@ class ToolCall:
     lease_epoch: int
     # The job's scope, resolved for this call (ADR 0009). None: no network.
     scope: Resolved | None = None
+    # The worker's monotonic clock just before the call's intent was written.
+    # A worker that takes the job over counts its wait from the intent, so a
+    # tool that names `ends_within` counts its own deadline from here, not
+    # from when its thread got to run (ADR 0025). None outside a worker.
+    started: float | None = None
 
 
 def operation_id(job_id: object, tool_use_id: str) -> str:
@@ -100,7 +104,10 @@ class Tool:
 
     def __post_init__(self) -> None:
         bound = self.ends_within
-        if bound is not None and not (math.isfinite(bound) and 0 < bound <= LONGEST_TOOL_BOUND):
+        # bool is an int in Python, and True is no length of time. The
+        # comparison is false for nan and for infinity, and takes any int.
+        real = isinstance(bound, int | float) and not isinstance(bound, bool)
+        if bound is not None and not (real and 0 < bound <= LONGEST_TOOL_BOUND):
             raise ValueError(
                 f"ends_within must be above 0 and at most {LONGEST_TOOL_BOUND:g}, got {bound!r}"
             )

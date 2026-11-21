@@ -554,6 +554,9 @@ async def _next_tool_call(
     if stop.is_set():
         return True
     halt.check()
+    # Read before the write: a worker that takes the job over counts from
+    # the intent, and the write itself can be slow.
+    call = dataclasses.replace(call, started=time.monotonic())
     await writer.append(StepKind.TOOL_INTENT, intent)
     failpoints.hit("after_tool_intent", takeovers=job.takeovers, tool=name)
     # And immediately before the run, in case the write was slow.
