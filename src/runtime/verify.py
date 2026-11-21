@@ -45,6 +45,10 @@ def _reason(error: BaseException) -> str:
     if isinstance(error, DBAPIError) and error.orig is not None:
         # The driver's own error is behind SQLAlchemy's adapter.
         cause = error.orig.__cause__ or error.orig
+    if isinstance(cause, TypeError) and "unexpected keyword argument" in str(cause):
+        # asyncpg names the query key it refused, which can be the tail of a
+        # password that was not URL-encoded.
+        return "TypeError: the URL has a query parameter the driver does not take"
     lines = str(cause).splitlines()
     return f"{type(cause).__name__}: {lines[0] if lines else ''}"
 

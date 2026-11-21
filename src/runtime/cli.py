@@ -14,11 +14,12 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import sys
 import time
 from collections.abc import Iterator, Sequence
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any, NoReturn, TextIO
 from uuid import UUID
 
 import httpx2
@@ -47,18 +48,39 @@ def _job_id(text: str) -> str:
     try:
         return str(UUID(text))
     except ValueError as error:
-        raise argparse.ArgumentTypeError(f"{text!r} is not a job id") from error
+        # The text is not repeated: a URL with a password typed in the wrong
+        # place would be printed whole.
+        raise argparse.ArgumentTypeError("not a job id") from error
 
 
 def _question(text: str) -> int:
     """A question is the number (`seq`) of a job's approval_requested step."""
     if not (text.isascii() and text.isdigit()) or not 1 <= int(text) <= 2**31 - 1:
-        raise argparse.ArgumentTypeError(f"{text!r} is not a question number")
+        raise argparse.ArgumentTypeError("not a question number")
     return int(text)
 
 
+class _Parser(argparse.ArgumentParser):
+    """argparse, without repeating the text it refused.
+
+    A database URL typed in the wrong place would be printed whole, password
+    included. The subcommands' parsers are of this class too.
+    """
+
+    def error(self, message: str) -> NoReturn:
+        if message.startswith(("unrecognized arguments", "ambiguous option")):
+            # These name the typed text without quotes.
+            message = message.split(":", 1)[0]
+        else:
+            # The others quote it with repr(): in single quotes, or in double
+            # quotes when it holds a single quote. Everything from the first
+            # quote on goes, the list of choices too; usage shows them.
+            message = re.sub(r"""['"].*""", "...", message, flags=re.DOTALL)
+        super().error(message)
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="runtime", description="Submit and inspect agent jobs.")
+    parser = _Parser(prog="runtime", description="Submit and inspect agent jobs.")
     parser.add_argument(
         "--api-url",
         default=os.environ.get("RUNTIME_API_URL", DEFAULT_API_URL),
