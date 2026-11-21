@@ -94,10 +94,10 @@ block is up to the model. Each `results.jsonl` line counts, and no count fails a
 
 ### A switched-off run on the Claude API
 
-`thinking-signature-changed` in `scripts/switched_off.py` changes the first
-character of each stored signature on every claim. It runs 5 jobs of the
-`after_tool_ran` test on `claude-fable-5-2`, at most 250,000 tokens
-([ADR 0022](adr/0022-run-switched-off-entries-on-the-claude-api-from-the-list.md)).
+`thinking-signature-changed` changes the first character of each stored
+signature on every claim. It runs 5 jobs of the `after_tool_ran` test on
+`claude-fable-5-2`, at most 250,000 counted tokens, [not a hard
+bound](limits.md#halt-and-budget) ([ADR 0022](adr/0022-run-switched-off-entries-on-the-claude-api-from-the-list.md)).
 
 ```mermaid
 flowchart LR

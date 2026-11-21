@@ -342,6 +342,26 @@ def test_a_refused_start_changes_nothing(
     assert switched_off.run(name, rehearsal=rehearsal) == 2
 
 
+def test_an_entry_over_its_bound_is_refused_at_the_start_too(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A list that CI did not check still cannot start a run past the bound."""
+    over = replace(KEYED, runs=6)
+    monkeypatch.setitem(switched_off.ENTRIES, NAME, over)
+
+    def reached(*args: str, **more: Any) -> str:
+        raise AssertionError(f"the run went on: {args}")
+
+    monkeypatch.setattr(switched_off, "_git", reached)
+    monkeypatch.setattr(switched_off, "_sh", reached)
+    monkeypatch.setattr(switched_off, "edited", reached)
+    monkeypatch.setenv("SWITCHED_OFF_PROVIDER", "claude")
+    assert switched_off.run(NAME) == 2
+    assert switched_off.main(["dispatch", NAME, "claude", "claude-fable-5-2"]) == 1
+    monkeypatch.delenv("SWITCHED_OFF_PROVIDER")
+    assert switched_off.run(NAME, rehearsal=True) == 2
+
+
 # The environment of a run
 
 INHERITED = {
@@ -399,7 +419,8 @@ def test_a_rehearsal_and_a_run_on_the_fake_provider_get_no_key() -> None:
     assert other == {"PATH": "/usr/bin", "DOCKER_GID": "999"}
 
 
-def test_git_never_gets_the_key() -> None:
+def test_the_scripts_own_git_commands_never_get_the_key() -> None:
+    # The kill runner's own git and docker commands do get it: they run in the tests.
     assert switched_off.without_keys(INHERITED).keys() == INHERITED.keys() - {
         "CLAUDE_API_KEY",
         "ANTHROPIC_API_KEY",

@@ -48,7 +48,8 @@ HALT = "tests/integration/test_halt_store.py"
 KILL_RULES = "tests/kills/rules.py"
 KILL_RUNS = "tests/kills/test_kill_runs.py"
 KILL_RECORDS = ".kills"
-# The most tokens an entry on the Claude API may spend: its jobs times the budget of each.
+# The most tokens the jobs of an entry on the Claude API may count: its jobs times
+# the budget of each. What the API bills can be more (docs/limits.md, halt and budget).
 KEYED_TOKEN_BOUND = 250_000
 # `run` starts an entry of the Claude API only when this says `claude`.
 PROVIDER_VARIABLE = "SWITCHED_OFF_PROVIDER"
@@ -673,6 +674,11 @@ def run(name: str, *, rehearsal: bool = False) -> int:
     if refused is not None:
         print(f"not started: {refused}", file=sys.stderr)
         return 2
+    # CI checks the list on every PR. A run checks its own entry again.
+    wrong = run_problems(entry)
+    if wrong:
+        print(f"not started: {'; '.join(wrong)}", file=sys.stderr)
+        return 2
     provider = "fake" if rehearsal else entry.provider
     if rehearsal:
         print(f"rehearsal of {name} on the fake provider: not a result", flush=True)
@@ -756,6 +762,8 @@ def main(argv: list[str]) -> int:
 
 def _dispatch(name: str, provider: str, model: str | None) -> int:
     problem = dispatch_problem(name, provider, model)
+    if problem is None and (wrong := run_problems(ENTRIES[name])):
+        problem = "; ".join(wrong)
     if problem is not None:
         print(f"not started: {problem}", file=sys.stderr)
         return 1

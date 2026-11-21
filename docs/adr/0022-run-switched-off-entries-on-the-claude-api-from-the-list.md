@@ -43,8 +43,9 @@ branch: its own workflow file, Makefile and tests, with the key after one approv
 Keyed entries in the list on `main`, judged by the kill runner's record.
 
 - An entry names its provider, model, stack and number of jobs. The check on
-  every PR refuses a keyed entry with a model the workflow does not offer, a
-  stack other than `kills`, or jobs that could spend more than 250,000 tokens.
+  every PR, and the script before a run, refuse a keyed entry with a model the
+  workflow does not offer, a stack other than `kills`, or budgets over 250,000
+  tokens in all ([not a hard bound](../limits.md#halt-and-budget)).
 - The workflow routes by the provider input. Before the step with the key, the
   keyed job refuses a ref other than `main`, and an entry whose provider or
   model is not the one picked.
