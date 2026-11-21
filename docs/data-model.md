@@ -6,30 +6,11 @@ tables.
 
 ## Job statuses
 
-```mermaid
-stateDiagram-v2
-    [*] --> queued: submit
-    queued --> running: claim
-    running --> succeeded: the model ended its turn
-    running --> failed: error, deadline, takeover limit
-    running --> needs_approval: a call needs a person
-    running --> queued: its worker was told to stop
-    running --> cancelled: cancel
-    running --> waiting: the provider is busy
-    waiting --> running: claim after not_before
-    waiting --> failed: deadline
-    waiting --> cancelled: cancel
-    needs_approval --> queued: approve or deny
-    needs_approval --> failed: deadline
-    needs_approval --> cancelled: cancel
-    queued --> failed: deadline
-    queued --> cancelled: cancel
-    succeeded --> [*]
-    failed --> [*]
-    cancelled --> [*]
-```
+![Jobs start queued, run under a lease, and can pause for approval or provider backoff. Final states are succeeded, failed and cancelled.](diagrams/job-lifecycle.svg)
 
-`waiting` is described in [Backoff](backoff.md).
+New jobs start in `queued`. A takeover changes the lease owner while the
+job stays `running`. Any open job can be cancelled or fail at its deadline.
+See [Approval](approval.md) and [Backoff](backoff.md) for the two ways a run can pause.
 
 ## Who moves a job
 
@@ -61,7 +42,7 @@ erDiagram
         bigint token_budget
         bigint tokens_used
         timestamptz deadline
-        timestamptz not_before "not used yet"
+        timestamptz not_before "earliest retry claim"
         text lease_owner
         timestamptz lease_expires_at
         int lease_epoch
