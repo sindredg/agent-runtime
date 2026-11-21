@@ -1,30 +1,33 @@
 # Architecture
 
-What is built, described from the code. Reasons are in the
-[decision records](adr/). Test results are in [Results](results/README.md).
+[Decision records](adr/) explain the design. [Results](results/README.md) give the evidence.
 
 ## Components
 
+![The CLI submits jobs through the API. Workers claim jobs in Postgres, call the model provider and start sandboxed tool containers.](diagrams/job-components.svg)
+
+<details>
+<summary>View as Mermaid</summary>
+
 ```mermaid
-flowchart LR
-    CLI[runtime CLI] -->|HTTP| API[api]
-    API --> DB[(postgres: jobs, steps)]
-    CLI -.->|runtime verify| DB
-    W1[worker] --> DB
-    W2[worker] --> DB
-    W1 -->|Messages API| P{{ANTHROPIC_BASE_URL}}
-    W2 --> P
-    P -.-> FP[fake-provider]
-    P -.-> CL[Claude API]
-    W1 --> WS[/workspace volume/]
-    W2 --> WS
-    W1 -->|create_issue| T[fake-tracker,<br/>or Gitea in the lab]
-    W2 --> T
-    W1 -->|Docker socket| D[Docker]
-    D --> C[tool container, one per call]
-    C --> WS
-    M[migrate] --> DB
+---
+config:
+  htmlLabels: false
+  flowchart:
+    padding: 8
+    nodeSpacing: 20
+---
+flowchart TD
+    accTitle: Components that run a job
+    accDescr: The CLI submits a job through the API. Workers claim jobs and record steps in Postgres, call the model provider and start containers for sandboxed tools.
+    CLI[CLI] -->|Submit job| API[API]
+    API -->|Queue job| DB[(Postgres<br/>Jobs and steps)]
+    W[Worker<br/>one or more] -->|Claim job<br/>Record steps| DB
+    W -->|Call model| P[Model provider]
+    W -->|Start via Docker| S[Sandboxed tool<br/>container]
 ```
+
+</details>
 
 | Component | Code | What it does |
 |---|---|---|

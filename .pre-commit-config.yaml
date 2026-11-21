@@ -27,6 +27,11 @@ repos:
         entry: uv run --frozen python scripts/lint_json.py
         language: system
         types: [json]
+      - id: svg
+        name: SVG syntax
+        entry: uv run --frozen python scripts/lint_svg.py
+        language: system
+        types: [svg]
       - id: docs
         name: docs limits
         # Page length, paragraph and table cell length, a diagram per page,

@@ -1,52 +1,43 @@
 # agent-runtime
 
-A platform that runs long AI agent jobs. An agent calls the model, runs a
-tool, records the result, and repeats. Every step is written to a log in
-Postgres. When a worker goes away in the middle of a job, another worker
-continues it from that log.
+A worker runs an AI agent job by calling a model, running tools and recording
+each step in Postgres. If the worker stops, another worker can claim the
+same job when its lease expires and continue from the step log.
+
+![Worker A records a step and stops. After its lease expires, worker B claims the job and resumes from the step log.](docs/diagrams/worker-handoff.svg)
+
+<details>
+<summary>View as Mermaid</summary>
 
 ```mermaid
-flowchart LR
-    U[runtime CLI] -->|submit, follow| API[api]
-    H[a person] -->|approve, deny, cancel| API
-    API --> DB[(Postgres:<br/>jobs and the step log)]
-    W1[worker] -->|lease and steps| DB
-    W2[another worker] -.->|takes over when<br/>the lease runs out| DB
-    W1 --> M[model provider]
-    W1 --> T[tool call in a container,<br/>network limited to the job's scope]
+---
+config:
+  sequence:
+    width: 92
+    actorMargin: 18
+    diagramMarginX: 6
+    mirrorActors: false
+---
+sequenceDiagram
+    accTitle: How a job survives its worker
+    accDescr: Worker A records a step and stops. After its lease expires, worker B claims the job and reads its recorded steps to continue.
+    participant A as Worker A
+    participant DB as Postgres
+    participant B as Worker B
+    A->>DB: Record a step
+    Note over A: Worker stops
+    Note over DB: Lease expires
+    B->>DB: Claim the job
+    B->>DB: Read step log
+    Note over B: Resume job
 ```
 
-## What is built
-
-- **A job survives its worker.** A worker holds a job through a lease. When
-  the lease runs out, another worker resumes the job from the step log.
-- **A worker that lost its job cannot write to it.** Its writes are refused.
-- **An interrupted tool call runs again only when that is safe.** Otherwise
-  the job waits for a person to approve or deny.
-- **Shell commands run in a sandbox.** Each call gets a container of its
-  own, with no network unless the job has a scope.
-- **A scope is enforced by a firewall the command cannot change.** A job
-  reaches its targets and nothing else.
-- **A tool call can wait for a person** before it runs.
-- **A job can be cancelled**, is failed at its deadline, and stays inside its
-  token budget.
-- **A busy provider slows a job, it does not fail it.** A rate limit or
-  overload makes the job wait, then it goes on.
-- **A change to the step log is refused or found.** Each step is chained by
-  hash, and `runtime verify` recomputes the chain. Its limits are in
-  [Hash chain](docs/step-log-chain.md#what-it-does-not-catch).
-
-Not built: retry on other provider errors, and a limit on provider calls
-shared by workers. Everything else that is missing or accepted is in
-[Known limits](docs/limits.md).
-
-Locally the model provider is a fake that answers from scenario files, so
-nothing here calls a paid API.
+</details>
 
 ## Quickstart
 
 Requires [uv](https://docs.astral.sh/uv/), Docker with Compose, make, and
-Linux: `make` reads the group of `/var/run/docker.sock` with GNU `stat`.
+Linux with GNU `stat` for the Docker socket group. The quickstart uses a local fake provider.
 
 ```sh
 git clone https://github.com/sindredg/agent-runtime.git
@@ -70,11 +61,18 @@ file. The output is the job id, one line per step, and the outcome:
 succeeded  tokens_used=1079
 ```
 
-The text of the two responses is scripted in the fake provider. The tool call
-and its result are real: the worker read the file.
+The fake provider scripts the model responses. The worker reads
+`hello.txt` from the job workspace and records its contents in `tool_result`.
 
 Next: [the other examples, job files and the CLI](docs/usage.md). `make
 clean` stops the stack and deletes its database.
+
+## What is built
+
+Jobs can wait for approval, run shell commands in a sandbox and enforce
+token budgets and deadlines. See [Architecture](docs/architecture.md) for
+how the pieces fit together and [Known limits](docs/limits.md) for the
+boundaries of each guarantee.
 
 ## Results
 

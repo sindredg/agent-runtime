@@ -135,6 +135,7 @@ started by hand with a key: [The contract test](contract-test.md).
 | `uv run mypy` | Type check (strict) |
 | `uv run yamllint --strict .` | Lint YAML |
 | `uv run python scripts/lint_json.py <files>` | Check JSON syntax |
+| `uv run python scripts/lint_svg.py <files>` | Check SVG syntax |
 | `uv run python scripts/lint_docs.py <files>` | Check the limits of the Markdown pages |
 | `uv run pre-commit install` | Run the checks above before each commit. It does not run tests. |
 | `uv run alembic upgrade head --sql` | Print the schema's SQL from `migrations/`. Needs `DATABASE_URL` set, not a database. |
