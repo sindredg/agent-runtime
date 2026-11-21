@@ -28,7 +28,10 @@ flowchart LR
     A4 --> A23[0023 a running job<br/>has a lease]
     A5 --> A25[0025 a tool's request<br/>is waited out]
     A8 --> A25
-    A3[0003 SDK and<br/>a fake provider]
+    A3[0003 SDK and<br/>a fake provider] --> A26[0026 Python<br/>on asyncio]
+    A4 --> A26
+    A11 --> A27[0027 an API without<br/>authentication]
+    A10 --> A28[0028 the whole<br/>conversation, every time]
 ```
 
 An arrow means the later record builds on, or follows from, the earlier one.
@@ -59,6 +62,11 @@ An arrow means the later record builds on, or follows from, the earlier one.
 | [0022](0022-run-switched-off-entries-on-the-claude-api-from-the-list.md) | Run switched-off entries on the Claude API from the reviewed list | Yes, [run once](../results/kill-runs.md#with-the-stored-signature-changed) on `claude-fable-5-2` |
 | [0023](0023-a-running-job-has-a-lease.md) | A `running` job has a lease, and the database refuses one without | Yes, migration 0009 |
 | [0025](0025-a-tool-in-the-worker-names-how-long-its-request-can-arrive.md) | A tool in the worker names how long its request can still arrive, and a takeover waits that long | [Yes](../interrupted-calls.md#before-the-decision-a-tool-in-the-worker), for `create_issue` |
+| [0026](0026-python-on-asyncio-with-the-sql-written-out.md) | Write the runtime in Python on asyncio, with the SQL written out | Yes |
+| [0027](0027-an-api-without-authentication-on-localhost.md) | The API has no authentication and answers on localhost only | Yes |
+| [0028](0028-send-the-whole-conversation-and-fail-past-the-context-window.md) | Send the whole conversation every time, and fail a job that outgrows the context window | Yes |
+
+There is no record 0024: it was withdrawn before anything was built.
 
 Each record states what was built at the time it was written. What is built
 now is described in [Architecture](../architecture.md).
