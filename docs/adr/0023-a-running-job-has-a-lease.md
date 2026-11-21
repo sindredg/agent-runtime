@@ -1,6 +1,6 @@
 # 0023: A running job has a lease, and the database refuses one without
 
-Status: proposed, 2026-11-21. Follows [ADR 0004](0004-fence-writes-with-the-lease-epoch-and-a-row-lock.md). Nothing is built yet.
+Status: accepted, 2026-11-21. Follows [ADR 0004](0004-fence-writes-with-the-lease-epoch-and-a-row-lock.md). Nothing is built yet.
 
 ```mermaid
 flowchart TD
@@ -86,5 +86,6 @@ reader depends on that.
 - Same database: the claim statement, as the runtime renders it, `cancelled`
   the repaired row. Three plain `ADD CONSTRAINT` runs took 0.2 to 0.4 s on
   1,000,003 rows (558 MB). The [chaos run](../results/README.md) left 421 jobs.
-- Not decided here: a `waiting` job without `not_before`. The claim passes it
-  over too, but a cancel and the deadline sweep still end it.
+- Accepted limit: nothing refuses a `waiting` job without `not_before`. No
+  writer makes one. The claim passes it over, but a cancel and the deadline
+  sweep still end it.
