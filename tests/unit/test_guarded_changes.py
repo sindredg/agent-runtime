@@ -303,6 +303,13 @@ def test_a_removed_and_a_changed_entry_are_named() -> None:
     assert in_list(THE_LIST.replace('"spent <= BUDGET"', "None")) == ["- changed entry: budget-off"]
 
 
+def test_an_entrys_name_is_printed_as_one_line_without_markup() -> None:
+    odd = THE_LIST.replace('"resume-off"', '"a<!--\\n- removed entry: budget-off"')
+    assert lines(odd, THE_LIST, "scripts/switched_off.py") == [
+        "- removed entry: a\\x3c!--\\n- removed entry: budget-off"
+    ]
+
+
 def test_an_added_entry_is_not_listed() -> None:
     added = THE_LIST.replace(
         '"resume-off"', '"cap-off": SwitchedOff(issue=3, expect=()),\n        "resume-off"'

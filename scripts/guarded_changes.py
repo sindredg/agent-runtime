@@ -70,6 +70,22 @@ _HTML = re.compile(r"<[A-Za-z/!?]")
 _TEST_NAME = ("test", "Test")
 
 
+# Never printed as they are: they could start HTML in the pull request's text.
+_MARKUP = "<>&"
+
+
+def _plain(text: str) -> str:
+    """Text from a pull request as part of one line: no line end, control character or markup."""
+    return "".join(
+        f"\\x{ord(c):02x}"
+        if c in _MARKUP
+        else c
+        if c.isprintable()
+        else c.encode("unicode_escape").decode()
+        for c in text
+    )
+
+
 class Unreadable(Exception):
     """A file does not parse, or has not the shape the comparison needs."""
 
@@ -246,9 +262,10 @@ def entry_list(source: bytes) -> EntryList:
         for key, item in zip(value.keys, value.values, strict=True):
             if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
                 raise Unreadable(f"a key of {ENTRIES} is not a string")
-            if key.value in entries:
+            if _plain(key.value) in entries:
                 raise Unreadable(f"{ENTRIES} names {key.value!r} twice")
-            entries[key.value] = ast.dump(item)
+            # The name goes into a line of the section.
+            entries[_plain(key.value)] = ast.dump(item)
     if entries is None:
         raise Unreadable(f"no {ENTRIES}")
     return EntryList(entries, repr(rest))
@@ -409,21 +426,11 @@ def _commit(repo: Path, name: str) -> str:
 
 LINK_MODE = "120000"
 LINK = b"link to "
-# Never printed as they are: they could start HTML in the pull request's text.
-_MARKUP = "<>&"
 
 
 def _shown(path: bytes) -> str:
     """A path as one printable line: other bytes and characters are written as escapes."""
-    text = path.decode("utf-8", "backslashreplace")
-    return "".join(
-        f"\\x{ord(c):02x}"
-        if c in _MARKUP
-        else c
-        if c.isprintable()
-        else c.encode("unicode_escape").decode()
-        for c in text
-    )
+    return _plain(path.decode("utf-8", "backslashreplace"))
 
 
 def _blobs(repo: Path, commit: str) -> dict[str, tuple[str, str]]:
