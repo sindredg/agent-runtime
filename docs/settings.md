@@ -125,7 +125,7 @@ admin) from the shell, and compose reads the port from `.env` too.
 | Variable | Default | Meaning |
 |---|---|---|
 | `KILLS_PROVIDER` | `fake` | `fake` or `claude`. The make targets set it. |
-| `KILLS_MODEL` | none | The model id. Required on the Claude API, refused on the fake provider. |
+| `KILLS_MODEL` | none | The model id, `claude-` then lower-case letters, digits, dots and hyphens. Required on the Claude API, refused on the fake provider. |
 | `KILLS_RUNS` | 20 | Jobs with a kill at a random time |
 | `KILLS_FAILPOINT_RUNS` | 5 | Jobs per failpoint |
 | `KILLS_SEED` | `20261119` | Fixes each kill time as a fraction of the window |

@@ -111,12 +111,22 @@ jobs:
       SUITE: ${{ inputs.suite }}
       MODEL: ${{ inputs.model }}
     steps:
+      # Only the choice values can reach here today. The check keeps it so if
+      # the input ever becomes free text. `case` tests the whole string: grep
+      # would pass a value with one good line among others.
+      - name: Check the model name
+        run: |
+          case "$MODEL" in claude-?*) ;; *) echo "Not a model id." >&2; exit 1;; esac
+          case "$MODEL" in *[!a-z0-9.-]*) echo "Not a model id." >&2; exit 1;; esac
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
+      # No uv cache in the job that holds the key: nothing another run saved
+      # is restored here, and nothing is saved from here.
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
         with:
           version: "0.13.8"
+          enable-cache: false
       - run: uv sync --locked
       - name: Docker socket group
         run: echo "DOCKER_GID=$(stat -c %g /var/run/docker.sock)" >> "$GITHUB_ENV"
