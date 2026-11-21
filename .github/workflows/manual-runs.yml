@@ -182,9 +182,9 @@ jobs:
           if [ "$SUITE" = kills-after-tool-ran ]; then export KILLS_TESTS=after_tool_ran; fi
           make kills-claude KILLS_MODEL="$MODEL"
       # The key is given to this step only. The script hands it to the stack
-      # and the tests, not to git, and starts such an entry only when
-      # SWITCHED_OFF_PROVIDER says so. It prints the edit, the commit, a
-      # verdict per test, and PASS, FINDING or INCONCLUSIVE.
+      # and the tests, runs its own git commands without it, and starts such
+      # an entry only when SWITCHED_OFF_PROVIDER says so. It prints the edit,
+      # the commit, a verdict per test, and PASS, FINDING or INCONCLUSIVE.
       - name: Switched-off run on the Claude API
         if: inputs.suite == 'switched-off'
         env:

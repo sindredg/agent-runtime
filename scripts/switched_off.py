@@ -52,7 +52,7 @@ KILL_RECORDS = ".kills"
 KEYED_TOKEN_BOUND = 250_000
 # `run` starts an entry of the Claude API only when this says `claude`.
 PROVIDER_VARIABLE = "SWITCHED_OFF_PROVIDER"
-# Never passed on to a run on the fake provider, and never to git.
+# Never passed on to a run on the fake provider, nor to this script's own git commands.
 KEY_VARIABLES = ("CLAUDE_API_KEY", "ANTHROPIC_API_KEY")
 # The counts of a kill runner's record that a `Refusals` entry is judged by.
 SENT = "jobs_that_sent_a_rebuilt_thinking_block"

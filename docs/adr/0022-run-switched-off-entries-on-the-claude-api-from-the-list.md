@@ -50,7 +50,7 @@ Keyed entries in the list on `main`, judged by the kill runner's record.
   model is not the one picked.
 - The script starts a keyed entry only with `SWITCHED_OFF_PROVIDER=claude`. It
   builds the run's settings from the entry, and gives the key to the stack and
-  the tests, not to git. The kill runner refuses a job past the entry's number.
+  the tests only. The kill runner refuses a job past the entry's number.
 - The verdict is PASS, FINDING or INCONCLUSIVE:
   [how a run is judged](../kill-runs.md#a-switched-off-run-on-the-claude-api).
 - `rehearse` runs a keyed entry on the fake provider, with no key. It checks

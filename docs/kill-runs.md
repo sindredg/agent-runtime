@@ -111,11 +111,11 @@ flowchart LR
 - PASS: the test fails on `assert not failures`, and the run's one record
   says `failed`. At least 3 jobs sent a changed block, each was refused,
   and every other job passed.
-- FINDING: a job was answered after it sent a changed block, or a job failed
-  another way. A 400 that says "bound to a different conversation" is such
-  a failure. It is recorded, and not run again until it passes.
+- FINDING: a job was answered after it sent a changed block, a job failed
+  another way, or the test did not end as listed. A 400 that says "bound to
+  a different conversation" is such a failure. Recorded, never rerun to pass.
 - INCONCLUSIVE: fewer than 3 jobs sent a changed block, the run is void, or
-  it left no record of its own.
+  it left no one record that is its own.
 
 Refused means: failed on the 400 that names the `signature` of a `thinking`
 block, with no model response after that claim. `make switched-off-rehearsal`
