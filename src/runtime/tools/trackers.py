@@ -4,8 +4,13 @@ Each tracker can create an issue that carries the call's operation id, and
 find that issue again by the id. The fake tracker stores the id as a field.
 Gitea has no such field, so the id goes into the issue's last body line, and
 the lookup lists issues instead of searching (ADR 0019).
+
+The request that creates an issue goes through a client of its own, one that
+can be given up: the tool puts one deadline on the whole request (ADR 0025).
 """
 
+import socket
+import struct
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -15,6 +20,26 @@ from runtime.config import TrackerConfig
 
 # Seconds for one request to the tracker.
 TIMEOUT = 10.0
+
+# What replaces the network in tests. It serves both kinds of client.
+type Network = httpx2.MockTransport
+
+# For the connection of a request that can be given up: closing it drops what
+# the kernel has not sent yet, and resets the connection. Without it a
+# request that was written but not delivered is sent again by the kernel
+# after the close, for a minute or more, and can arrive long after it was
+# given up. The option is the socket's, so a request that was answered ends
+# with a reset too: a tracker may log one for each issue.
+ABORTIVE_CLOSE = (socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+
+
+def given_up_at_once(transport: Network | None) -> httpx2.AsyncBaseTransport:
+    """The transport of a client whose request can be given up.
+
+    A transport of its own does not go through a proxy named in the
+    environment, which the client for reading does.
+    """
+    return transport or httpx2.AsyncHTTPTransport(socket_options=[ABORTIVE_CLOSE])
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,11 +60,17 @@ class Unclear(Exception):
 
 
 class Tracker(Protocol):
-    def client(self, transport: httpx2.BaseTransport | None) -> httpx2.Client:
-        """A client for the tracker. `transport` replaces the network in tests."""
+    def client(self, transport: Network | None) -> httpx2.Client:
+        """A client for reading from the tracker. `transport` replaces the network in tests."""
         ...
 
-    def create(self, http: httpx2.Client, title: str, body: str, operation_id: str) -> Issue:
+    def sender(self, transport: Network | None) -> httpx2.AsyncClient:
+        """A client for the request that opens an issue. Giving the request up closes it."""
+        ...
+
+    async def create(
+        self, http: httpx2.AsyncClient, title: str, body: str, operation_id: str
+    ) -> Issue:
         """Open the issue. Raises `Refused`, `httpx2.HTTPError`, or on a malformed answer
         `ValueError`, `LookupError` or `TypeError`."""
         ...
@@ -61,11 +92,19 @@ class FakeTracker:
 
     url: str
 
-    def client(self, transport: httpx2.BaseTransport | None) -> httpx2.Client:
+    def client(self, transport: Network | None) -> httpx2.Client:
         return httpx2.Client(base_url=self.url, timeout=TIMEOUT, transport=transport)
 
-    def create(self, http: httpx2.Client, title: str, body: str, operation_id: str) -> Issue:
-        response = http.post(
+    def sender(self, transport: Network | None) -> httpx2.AsyncClient:
+        # No timeout per step: the tool's one deadline covers the whole request.
+        return httpx2.AsyncClient(
+            base_url=self.url, timeout=None, transport=given_up_at_once(transport)
+        )
+
+    async def create(
+        self, http: httpx2.AsyncClient, title: str, body: str, operation_id: str
+    ) -> Issue:
+        response = await http.post(
             "/issues", json={"title": title, "body": body, "operation_id": operation_id}
         )
         if response.status_code != 201:
@@ -136,16 +175,29 @@ class GiteaTracker:
     repo: str
     token: str = field(repr=False)
 
-    def client(self, transport: httpx2.BaseTransport | None) -> httpx2.Client:
+    def _headers(self) -> dict[str, str]:
+        return {"Authorization": f"token {self.token}", "Accept": "application/json"}
+
+    def client(self, transport: Network | None) -> httpx2.Client:
         return httpx2.Client(
             base_url=f"{self.url}/api/v1",
-            headers={"Authorization": f"token {self.token}", "Accept": "application/json"},
+            headers=self._headers(),
             timeout=TIMEOUT,
             transport=transport,
         )
 
-    def create(self, http: httpx2.Client, title: str, body: str, operation_id: str) -> Issue:
-        response = http.post(
+    def sender(self, transport: Network | None) -> httpx2.AsyncClient:
+        return httpx2.AsyncClient(
+            base_url=f"{self.url}/api/v1",
+            headers=self._headers(),
+            timeout=None,
+            transport=given_up_at_once(transport),
+        )
+
+    async def create(
+        self, http: httpx2.AsyncClient, title: str, body: str, operation_id: str
+    ) -> Issue:
+        response = await http.post(
             f"/repos/{self.repo}/issues",
             json={"title": title, "body": marked(body, operation_id)},
         )

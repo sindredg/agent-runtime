@@ -50,6 +50,11 @@ class ToolCall:
     lease_epoch: int
     # The job's scope, resolved for this call (ADR 0009). None: no network.
     scope: Resolved | None = None
+    # The worker's monotonic clock just before the call's intent was written.
+    # A worker that takes the job over counts its wait from the intent, so a
+    # tool that names `ends_within` counts its own deadline from here, not
+    # from when its thread got to run (ADR 0025). None outside a worker.
+    started: float | None = None
 
 
 def operation_id(job_id: object, tool_use_id: str) -> str:
@@ -70,6 +75,9 @@ class CheckOutcome(Enum):
 # A check answers with the call's result when the call already happened.
 type CheckAnswer = ToolResult | CheckOutcome
 
+# The longest `ends_within` a tool may name: a day, as for a sandboxed call.
+LONGEST_TOOL_BOUND = 86_400.0
+
 
 @dataclass(frozen=True, slots=True)
 class Tool:
@@ -88,6 +96,21 @@ class Tool:
     # True when no call of the tool runs before a person approved it (ADR
     # 0011). A job's spec can ask for the same; it cannot take this away.
     needs_approval: bool = False
+    # Seconds after a call starts by which it sends nothing more that changes
+    # the system behind it (ADR 0025). The tool keeps to it itself: it runs in
+    # a thread, which nobody can stop. A worker that takes the job over waits
+    # that long after the intent before it asks `check`. None: no wait.
+    ends_within: float | None = None
+
+    def __post_init__(self) -> None:
+        bound = self.ends_within
+        # bool is an int in Python, and True is no length of time. The
+        # comparison is false for nan and for infinity, and takes any int.
+        real = isinstance(bound, int | float) and not isinstance(bound, bool)
+        if bound is not None and not (real and 0 < bound <= LONGEST_TOOL_BOUND):
+            raise ValueError(
+                f"ends_within must be above 0 and at most {LONGEST_TOOL_BOUND:g}, got {bound!r}"
+            )
 
     def definition(self) -> dict[str, Any]:
         return tool_definition(self.name, self.description, self.input_schema)

@@ -8,14 +8,28 @@ The tracker is the fake tracker or Gitea (`runtime.tools.trackers`).
 The run uses the same lookup when its request got no answer. The tracker may
 have stored the issue by then, and a model that is told the call failed may
 make it again: a new call, which no operation id connects to the first.
+
+The request that opens the issue has one deadline, counted from before the
+call's intent was written. Past it the request is given up and its
+connection reset, so a worker that takes the job over knows how long to wait
+before it asks the tracker (ADR 0025).
 """
 
+import asyncio
 import re
+import time
 
 import httpx2
 
 from runtime.tools.base import CheckAnswer, CheckOutcome, Tool, ToolCall, ToolResult
-from runtime.tools.trackers import Issue, Refused, Tracker
+from runtime.tools.trackers import Issue, Network, Refused, Tracker
+
+# Seconds for the request that opens an issue: connecting, sending and the
+# answer. Counted from before the intent was written.
+CREATE_WITHIN = 10.0
+# Added for the worker that takes the job over. Its wait is counted on the
+# database's clock, the deadline on this worker's: the two may differ in rate.
+MARGIN = 2.0
 
 # The characters an operation id may have here. A tracker finds the issue by
 # the id, so an id with a space or a line break could match another call's.
@@ -32,8 +46,27 @@ def _created(issue: Issue, title: str) -> ToolResult:
     return ToolResult(f"created issue {issue.number}: {title}")
 
 
-def create_issue_tool(tracker: Tracker, *, transport: httpx2.BaseTransport | None = None) -> Tool:
+def create_issue_tool(
+    tracker: Tracker, *, transport: Network | None = None, create_within: float = CREATE_WITHIN
+) -> Tool:
     """The tool, for `tracker`. `transport` replaces the network in tests."""
+
+    def time_left(call: ToolCall) -> float:
+        """Seconds the request may still take.
+
+        The takeover's wait counts from the intent. A call that got to run
+        late, behind a slow write of the intent or a busy thread pool, has
+        that much less.
+        """
+        if call.started is None:
+            return create_within
+        return call.started + create_within - time.monotonic()
+
+    async def send(title: str, body: str, operation_id: str, within: float) -> Issue:
+        # One deadline for the whole request. Past it the request is
+        # cancelled and its connection reset: what was not sent yet is dropped.
+        async with asyncio.timeout(within), tracker.sender(transport) as http:
+            return await tracker.create(http, title, body, operation_id)
 
     def sendable(call: ToolCall) -> tuple[str, str] | None:
         """The title and body the run sends, or None for input it sends nothing for."""
@@ -51,9 +84,18 @@ def create_issue_tool(tracker: Tracker, *, transport: httpx2.BaseTransport | Non
         title, body = sent
         if not _SENDABLE_ID.fullmatch(call.operation_id):
             return ToolResult("the call's id has characters a tracker cannot match", True)
+        left = time_left(call)
+        if left <= 0:
+            # Nothing is sent, so there is nothing to look up.
+            return ToolResult(
+                f"not sent: the call started too late to end within {create_within:g} s", True
+            )
         try:
-            with tracker.client(transport) as http:
-                return _created(tracker.create(http, title, body, call.operation_id), title)
+            # This runs in a thread of the worker, which has no event loop of its own.
+            return _created(asyncio.run(send(title, body, call.operation_id, left)), title)
+        except TimeoutError:
+            # Given up at the deadline. The tracker may have stored the issue.
+            return look_up(call, f"the tracker did not answer within {create_within:g} s")
         except Refused as error:
             if 400 <= error.status < 500:
                 # The tracker refused the request: no issue.
@@ -117,4 +159,5 @@ def create_issue_tool(tracker: Tracker, *, transport: httpx2.BaseTransport | Non
         # Running it twice opens two issues.
         idempotent=False,
         check=check,
+        ends_within=create_within + MARGIN,
     )

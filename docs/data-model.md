@@ -123,7 +123,7 @@ Fields that are present only in some steps:
 | `problem` | `model_response` | The response cannot be used |
 | `content_dropped` | `model_response` | The content could not be stored and was replaced by an empty list |
 | `needs_approval` | `tool_intent` | The run has a person's approval behind it |
-| `ends_within` | `tool_intent` | Seconds by which a sandboxed call's container has ended |
+| `ends_within` | `tool_intent` | Seconds by which a sandboxed call's container has ended, or a tool's own request |
 | `scope` | `tool_intent` | Each target of a scoped call, with its resolved addresses and ports |
 | `recovered` | `tool_result` | The result came from the tool's check. The tool did not run again. |
 | `truncated` | `tool_result` | The output was cut to fit 64 KiB |

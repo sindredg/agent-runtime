@@ -92,6 +92,19 @@ sequenceDiagram
 request, or a Docker daemon that acts on a request late. See
 [Known limits](limits.md#tool-calls).
 
+## Before the decision: a tool in the worker
+
+A tool that is runtime code runs in a thread, and the thread goes on when
+its worker loses the job without being killed. A request it sent can then
+still arrive
+([ADR 0025](adr/0025-a-tool-in-the-worker-names-how-long-its-request-can-arrive.md)).
+
+- `create_issue` gives the request that opens the issue one deadline of
+  10 s, counted from before its intent is written. Past it the connection
+  is reset. It names 12 s as `ends_within` in its intent.
+- The worker that takes the job over waits that long after the intent, as
+  above, before it asks the check. There is no container to remove.
+
 ## When `create_issue` gets no answer
 
 `create_issue` uses the same lookup when its own request times out, the
@@ -103,6 +116,6 @@ issue. A 4xx is a refusal and is reported as it is.
 | The issue | Says the issue was created |
 | Nothing, or gets no clear answer | An error that says the issue may exist |
 
-The model is then not told that a call failed which went through. Each
-request has 10 s for each connect, write and read, with no limit on the whole
-request.
+The model is then not told that a call failed which went through. The
+request that opens the issue has 10 s in all. Each request of the lookup has
+10 s for each connect, write and read, with no limit on the whole.

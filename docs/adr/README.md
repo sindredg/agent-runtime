@@ -26,6 +26,8 @@ flowchart LR
     A14 --> A17[0017 bounded walk]
     A5 --> A19[0019 Gitea check:<br/>a marker line]
     A4 --> A23[0023 a running job<br/>has a lease]
+    A5 --> A25[0025 a tool's request<br/>is waited out]
+    A8 --> A25
     A3[0003 SDK and<br/>a fake provider]
 ```
 
@@ -56,6 +58,7 @@ An arrow means the later record builds on, or follows from, the earlier one.
 | [0021](0021-run-switched-off-runs-from-a-reviewed-list.md) | Run switched-off runs from a reviewed list in the Manual runs workflow | Yes, [34 entries run](../results/switched-off.md) at `e1656b5` |
 | [0022](0022-run-switched-off-entries-on-the-claude-api-from-the-list.md) | Run switched-off entries on the Claude API from the reviewed list | Yes, [run once](../results/kill-runs.md#with-the-stored-signature-changed) on `claude-fable-5-2` |
 | [0023](0023-a-running-job-has-a-lease.md) | A `running` job has a lease, and the database refuses one without | Yes, migration 0009 |
+| [0025](0025-a-tool-in-the-worker-names-how-long-its-request-can-arrive.md) | A tool in the worker names how long its request can still arrive, and a takeover waits that long | [Yes](../interrupted-calls.md#before-the-decision-a-tool-in-the-worker), for `create_issue` |
 
 Each record states what was built at the time it was written. What is built
 now is described in [Architecture](../architecture.md).

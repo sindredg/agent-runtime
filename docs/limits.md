@@ -45,10 +45,10 @@ refused, but the tool ran. An idempotency key on the other side closes this.
 
 ## Tool calls
 
-- "Not done" from a tool's check is the tool author's claim. A check that
-  cannot rule out a request still on its way has to answer unknown.
-  `create_issue` does not wait out a stalled request of an in-process call
-  ([issue 103](https://github.com/sindredg/agent-runtime/issues/103)).
+- "Not done" from a tool's check is the tool author's claim, and so is the
+  bound a tool names for its request. After a takeover `create_issue` waits
+  12 s for its request. One the tracker stores later still makes two, and the
+  reset is not tried over TLS ([ADR 0025](adr/0025-a-tool-in-the-worker-names-how-long-its-request-can-arrive.md)).
 - On Gitea, the `create_issue` check misses an issue whose marker line a
   person edited or wrote below, and is fooled by a bot issue edited to end
   with another call's marker. It trusts that each page's `X-Total-Count`
@@ -58,8 +58,8 @@ refused, but the tool ran. An idempotency key on the other side closes this.
   told a call failed and asks again makes a new call with a new id.
 - A tool in the worker process that is running when its worker loses the
   lease, or when its job is halted, runs to its end. Its result is dropped.
-- `read_file`, `create_issue` and `crash_worker` have no general timeout. One
-  that outlasts the stop grace period is killed with its worker.
+- `read_file`, `crash_worker` and the lookup of `create_issue` have no general
+  timeout. One that outlasts the stop grace period is killed with its worker.
 - A worker told to stop while it writes a `tool_intent` still runs that tool:
   the intent is already in the log.
 - A worker that takes over an interrupted call of a tool it does not offer

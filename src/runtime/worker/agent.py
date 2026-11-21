@@ -46,7 +46,7 @@ from runtime.store.jobs import DEADLINE_ERROR, Job
 from runtime.store.payload import InvalidPayload, check_json
 from runtime.store.status import FINAL_STATUSES, JobStatus
 from runtime.store.steps import Step, StepKind, read_steps
-from runtime.tools.base import AnyTool, ToolCall, ToolRegistry, ToolResult, operation_id
+from runtime.tools.base import AnyTool, Tool, ToolCall, ToolRegistry, ToolResult, operation_id
 from runtime.tools.sandboxed import SandboxTool
 from runtime.worker import backoff
 from runtime.worker.approval import DENIED, DENIED_RERUN, gate_reason, not_offered
@@ -291,7 +291,7 @@ async def _wait_out(
             return True
         if not waited:
             log.info(
-                "waiting for an interrupted call's container to end",
+                "waiting for an interrupted call to end",
                 extra={"job_id": job_id, "seconds": round(left, 1)},
             )
             waited = True
@@ -300,11 +300,13 @@ async def _wait_out(
 
 
 def _bound(tool: AnyTool | None, intent: dict[str, Any]) -> float | None:
-    """Seconds after its intent by which an interrupted call's container has ended.
+    """Seconds after its intent by which an interrupted call has ended.
 
-    None when the call ran no container. The intent's own number is used,
-    so a worker with other settings waits as long as the one that started
-    the call. A number above what any settings give is cut to that.
+    For a sandboxed call that is its container. For a tool in the worker it
+    is the bound the tool keeps to itself (ADR 0025). None when the call has
+    neither. The intent's own number is used, so a worker with other
+    settings waits as long as the one that started the call. A number above
+    what any settings give is cut to that.
     """
     recorded = intent.get("ends_within")
     if (
@@ -316,6 +318,8 @@ def _bound(tool: AnyTool | None, intent: dict[str, Any]) -> float | None:
         return min(float(recorded), LONGEST_BOUND)
     if isinstance(tool, SandboxTool):
         return ends_within(tool.sandbox.settings)
+    if isinstance(tool, Tool):
+        return tool.ends_within
     return None
 
 
@@ -329,7 +333,7 @@ async def _outlast_container(
     stop: asyncio.Event,
     halt: Halt,
 ) -> bool:
-    """Make sure the interrupted call's container has ended. False if `stop` came first.
+    """Make sure the interrupted call has ended. False if `stop` came first.
 
     The container may still run: the worker that started it stopped, the
     container did not (ADR 0008). Containers of earlier lease epochs on this
@@ -337,6 +341,10 @@ async def _outlast_container(
     still on its way, cannot be, so the worker also waits until the call's
     bound has passed since its intent, by the database clock. That clock
     is read again after the wait: the decision is never before the bound.
+
+    A call of a tool in the worker has no container, and may still be
+    sending: its thread outlives a lost lease. Only the wait applies to it
+    (ADR 0025).
     """
     bound = _bound(tool, intent)
     if bound is None or written is None:
@@ -504,6 +512,11 @@ async def _next_tool_call(
         # This run has an approval. If it is interrupted, whoever takes the
         # job over asks again, whatever its own tools say.
         intent["needs_approval"] = True
+    if isinstance(tool, Tool) and tool.ends_within is not None:
+        # A worker that takes the job over waits this long after the intent
+        # before it asks the tool's check: the call's request may still be
+        # on its way then (ADR 0025).
+        intent["ends_within"] = tool.ends_within
     if isinstance(tool, SandboxTool):
         # A worker that takes the job over waits this long after the intent
         # before it decides about the call.
@@ -541,6 +554,9 @@ async def _next_tool_call(
     if stop.is_set():
         return True
     halt.check()
+    # Read before the write: a worker that takes the job over counts from
+    # the intent, and the write itself can be slow.
+    call = dataclasses.replace(call, started=time.monotonic())
     await writer.append(StepKind.TOOL_INTENT, intent)
     failpoints.hit("after_tool_intent", takeovers=job.takeovers, tool=name)
     # And immediately before the run, in case the write was slow.
