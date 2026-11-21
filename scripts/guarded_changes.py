@@ -113,7 +113,7 @@ class Module:
 
 
 def read_module(source: bytes) -> Module:
-    """The tests of a file as pytest's defaults find them: `test*` in a module or a `Test*` class."""
+    """A file's tests as pytest's defaults find them: `test*` in a module or a `Test*` class."""
     try:
         tree = ast.parse(source)
     except (SyntaxError, ValueError) as error:
