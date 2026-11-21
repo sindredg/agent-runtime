@@ -2,7 +2,8 @@
 # kill runs and their must-fail run, on the fake provider or the Claude API,
 # the contract test, and the switched-off runs of scripts/switched_off.py
 # (ADR 0021). Each entry of that list names its provider: one on the Claude
-# API runs in the job that holds the key (ADR 0022). Only
+# API runs in the job that holds the key (ADR 0022). `switched-off-all` runs
+# every entry of the fake provider, one job and one verdict each. Only
 # `workflow_dispatch` starts this workflow.
 #
 # A job on the Claude API names the `claude-api` environment. It waits for a
@@ -17,9 +18,16 @@ on:
       suite:
         description: >-
           kills, kills-after-tool-ran (their must-fail run), contract, switched-off,
-          or switched-off-rehearsal (an entry of the Claude API on the fake provider)
+          switched-off-rehearsal (an entry of the Claude API on the fake provider),
+          or switched-off-all (every entry of the fake provider, whatever provider is picked)
         type: choice
-        options: [kills, kills-after-tool-ran, contract, switched-off, switched-off-rehearsal]
+        options:
+          - kills
+          - kills-after-tool-ran
+          - contract
+          - switched-off
+          - switched-off-rehearsal
+          - switched-off-all
       switched_off:
         description: >-
           For the switched-off suites. From main only. Provider and model have to be
@@ -35,6 +43,33 @@ on:
           - stop-release-off
           - takeover-outlast-off
           - thinking-signature-changed
+          - resume-off-random-kills
+          - intent-write-off-chaos
+          - every-tool-idempotent
+          - epoch-check-off
+          - gitea-check-not-done
+          - issue-marker-off
+          - refusal-triggers-off
+          - chain-check-off
+          - budget-check-off
+          - claim-deadline-off
+          - approval-gate-off
+          - approval-gate-off-chaos
+          - busy-answer-fails
+          - retry-after-ignored
+          - claim-ignores-not-before
+          - stream-cut-off
+          - result-cut-off
+          - tool-timeout-off
+          - halt-leaves-the-call-running
+          - workspace-watcher-off
+          - workspace-precheck-off
+          - workspace-entry-cap-off
+          - workspace-walk-deadline-off
+          - workspace-run-bound-off
+          - workspace-timeout-off
+          - workspace-stop-signal-off
+          - workspace-walk-stop-off
       provider:
         description: fake costs nothing; claude waits for a reviewer and costs money
         type: choice
@@ -54,7 +89,10 @@ jobs:
       && format('{0} {1}', inputs.suite, inputs.switched_off) || inputs.suite }}
       on the fake provider
     # A rehearsal never reaches the job that holds the key, whatever provider was picked.
-    if: inputs.provider == 'fake' || inputs.suite == 'switched-off-rehearsal'
+    # Every entry of the fake provider runs in the jobs below instead.
+    if: >-
+      (inputs.provider == 'fake' || inputs.suite == 'switched-off-rehearsal')
+      && inputs.suite != 'switched-off-all'
     runs-on: ubuntu-26.04
     timeout-minutes: 40
     env:
@@ -116,6 +154,84 @@ jobs:
         if: always()
         run: make clean
 
+  # Every entry of the fake provider, from main: one job and one verdict per
+  # entry. The names come from main's list, never from an input. Neither job
+  # holds a secret or names an environment.
+  fake-names:
+    name: The switched-off entries of the fake provider
+    if: inputs.suite == 'switched-off-all'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    outputs:
+      names: ${{ steps.names.outputs.names }}
+    steps:
+      - name: Refuse a switched-off run off main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "A switched-off run starts from main only." >&2
+          exit 1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        with:
+          version: "0.13.8"
+      - run: uv sync --locked
+      # A JSON list. The assignment fails the step if the script fails.
+      - name: Names
+        id: names
+        run: |
+          names=$(uv run --frozen python scripts/switched_off.py names fake)
+          echo "names=$names" >> "$GITHUB_OUTPUT"
+
+  fake-entries:
+    name: switched-off ${{ matrix.entry }} on the fake provider
+    needs: fake-names
+    if: inputs.suite == 'switched-off-all'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 40
+    strategy:
+      # Every entry gets its verdict: a red one does not cancel the others.
+      fail-fast: false
+      matrix:
+        entry: ${{ fromJSON(needs.fake-names.outputs.names) }}
+    env:
+      SWITCHED_OFF: ${{ matrix.entry }}
+    steps:
+      - name: Refuse a switched-off run off main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "A switched-off run starts from main only." >&2
+          exit 1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        with:
+          version: "0.13.8"
+      - run: uv sync --locked
+      - name: Check the entry against the provider
+        run: uv run --frozen python scripts/switched_off.py dispatch "$SWITCHED_OFF" fake
+      - name: Docker socket group
+        run: echo "DOCKER_GID=$(stat -c %g /var/run/docker.sock)" >> "$GITHUB_ENV"
+      - name: Commit
+        run: git rev-parse HEAD
+      # The script prints the edit, the commit, and one verdict per test.
+      - name: Switched-off run
+        run: make switched-off
+      - name: Results
+        if: always()
+        run: |
+          for file in .kills/*/results.jsonl .chaos/results.jsonl; do
+            if [ -f "$file" ]; then echo "== $file"; cat "$file"; fi
+          done
+      - name: Service logs
+        if: failure()
+        run: docker compose logs --no-color
+      - name: Stop the stack
+        if: always()
+        run: make clean
+
   claude:
     # The reviewer of the environment sees this name: for a switched-off run
     # it says which entry's edit runs with the key.
@@ -123,7 +239,9 @@ jobs:
       ${{ inputs.suite == 'switched-off'
       && format('switched-off {0}', inputs.switched_off) || inputs.suite }}
       on ${{ inputs.model }}
-    if: inputs.provider == 'claude' && inputs.suite != 'switched-off-rehearsal'
+    if: >-
+      inputs.provider == 'claude' && inputs.suite != 'switched-off-rehearsal'
+      && inputs.suite != 'switched-off-all'
     runs-on: ubuntu-26.04
     environment: claude-api
     # One paid run at a time. A run in progress is never cancelled: that

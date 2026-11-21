@@ -6,11 +6,14 @@ test must end: failed on a named assertion, or passed for a stated reason.
 The list is fixed before a run. A test that ends otherwise fails the run, and
 is a finding for the results page, not a reason to change the entry.
 
-The Manual runs workflow runs one entry at a time, on `main` (ADR 0021). An
-entry names its provider. One on the Claude API runs in the job that holds
-the key, and is judged by the kill runner's record as well (ADR 0022).
+The Manual runs workflow runs one entry, or every entry of the fake provider
+with one job each, on `main` (ADR 0021). An entry names its provider. One on
+the Claude API runs in the job that holds the key, and is judged by the kill
+runner's record as well (ADR 0022).
 
     python scripts/switched_off.py names          the entries, one per line
+    python scripts/switched_off.py names fake     the entries of the fake provider, as a
+                                                  JSON list: the workflow's matrix
     python scripts/switched_off.py check          the list still fits the code
     python scripts/switched_off.py dispatch NAME PROVIDER [MODEL]
                                                   refuse a start that is not the entry's
@@ -41,9 +44,36 @@ ROOT = Path(__file__).resolve().parents[1]
 JUNIT = Path(".switched-off/junit.xml")
 WORKFLOW = ".github/workflows/manual-runs.yml"
 AGENT = "src/runtime/worker/agent.py"
+SANDBOXED = "src/runtime/tools/sandboxed.py"
+WORKSPACE = "src/runtime/sandbox/workspace.py"
+RUNNER = "src/runtime/sandbox/runner.py"
+CHAIN_MIGRATION = "migrations/versions/0007_step_log_chain.py"
 KILLS = "tests/chaos/test_kills.py"
 FAILPOINT = f"{KILLS}::test_a_job_survives_its_worker_stopping_at_the_failpoint"
 HALT = "tests/integration/test_halt_store.py"
+SANDBOX = "tests/integration/test_sandbox.py"
+WATCHER = "tests/unit/test_workspace_watcher.py"
+APPROVAL = "tests/integration/test_approval.py"
+CHAOS_APPROVAL = "tests/chaos/test_approval.py"
+BACKOFF_WORKER = "tests/integration/test_backoff_worker.py"
+BUSY = f"{BACKOFF_WORKER}::test_a_busy_provider_makes_the_job_wait_and_then_finish"
+BUSY_CASES = ("[429-rate_limit_error]", "[529-overloaded_error]")
+IN_STACK = "tests/integration/test_backoff_in_stack.py::test_a_rate_limited_job_waits_and_succeeds"
+CHAIN = "tests/integration/test_step_log_chain.py"
+VERIFY = "tests/integration/test_verify_command.py"
+# The cases of TAMPERED in the chain's tests that only the hash comparison finds.
+HASH_CASES = ("change", "change the epoch", "change and hash again")
+ORDER_CASES = (
+    "delete",
+    "reorder",
+    "insert out of order",
+    "cut the tail and hash the last step again",
+)
+LAB = (
+    "tests/lab/test_lab_demo.py::test_a_worker_stopped_in_a_call_to_gitea_leaves_exactly_one_issue"
+)
+# The tests that a run with no stack, and the lab's stack, may name.
+STACK_TESTS = {"none": "tests/unit/", "lab": "tests/lab/"}
 # The kill runs: their rules, their tests, and where a session leaves its records.
 KILL_RULES = "tests/kills/rules.py"
 KILL_RUNS = "tests/kills/test_kill_runs.py"
@@ -98,9 +128,11 @@ class SwitchedOff:
     issue: int
     what: str
     edits: tuple[Edit, ...]
-    # `up`: the normal stack. `chaos`: three workers and a short lease.
-    # `kills`: the kill runs' stack, three workers and a 6 s lease.
-    stack: Literal["up", "chaos", "kills"]
+    # `none`: no stack, for unit tests. `up`: the normal stack. `chaos`: three
+    # workers and a short lease. `kills`: the kill runs' stack, three workers
+    # and a 6 s lease. `lab`: the images built, and the lab's tests start the
+    # stack with Gitea themselves.
+    stack: Literal["none", "up", "chaos", "kills", "lab"]
     expect: tuple[Expect, ...]
     # `claude`: the run is on the Claude API, in the job that holds the key.
     provider: Literal["fake", "claude"] = "fake"
@@ -276,16 +308,682 @@ ENTRIES: dict[str, SwitchedOff] = {
         runs=5,
         record=Refusals(test="failpoint after_tool_ran", at_least=3),
     ),
+    # Durability
+    "resume-off-random-kills": SwitchedOff(
+        issue=158,
+        what="the replay of the step log on a claim, with workers killed at random times",
+        edits=(Edit(AGENT, REPLAY, "    state = replay(spec.prompt, [])  # switched off\n"),),
+        stack="chaos",
+        expect=(
+            Expect(f"{KILLS}::test_jobs_survive_a_kill_at_a_random_time", "assert not failures"),
+        ),
+    ),
+    "intent-write-off-chaos": SwitchedOff(
+        issue=158,
+        what="the step that records a tool call's intent before it runs",
+        edits=(
+            Edit(
+                AGENT,
+                "    await writer.append(StepKind.TOOL_INTENT, intent)\n",
+                "    pass  # switched off: no intent\n",
+            ),
+        ),
+        stack="chaos",
+        expect=(
+            Expect(
+                f"{FAILPOINT}[after_tool_intent]",
+                'assert [s["lease_epoch"] for s in create] == [1, 2]',
+            ),
+            Expect(f"{FAILPOINT}[after_tool_ran]", "assert verdict(run, uninterrupted) == []"),
+        ),
+    ),
+    "every-tool-idempotent": SwitchedOff(
+        issue=158,
+        what="the tools' own idempotency flags: every tool is treated as idempotent",
+        edits=(
+            Edit(
+                "src/runtime/worker/recovery.py",
+                "    if tool.idempotent and not gated:\n",
+                "    if not gated:  # switched off\n",
+            ),
+        ),
+        stack="chaos",
+        expect=(
+            Expect(f"{FAILPOINT}[after_tool_ran]", "assert verdict(run, uninterrupted) == []"),
+        ),
+    ),
+    "epoch-check-off": SwitchedOff(
+        issue=158,
+        what="the lease epoch in the fence of a worker's writes",
+        edits=(
+            Edit(
+                "src/runtime/store/held.py",
+                "        jobs.c.lease_epoch == lease_epoch,\n",
+                "        # switched off: no epoch check\n",
+            ),
+        ),
+        stack="chaos",
+        expect=(
+            Expect(
+                "tests/chaos/test_stale_worker.py"
+                "::test_a_worker_paused_past_its_lease_writes_nothing_when_it_wakes",
+                "assert stale_steps == []",
+            ),
+        ),
+    ),
+    "gitea-check-not-done": SwitchedOff(
+        issue=158,
+        what="the Gitea check of create_issue, which always says not done",
+        edits=(
+            Edit(
+                "src/runtime/tools/create_issue.py",
+                "        if found is None:\n            return CheckOutcome.NOT_DONE\n",
+                "        return CheckOutcome.NOT_DONE  # switched off\n",
+            ),
+        ),
+        stack="lab",
+        expect=(Expect(f"{LAB}[after_tool_ran]", "assert len(issues) == 1"),),
+    ),
+    "issue-marker-off": SwitchedOff(
+        issue=158,
+        what="the marker line with the operation id in the issue body",
+        edits=(
+            Edit(
+                "src/runtime/tools/trackers.py",
+                '    return f"{body}\\n\\n{MARKER}{operation_id}"',
+                "    return body  # switched off",
+            ),
+        ),
+        stack="lab",
+        expect=(
+            Expect(f"{LAB}[after_tool_ran]", "assert len(issues) == 1"),
+            Expect(f"{LAB}[after_tool_intent]", 'assert operation in issues[0]["body"]'),
+        ),
+    ),
+    # The step log's hash chain
+    "refusal-triggers-off": SwitchedOff(
+        issue=158,
+        what="the triggers that refuse a change to the step log",
+        edits=(
+            Edit(
+                CHAIN_MIGRATION,
+                '        "CREATE TRIGGER steps_no_change BEFORE UPDATE OR DELETE ON steps"\n'
+                '        " FOR EACH ROW EXECUTE FUNCTION steps_refuse()"\n',
+                '        "SELECT 1"  # switched off\n',
+            ),
+            Edit(
+                CHAIN_MIGRATION,
+                '        "CREATE TRIGGER steps_no_truncate BEFORE TRUNCATE ON steps"\n'
+                '        " FOR EACH STATEMENT EXECUTE FUNCTION steps_refuse()"\n',
+                '        "SELECT 1"  # switched off\n',
+            ),
+        ),
+        stack="up",
+        expect=tuple(
+            Expect(
+                f"{CHAIN}::test_the_owner_is_refused_a_change_while_the_triggers_are_on[{statement}]",
+                'pytest.raises(asyncpg.IntegrityConstraintViolationError, match="append-only")',
+            )
+            for statement in (
+                "UPDATE steps SET payload = '{\"changed\": true}' WHERE job_id = $1",
+                "DELETE FROM steps WHERE job_id = $1 AND seq = 3",
+                "TRUNCATE steps",
+            )
+        ),
+    ),
+    "chain-check-off": SwitchedOff(
+        issue=158,
+        what="the comparison of each step's hash in verify",
+        edits=(
+            Edit(
+                "src/runtime/store/chain.py",
+                "        if want != row.hash:\n",
+                "        if False:  # switched off\n",
+            ),
+        ),
+        stack="up",
+        expect=(
+            *(
+                Expect(
+                    f"{CHAIN}::test_a_change_the_owner_makes_is_found[{case}]",
+                    "assert verify(database_url, job_id) == expected",
+                )
+                for case in (*HASH_CASES, *ORDER_CASES)
+            ),
+            *(
+                Expect(
+                    f"{VERIFY}::test_the_command_names_what_the_owner_changed[{case}]",
+                    'assert (status, err) == (1, "")',
+                )
+                for case in HASH_CASES
+            ),
+            *(
+                Expect(
+                    f"{VERIFY}::test_the_command_names_what_the_owner_changed[{case}]",
+                    'assert out.splitlines() == [*named, "1 jobs checked, 1 with a mismatch"]',
+                )
+                for case in ORDER_CASES
+            ),
+            Expect(
+                f"{VERIFY}::test_a_job_that_cannot_be_checked_is_not_a_pass",
+                "assert run(database_url, UNKNOWN, str(job_id))[0] == 1",
+            ),
+        ),
+    ),
+    # Budget, deadline and approval
+    "budget-check-off": SwitchedOff(
+        issue=158,
+        what="the check that the next call fits the budget; the cut of max_tokens stays",
+        edits=(
+            Edit(
+                AGENT,
+                "            if max_tokens is None:\n",
+                "            if max_tokens is None and False:  # switched off\n",
+            ),
+        ),
+        stack="up",
+        expect=(
+            Expect(
+                "tests/integration/test_budget.py"
+                "::test_a_job_that_loops_stops_before_its_budget_by_the_providers_count",
+                'job.error.startswith("the token budget does not cover the next model call")',
+            ),
+        ),
+    ),
+    "claim-deadline-off": SwitchedOff(
+        issue=158,
+        what="the claim's check of a job's deadline",
+        edits=(
+            Edit(
+                "src/runtime/store/jobs.py",
+                "    overdue = and_(~cancelled, jobs.c.deadline <= now)\n",
+                "    overdue = and_(~cancelled, jobs.c.deadline < jobs.c.deadline)"
+                "  # switched off\n",
+            ),
+        ),
+        stack="up",
+        expect=tuple(
+            Expect(
+                f"{HALT}::test_a_claim_fails_a_job_past_its_deadline_with_an_error_step[{held}]",
+                "assert claimed is None",
+            )
+            for held in ("False", "True")
+        ),
+    ),
+    "approval-gate-off": SwitchedOff(
+        issue=158,
+        what="the gate that asks a person before a tool call that needs approval",
+        edits=(
+            Edit(
+                "src/runtime/worker/approval.py",
+                "    if tool is not None and tool.needs_approval:\n"
+                "        return \"the tool's calls need a person's approval before they run\"\n"
+                "    if name in named:\n"
+                "        return \"the job's spec asks for a person's approval before this tool"
+                ' runs"\n'
+                "    return None\n",
+                "    return None  # switched off\n",
+            ),
+        ),
+        stack="up",
+        expect=(
+            *(
+                Expect(f"{APPROVAL}::{test}", "assert await person.work() is S.NEEDS_APPROVAL")
+                for test in (
+                    "test_a_call_that_needs_approval_does_not_run_before_a_person_approved_it",
+                    "test_a_denied_call_never_runs_and_the_job_goes_on",
+                    "test_a_spec_adds_a_tool_to_the_gate",
+                    "test_an_approved_call_that_is_interrupted_is_asked_about_again[idempotent]",
+                    "test_an_approved_call_that_is_interrupted_is_asked_about_again"
+                    "[check-says-not-done]",
+                    "test_an_approval_sent_again_after_the_job_asked_about_the_next_call_is_refused",
+                    "test_an_approval_sent_again_after_the_same_call_was_asked_about_again_is_refused",
+                    "test_an_approval_that_names_no_question_does_not_count",
+                    "test_a_question_asked_before_the_worker_stopped_is_not_asked_twice",
+                    "test_an_open_question_holds_on_a_worker_whose_tool_would_not_have_asked",
+                    "test_an_approved_run_is_marked_so_that_any_worker_asks_again_after_it_is"
+                    "_interrupted",
+                    "test_a_job_nobody_answers_is_failed_at_its_deadline_and_the_call_never_runs",
+                )
+            ),
+            Expect(
+                f"{APPROVAL}::test_a_spec_cannot_take_a_tool_out_of_the_gate[empty-list]",
+                "assert acts.runs == []",
+            ),
+            Expect(
+                f"{APPROVAL}::test_an_answer_about_another_call_does_not_let_this_one_run",
+                "assert status is S.NEEDS_APPROVAL",
+            ),
+        ),
+    ),
+    "approval-gate-off-chaos": SwitchedOff(
+        issue=158,
+        what="the gate that asks a person before a tool call, with workers killed",
+        edits=(
+            Edit(
+                "src/runtime/worker/approval.py",
+                "    if tool is not None and tool.needs_approval:\n"
+                "        return \"the tool's calls need a person's approval before they run\"\n"
+                "    if name in named:\n"
+                "        return \"the job's spec asks for a person's approval before this tool"
+                ' runs"\n'
+                "    return None\n",
+                "    return None  # switched off\n",
+            ),
+        ),
+        stack="chaos",
+        expect=(
+            Expect(
+                f"{CHAOS_APPROVAL}"
+                "::test_a_gated_call_never_runs_before_its_approval_under_random_kills",
+                "assert not failures",
+            ),
+            *(
+                Expect(
+                    f"{CHAOS_APPROVAL}"
+                    f"::test_an_approval_covers_one_run_when_the_worker_stops_at_the_failpoint"
+                    f"[{failpoint}]",
+                    "assert gated.problems() == []",
+                )
+                for failpoint in ("after_tool_intent", "after_tool_ran")
+            ),
+            Expect(
+                f"{CHAOS_APPROVAL}::test_a_gated_job_nobody_answers_is_failed_at_its_deadline",
+                "assert len(failed_at) == 1",
+            ),
+        ),
+    ),
+    # A busy provider
+    "busy-answer-fails": SwitchedOff(
+        issue=158,
+        what="the wait on a busy answer: a 429 or 529 fails the job",
+        edits=(
+            Edit(
+                AGENT,
+                "                if error.busy:\n",
+                "                if False:  # switched off\n",
+            ),
+        ),
+        stack="up",
+        expect=(
+            *(Expect(f"{BUSY}{case}", "assert job is not None") for case in BUSY_CASES),
+            Expect(
+                f"{BACKOFF_WORKER}::test_the_wait_counts_again_after_a_response",
+                "assert status is JobStatus.WAITING",
+            ),
+            Expect(
+                f"{BACKOFF_WORKER}::test_a_job_whose_cancel_is_requested_does_not_wait",
+                "assert status is JobStatus.CANCELLED",
+            ),
+            Expect(IN_STACK, 'assert status == "succeeded"'),
+        ),
+    ),
+    "retry-after-ignored": SwitchedOff(
+        issue=158,
+        what="the floor that the provider's retry-after sets on a wait",
+        edits=(
+            Edit(
+                "src/runtime/worker/backoff.py",
+                "    return max(retry_after or 0.0, ceiling(attempt) / 2)",
+                "    return ceiling(attempt) / 2  # switched off",
+            ),
+        ),
+        stack="up",
+        expect=(
+            Expect(
+                "tests/unit/test_backoff.py::test_retry_after_raises_the_floor_and_never_lowers_it",
+                "assert [floor(n, 5) for n in range(1, 7)] == [5, 5, 5, 8, 16, 30]",
+            ),
+            Expect(
+                "tests/unit/test_backoff.py"
+                "::test_the_pass_lines_bound_six_busy_answers_in_sixty_seconds",
+                "assert starts == [0, 5, 10, 15, 23, 39, 69]",
+            ),
+            Expect(
+                "tests/unit/test_backoff.py"
+                "::test_a_delay_lies_between_its_floor_and_half_a_ceiling_above_it",
+                "assert waited >= (retry_after or 0)",
+            ),
+            Expect(
+                "tests/unit/test_backoff.py"
+                "::test_the_random_part_spreads_jobs_that_were_refused_together",
+                "assert all(5 <= value <= 9 for value in delays)",
+            ),
+            Expect(IN_STACK, "assert gap.total_seconds() >= floor(1, RETRY_AFTER) == RETRY_AFTER"),
+        ),
+    ),
+    "claim-ignores-not-before": SwitchedOff(
+        issue=158,
+        what="the claim's wait for a waiting job's not_before",
+        edits=(
+            Edit(
+                "src/runtime/store/jobs.py",
+                "and_(jobs.c.status == waiting, jobs.c.not_before <= now),",
+                "jobs.c.status == waiting,  # switched off",
+            ),
+        ),
+        stack="up",
+        expect=(
+            Expect(
+                "tests/integration/test_backoff_store.py"
+                "::test_the_claim_leaves_a_waiting_job_until_its_not_before",
+                "assert early is None",
+            ),
+            Expect(
+                "tests/integration/test_backoff_store.py"
+                "::test_a_waiting_job_without_not_before_is_not_claimed",
+                "assert with_engine(database_url, body) is None",
+            ),
+            *(Expect(f"{BUSY}{case}", "assert job is not None") for case in BUSY_CASES),
+            Expect(IN_STACK, "assert 1 <= len(refused) <= MOST_REFUSED"),
+        ),
+    ),
+    # Bad tool output
+    "stream-cut-off": SwitchedOff(
+        issue=158,
+        what="the cut of a command's output stream at the limit",
+        edits=(
+            Edit(
+                "src/runtime/sandbox/output.py",
+                "            room = self.limit - len(self.kept)\n",
+                "            room = len(data)  # switched off\n",
+            ),
+        ),
+        stack="up",
+        expect=(
+            Expect(
+                f"{SANDBOX}::test_output_past_the_limit_is_counted_and_not_kept",
+                "assert len(done.output) == LIMIT",
+            ),
+        ),
+    ),
+    "result-cut-off": SwitchedOff(
+        issue=158,
+        what="the cut of a tool result to its limit",
+        edits=(
+            Edit(
+                SANDBOXED,
+                "    if len(content.encode()) > limit:\n",
+                "    if False:  # switched off: the result is not cut\n",
+            ),
+        ),
+        stack="up",
+        expect=(
+            Expect(
+                f"{SANDBOX}::test_bad_output_becomes_tool_results_and_the_job_goes_on",
+                'assert len(flood["content"].encode()) <= LIMIT',
+            ),
+        ),
+    ),
+    "tool-timeout-off": SwitchedOff(
+        issue=158,
+        what="the timeout of a sandboxed command, in the runner and in the container",
+        edits=(
+            Edit(
+                RUNNER,
+                "                        async with asyncio.timeout(settings.timeout)"
+                " as deadline:\n",
+                "                        async with asyncio.timeout(None) as deadline:"
+                "  # switched off\n",
+            ),
+            Edit(
+                RUNNER,
+                '            f"{settings.timeout + KILL_MARGIN:g}",\n',
+                '            "86400",  # switched off\n',
+            ),
+        ),
+        stack="up",
+        expect=(
+            Expect(
+                f"{SANDBOX}::test_a_command_past_its_timeout_is_killed_and_its_container_removed",
+                "assert done.timed_out",
+            ),
+            Expect(
+                f"{SANDBOX}::test_a_timed_out_command_becomes_a_tool_result_and_the_job_goes_on",
+                'assert timed_out["is_error"] is True',
+            ),
+        ),
+    ),
+    "halt-leaves-the-call-running": SwitchedOff(
+        issue=158,
+        what="the cancel of a sandboxed call that is running when the job halts",
+        edits=(
+            Edit(
+                SANDBOXED,
+                "        if not task.done():\n"
+                "            task.cancel()\n"
+                "            # Not suppressed: a cancel of this call that arrives while the\n"
+                "            # container is removed propagates.\n"
+                "            await asyncio.wait({task})\n",
+                "        pass  # switched off\n",
+            ),
+        ),
+        stack="up",
+        expect=tuple(
+            Expect(f"{SANDBOX}::{test}", "assert left == []")
+            for test in (
+                "test_a_cancel_kills_a_running_command_and_its_container",
+                "test_the_deadline_kills_a_running_command_and_fails_the_job",
+                "test_a_lost_lease_kills_a_running_command",
+            )
+        ),
+    ),
+    # Workspace size
+    "workspace-watcher-off": SwitchedOff(
+        issue=158,
+        what="the measurement of the workspace while a command runs",
+        edits=(
+            Edit(
+                SANDBOXED,
+                "watched = await _watched(started, call.workspace, settings, limit)",
+                "watched = await started  # switched off",
+            ),
+        ),
+        stack="up",
+        expect=(
+            Expect(
+                f"{WATCHER}::test_a_call_that_writes_past_the_limit_is_stopped",
+                "assert result.is_error",
+            ),
+            Expect(
+                f"{WATCHER}::test_a_run_that_ends_does_not_wait_for_a_measurement",
+                "assert measured >= 2",
+            ),
+            Expect(
+                f"{SANDBOX}::test_a_command_that_writes_past_the_workspace_limit_is_stopped",
+                "assert result.is_error",
+            ),
+        ),
+    ),
+    "workspace-precheck-off": SwitchedOff(
+        issue=158,
+        what="the measurement of the workspace before a command starts",
+        edits=(
+            Edit(
+                SANDBOXED,
+                "if limit is not None"
+                " and (reason := await _over(call.workspace, settings, limit)):",
+                "if limit is not None and (reason := None):  # switched off",
+            ),
+        ),
+        stack="up",
+        expect=(
+            *(
+                Expect(f"{WATCHER}::{test}", "assert result.is_error")
+                for test in (
+                    "test_a_workspace_over_the_limit_starts_no_command",
+                    "test_a_workspace_with_too_many_files_starts_no_command",
+                    "test_a_walk_past_its_own_deadline_starts_no_command",
+                    "test_a_walk_that_hangs_past_its_time_box_starts_no_command",
+                )
+            ),
+            Expect(
+                f"{SANDBOX}::test_a_workspace_over_its_limit_runs_no_command",
+                'assert result.content.endswith("its limit of 1.0 MiB. The command did not'
+                ' start.")',
+            ),
+        ),
+    ),
+    "workspace-entry-cap-off": SwitchedOff(
+        issue=158,
+        what="the cap on the files and directories one walk counts",
+        edits=(
+            Edit(
+                WORKSPACE,
+                "        if self.entries > self.bounds.entries:\n            raise OverLimit(",
+                "        if False:  # switched off\n            raise OverLimit(",
+            ),
+        ),
+        stack="none",
+        expect=(
+            Expect(
+                f"{WATCHER}::test_the_walk_stops_at_the_entry_limit",
+                'pytest.raises(OverLimit, match="its limit of 20 files and directories")',
+            ),
+            Expect(
+                f"{WATCHER}::test_a_workspace_with_too_many_files_starts_no_command",
+                "assert result.is_error",
+            ),
+        ),
+    ),
+    "workspace-walk-deadline-off": SwitchedOff(
+        issue=158,
+        what="the deadline of one walk of the workspace",
+        edits=(
+            Edit(
+                WORKSPACE,
+                "            if time.monotonic() > self.bounds.deadline:",
+                "            if False:  # switched off",
+            ),
+        ),
+        stack="none",
+        expect=(
+            Expect(
+                f"{WATCHER}::test_a_walk_past_its_deadline_cannot_be_measured",
+                'pytest.raises(Unmeasurable, match="took too long")',
+            ),
+            Expect(
+                f"{WATCHER}::test_a_walk_past_its_own_deadline_starts_no_command",
+                "assert result.is_error",
+            ),
+        ),
+    ),
+    "workspace-run-bound-off": SwitchedOff(
+        issue=158,
+        what="the part of a call's bound kept for the measurement",
+        edits=(
+            Edit(
+                RUNNER,
+                "within = call_within(settings) - measure_within(settings)",
+                "within = call_within(settings)  # switched off",
+            ),
+        ),
+        stack="none",
+        expect=(
+            Expect(
+                "tests/unit/test_sandbox_runner.py"
+                "::test_with_a_workspace_limit_the_run_leaves_the_measurement_its_part_of_the_bound",
+                "assert took < run_bound + 0.3",
+            ),
+        ),
+    ),
+    "workspace-timeout-off": SwitchedOff(
+        issue=158,
+        what="the time box of the measurement before a command starts",
+        edits=(Edit(SANDBOXED, "async with asyncio.timeout(within):", "if True:  # switched off"),),
+        stack="none",
+        expect=(
+            Expect(
+                f"{WATCHER}::test_a_walk_that_hangs_past_its_time_box_starts_no_command",
+                "assert result.is_error",
+            ),
+        ),
+    ),
+    "workspace-stop-signal-off": SwitchedOff(
+        issue=158,
+        what="the signal that tells a walk to stop when its call ends",
+        edits=(Edit(SANDBOXED, "        bounds.stop.set()\n", "        pass  # switched off\n"),),
+        stack="none",
+        expect=(
+            Expect(
+                f"{WATCHER}::test_a_walk_that_hangs_past_its_time_box_starts_no_command",
+                "assert took < 1.0",
+            ),
+            Expect(
+                f"{WATCHER}::test_a_run_that_ends_does_not_wait_for_a_measurement",
+                "assert stopped[-1] is True",
+            ),
+        ),
+    ),
+    "workspace-walk-stop-off": SwitchedOff(
+        issue=158,
+        what="a walk's check of the signal to stop",
+        edits=(
+            Edit(
+                WORKSPACE,
+                "            if self.bounds.stop.is_set():",
+                "            if False:  # switched off",
+            ),
+        ),
+        stack="none",
+        expect=(
+            Expect(
+                f"{WATCHER}::test_a_walk_told_to_stop_cannot_be_measured",
+                'pytest.raises(Unmeasurable, match="was stopped")',
+            ),
+        ),
+    ),
 }
 
 
-def edited(edit: Edit, root: Path = ROOT) -> str:
-    """The file's text with the edit made. Raises ValueError unless `old` occurs once."""
-    text = (root / edit.path).read_text()
+def _once(edit: Edit, text: str) -> str:
     found = text.count(edit.old)
     if found != 1:
         raise ValueError(f"{edit.path}: the edit's text occurs {found} times, not once")
     return text.replace(edit.old, edit.new)
+
+
+def edited(edit: Edit, root: Path = ROOT) -> str:
+    """The file's text with the edit made. Raises ValueError unless `old` occurs once."""
+    return _once(edit, (root / edit.path).read_text())
+
+
+def edited_files(edits: tuple[Edit, ...], root: Path = ROOT) -> dict[str, str]:
+    """Each file the edits change, with all of its edits made, in the list's order.
+
+    Two edits of one file both land: each must occur once in the text the
+    edits before it left. Raises ValueError otherwise. A path is relative to
+    `root`, under `src/`, `migrations/` or anywhere else in the checkout.
+    """
+    texts: dict[str, str] = {}
+    for edit in edits:
+        text = texts[edit.path] if edit.path in texts else (root / edit.path).read_text()
+        texts[edit.path] = _once(edit, text)
+    return texts
+
+
+def stack_commands(stack: str, provider: str) -> list[list[str]]:
+    """The commands that start an entry's stack, before its tests run. None with no stack."""
+    match stack:
+        case "none":
+            return []
+        case "up":
+            return [["make", "up"]]
+        case "chaos":
+            compose = ["-f", "docker-compose.yml", "-f", "docker-compose.chaos.yml"]
+            return [["docker", "compose", *compose, "up", "--build", "--wait"]]
+        case "kills":
+            compose = ["-f", "docker-compose.yml", "-f", "docker-compose.kills.yml"]
+            if provider == "claude":
+                # The one file that names the Claude API. It reads the key.
+                compose += ["-f", "docker-compose.claude.yml"]
+            return [["docker", "compose", *compose, "up", "--build", "--wait"]]
+        case "lab":
+            # As `make lab`: the lab's tests start the stack with Gitea from
+            # these images, and put the stack of `make up` back at the end.
+            compose = ["-f", "docker-compose.yml", "-f", "docker-compose.lab.yml"]
+            return [["docker", "compose", *compose, "build"]]
+    raise ValueError(f"no stack {stack!r}")
 
 
 def kill_rules(root: Path = ROOT) -> ModuleType:
@@ -321,11 +1019,11 @@ def check(root: Path = ROOT) -> list[str]:
     """What is wrong with the list against the code in `root`. Empty when nothing is."""
     problems = []
     for name, entry in ENTRIES.items():
-        for edit in entry.edits:
-            try:
-                compile(edited(edit, root), edit.path, "exec")
-            except (ValueError, SyntaxError) as error:
-                problems.append(f"{name}: {error}")
+        try:
+            for path, text in edited_files(entry.edits, root).items():
+                compile(text, path, "exec")
+        except (ValueError, SyntaxError) as error:
+            problems.append(f"{name}: {error}")
         for expect in entry.expect:
             path, _, function = expect.node.partition("::")
             function = function.partition("[")[0]
@@ -357,6 +1055,11 @@ def run_problems(entry: SwitchedOff, root: Path = ROOT) -> list[str]:
             problems.append("a run on the Claude API is judged by its record, and names none")
     elif entry.model is not None:
         problems.append(f"the fake provider takes no model, and the entry names {entry.model!r}")
+    if entry.stack in STACK_TESTS:
+        tests = STACK_TESTS[entry.stack]
+        outside = [expect.node for expect in entry.expect if not expect.node.startswith(tests)]
+        if outside:
+            problems.append(f"stack {entry.stack!r} runs {tests} only, not {outside}")
     if not kills:
         if entry.runs or entry.record is not None:
             problems.append("`runs` and `record` are for the kills stack")
@@ -588,6 +1291,11 @@ def judge_rehearsal(
     ]
 
 
+def names(provider: str) -> list[str]:
+    """The entries of one provider, in the list's order."""
+    return [name for name, entry in ENTRIES.items() if entry.provider == provider]
+
+
 def dispatch_problem(name: str, provider: str, model: str | None) -> str | None:
     """Why the workflow's inputs do not start this entry, or None.
 
@@ -691,7 +1399,8 @@ def run(name: str, *, rehearsal: bool = False) -> int:
     print(f"commit {head}", flush=True)
     env = child_environment(entry, provider, os.environ)
     quiet = without_keys(env)
-    texts = {edit.path: edited(edit) for edit in entry.edits}
+    starts = stack_commands(entry.stack, provider)
+    texts = edited_files(entry.edits)
     for path, text in texts.items():
         (ROOT / path).write_text(text)
     _sh("git", "--no-pager", "diff", "--", *texts, env=quiet)
@@ -699,16 +1408,8 @@ def run(name: str, *, rehearsal: bool = False) -> int:
         (ROOT / ".chaos").mkdir(exist_ok=True)
         # The chaos workers write their records here, as with `make chaos`.
         (ROOT / ".chaos").chmod(0o777)
-        compose = ["-f", "docker-compose.yml", "-f", "docker-compose.chaos.yml"]
-        _sh("docker", "compose", *compose, "up", "--build", "--wait", env=env)
-    elif entry.stack == "kills":
-        compose = ["-f", "docker-compose.yml", "-f", "docker-compose.kills.yml"]
-        if provider == "claude":
-            # The one file that names the Claude API. It reads the key.
-            compose += ["-f", "docker-compose.claude.yml"]
-        _sh("docker", "compose", *compose, "up", "--build", "--wait", env=env)
-    else:
-        _sh("make", "up", env=env)
+    for command in starts:
+        _sh(*command, env=env)
     (ROOT / JUNIT).parent.mkdir(exist_ok=True)
     (ROOT / JUNIT).unlink(missing_ok=True)
     kept = ROOT / KILL_RECORDS
@@ -740,6 +1441,9 @@ def main(argv: list[str]) -> int:
     match argv:
         case ["names"]:
             print("\n".join(ENTRIES))
+            return 0
+        case ["names", "fake"]:
+            print(json.dumps(names("fake")))
             return 0
         case ["check"]:
             problems = check()
