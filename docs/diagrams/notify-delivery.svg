@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="740" height="310" viewBox="0 0 740 310" role="img" aria-labelledby="title desc">
+  <title id="title">How a parked job notifies</title>
+  <desc id="desc">Worker 1 parks a job and adds a delivery row in one statement, then may stop. Any worker claims the row and posts the question to the receiver. A 2xx marks it sent, anything else is tried again later.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="m0 0 8 4-8 4z" fill="#bdc8d6"/>
+    </marker>
+  </defs>
+  <rect width="740" height="310" rx="8" fill="#0d1117"/>
+  <g stroke="#657382" stroke-dasharray="3 5" fill="none">
+    <path d="M100 54v51 M280 54v236 M460 54v236 M640 54v168"/>
+  </g>
+  <g fill="#1b2531" stroke="#788798">
+    <rect x="40" y="16" width="120" height="38" rx="5"/>
+    <rect x="220" y="16" width="120" height="38" rx="5"/>
+    <rect x="400" y="16" width="120" height="38" rx="5"/>
+    <rect x="580" y="16" width="120" height="38" rx="5"/>
+  </g>
+  <g fill="none" stroke="#bdc8d6" stroke-width="1.5" marker-end="url(#arrow)">
+    <path d="M100 88h178"/>
+    <path d="M460 170H282"/>
+    <path d="M460 205h178"/>
+    <path d="M460 240H282"/>
+    <path d="M460 275H282" stroke-dasharray="5 4"/>
+  </g>
+  <g font-family="system-ui, sans-serif" font-size="16" text-anchor="middle" fill="#eef2f6">
+    <g font-weight="600">
+      <text x="100" y="41">Worker 1</text>
+      <text x="280" y="41">Postgres</text>
+      <text x="460" y="41">Any worker</text>
+      <text x="640" y="41">Receiver</text>
+    </g>
+    <text x="190" y="80">Park and add row</text>
+    <rect x="32" y="105" width="136" height="28" rx="4" fill="#28313d"/>
+    <text x="100" y="125">May stop here</text>
+    <text x="370" y="162">Claim due rows</text>
+    <text x="550" y="197">POST the question</text>
+    <rect x="576" y="222" width="128" height="28" rx="4" fill="#3b2b25"/>
+    <text x="640" y="242" fill="#ffb991" font-weight="600">Operator told</text>
+    <text x="370" y="232">2xx: mark sent</text>
+    <text x="370" y="267">Else: try later</text>
+  </g>
+</svg>

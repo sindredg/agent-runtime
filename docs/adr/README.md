@@ -42,6 +42,7 @@ Read [the queue](0002-postgres-as-the-job-queue.md),
 | [0026](0026-python-on-asyncio-with-the-sql-written-out.md) | Write the runtime in Python on asyncio, with the SQL written out | Yes |
 | [0027](0027-an-api-without-authentication-on-localhost.md) | The API has no authentication and answers on localhost only | Yes |
 | [0028](0028-send-the-whole-conversation-and-fail-past-the-context-window.md) | Send the whole conversation every time, and fail a job that outgrows the context window | Yes |
+| [0029](0029-notify-from-a-row-the-park-writes.md) | A parked job notifies from a row its park writes, at least once | No |
 
 There is no record 0024: it was withdrawn before anything was built.
 
