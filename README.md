@@ -6,34 +6,6 @@ same job when its lease expires and continue from the step log.
 
 ![Worker A records a step and stops. After its lease expires, worker B claims the job and resumes from the step log.](docs/diagrams/worker-handoff.svg)
 
-<details>
-<summary>View as Mermaid</summary>
-
-```mermaid
----
-config:
-  sequence:
-    width: 92
-    actorMargin: 18
-    diagramMarginX: 6
-    mirrorActors: false
----
-sequenceDiagram
-    accTitle: How a job survives its worker
-    accDescr: Worker A records a step and stops. After its lease expires, worker B claims the job and reads its recorded steps to continue.
-    participant A as Worker A
-    participant DB as Postgres
-    participant B as Worker B
-    A->>DB: Record a step
-    Note over A: Worker stops
-    Note over DB: Lease expires
-    B->>DB: Claim the job
-    B->>DB: Read step log
-    Note over B: Resume job
-```
-
-</details>
-
 ## Quickstart
 
 Requires [uv](https://docs.astral.sh/uv/), Docker with Compose, make, and

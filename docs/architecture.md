@@ -6,29 +6,6 @@
 
 ![The CLI submits jobs through the API. Workers claim jobs in Postgres, call the model provider and start sandboxed tool containers.](diagrams/job-components.svg)
 
-<details>
-<summary>View as Mermaid</summary>
-
-```mermaid
----
-config:
-  htmlLabels: false
-  flowchart:
-    padding: 8
-    nodeSpacing: 20
----
-flowchart TD
-    accTitle: Components that run a job
-    accDescr: The CLI submits a job through the API. Workers claim jobs and record steps in Postgres, call the model provider and start containers for sandboxed tools.
-    CLI[CLI] -->|Submit job| API[API]
-    API -->|Queue job| DB[(Postgres<br/>Jobs and steps)]
-    W[Worker<br/>one or more] -->|Claim job<br/>Record steps| DB
-    W -->|Call model| P[Model provider]
-    W -->|Start via Docker| S[Sandboxed tool<br/>container]
-```
-
-</details>
-
 | Component | Code | What it does |
 |---|---|---|
 | `api` | `src/runtime/api/` | Accepts jobs, serves jobs and steps, takes cancels and approval answers. Holds no state. |
