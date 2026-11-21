@@ -100,6 +100,25 @@ class _ProviderBusy(Exception):
         self.attempt = attempt
 
 
+# The longest provider error text a wait keeps in its step. The step log is
+# append-only and a job can wait thousands of times; a longer text is cut.
+WAIT_ERROR_LENGTH = 1000
+_CUT = " [cut]"
+
+
+def _wait(busy: _ProviderBusy, rng: random.Random) -> Wait:
+    """The wait after a busy answer, with the provider's error text cut to length."""
+    text = str(busy.error)
+    if len(text) > WAIT_ERROR_LENGTH:
+        text = text[: WAIT_ERROR_LENGTH - len(_CUT)] + _CUT
+    return Wait(
+        seconds=backoff.delay(busy.attempt, busy.error.retry_after, rng),
+        attempt=busy.attempt,
+        retry_after=busy.error.retry_after,
+        error=_storable(text, "the provider was busy"),
+    )
+
+
 async def _stored[T](call: Awaitable[T]) -> T:
     """Await a call to the store. A database or network error becomes _StoreUnreachable.
 
@@ -825,13 +844,7 @@ async def _run(
         failure = str(error)
     except _ProviderBusy as busy:
         status = JobStatus.WAITING
-        retry_after = busy.error.retry_after
-        wait = Wait(
-            seconds=backoff.delay(busy.attempt, retry_after, settings.rng),
-            attempt=busy.attempt,
-            retry_after=retry_after,
-            error=_storable(str(busy.error), "the provider was busy"),
-        )
+        wait = _wait(busy, settings.rng)
     except LeaseLost, _StoreUnreachable:
         raise
     except Exception as error:

@@ -112,13 +112,15 @@ class AnthropicProvider:
             status = error.status_code
             if status < 400:
                 # An `error` event inside a stream that started with 200.
-                # This is how overload is reported once output has begun.
+                # This is how overload is reported once output has begun. A
+                # spend cap is final here too.
                 kind = _error_type(error)
+                capped = _spend_cap(error)
                 raise ProviderError(
                     f"provider sent an error during the stream: {kind}: {error.message}",
                     status=None,
-                    retryable=kind in _RETRYABLE_ERROR_TYPES,
-                    busy=kind in _BUSY_ERROR_TYPES,
+                    retryable=not capped and kind in _RETRYABLE_ERROR_TYPES,
+                    busy=not capped and kind in _BUSY_ERROR_TYPES,
                 ) from error
             capped = status == 429 and _spend_cap(error)
             raise ProviderError(
