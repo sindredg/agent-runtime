@@ -4,13 +4,15 @@ Each guarantee has a test with a pass line that was fixed before the run, and
 a run with the mechanism switched off to show that the test can fail.
 
 The table with one line per guarantee is in the
-[README](../../README.md#results). The evidence is on three pages:
+[README](../../README.md#results). The evidence is on four pages:
 
 - [Durability](durability.md): surviving a lost worker, unsafe tool
   calls, stale workers, crash loops, the step log.
 - [Scope and sandbox](sandbox.md): what a tool can reach.
 - [Budget, approval, backoff and tool output](controls.md): what a job may
   spend and do.
+- [Switched-off runs from the list](switched-off.md): each mechanism
+  removed, and how its tests ended.
 
 Jobs that ran with a real model, which are not the evidence for a guarantee:
 [Runs against the Claude API](api.md) and [Kill run results](kill-runs.md).
@@ -71,10 +73,11 @@ seldom reaches the cut of a tool result
 ([issue 61](https://github.com/sindredg/agent-runtime/issues/61)); a
 sandbox test covers it.
 
-Seven more ran at `11b6792`, 2026-11-20, one per entry of
-`scripts/switched_off.py`: from the Manual runs workflow, on GitHub-hosted
-`ubuntu-26.04` runners, fake provider, 1 run each. 12 of 12 tests ended as
-the list says. Each run's public log, kept 90 days, is linked from its page.
+The switches are now entries of `scripts/switched_off.py`, run from the
+Manual runs workflow. At `e1656b5`, 2026-11-21, all 34 entries of the fake
+provider ran: [96 of 96 tests ended as the list says](switched-off.md). Seven
+of them had run before, at `11b6792`. Four switches have no entry yet
+([issue 163](https://github.com/sindredg/agent-runtime/issues/163)).
 
 One entry on the Claude API ran at `5a5bfa6`, 2026-11-21: [PASS, 5 of 5 jobs
 refused](kill-runs.md#with-the-stored-signature-changed).
