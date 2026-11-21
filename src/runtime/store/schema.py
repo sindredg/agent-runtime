@@ -62,6 +62,8 @@ jobs = Table(
         postgresql_where=text(CLAIMABLE_STATUSES_SQL),
     ),
     Index("jobs_open_deadline", "deadline", postgresql_where=text(OPEN_STATUSES_SQL)),
+    # The job list with a status filter (`runtime.store.listing`).
+    Index("jobs_status_id", "status", "id"),
 )
 
 steps = Table(
