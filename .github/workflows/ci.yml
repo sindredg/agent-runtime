@@ -50,6 +50,8 @@ jobs:
       - run: uv run --frozen yamllint --strict .
       - name: JSON syntax
         run: git ls-files -z '*.json' | xargs -0 uv run --frozen python scripts/lint_json.py
+      - name: SVG syntax
+        run: git ls-files -z '*.svg' | xargs -0 uv run --frozen python scripts/lint_svg.py
       # Fails on a page that is too long, has a long paragraph or table
       # cell, has no diagram, or links to a page or heading that is not there.
       - name: Docs limits

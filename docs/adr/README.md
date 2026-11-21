@@ -3,38 +3,15 @@
 One record per real decision: context, options, decision, consequences. An
 accepted record keeps its text. A change is a new record.
 
-```mermaid
-flowchart LR
-    A1[0001 durability<br/>on Postgres] --> A2[0002 Postgres<br/>as the queue]
-    A1 --> A4[0004 fencing]
-    A4 --> A5[0005 interrupted<br/>tool calls]
-    A4 --> A6[0006 takeovers]
-    A5 --> A6
-    A7[0007 security agents,<br/>APTS] --> A8[0008 container<br/>per call]
-    A4 --> A8
-    A5 --> A8
-    A8 --> A9[0009 scope]
-    A6 --> A10[0010 halt and<br/>budget]
-    A5 --> A11[0011 approval]
-    A10 --> A11
-    A11 --> A12[0012 an answer<br/>names its question]
-    A5 --> A12
-    A4 --> A13[0013 hash chain<br/>and two roles]
-    A8 --> A14[0014 workspace<br/>limit]
-    A13 --> A15[0015 the chain's<br/>trigger, owner only]
-    A13 --> A16[0016 verify reads<br/>the database]
-    A14 --> A17[0017 bounded walk]
-    A5 --> A19[0019 Gitea check:<br/>a marker line]
-    A4 --> A23[0023 a running job<br/>has a lease]
-    A5 --> A25[0025 a tool's request<br/>is waited out]
-    A8 --> A25
-    A3[0003 SDK and<br/>a fake provider] --> A26[0026 Python<br/>on asyncio]
-    A4 --> A26
-    A11 --> A27[0027 an API without<br/>authentication]
-    A10 --> A28[0028 the whole<br/>conversation, every time]
-```
+## How a worker takes over a job
 
-An arrow means the later record builds on, or follows from, the earlier one.
+![Recovery decisions in reading order: claim the job (0002), fence the old worker’s writes (0004), and handle a tool call with no result (0005).](../diagrams/recovery-decisions.svg)
+
+Read [the queue](0002-postgres-as-the-job-queue.md),
+[the write fence](0004-fence-writes-with-the-lease-epoch-and-a-row-lock.md) and
+[interrupted tool calls](0005-rerun-an-interrupted-tool-call-only-when-it-is-safe.md) in that order.
+
+## All records
 
 | Record | Decision | Built |
 |---|---|---|

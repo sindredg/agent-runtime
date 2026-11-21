@@ -38,6 +38,21 @@ def test_a_page_inside_the_limits_passes(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
+    ("markup", "expected"),
+    [
+        ("![Job handoff](diagram.svg)", 0),
+        ("[Job handoff](diagram.svg)", 1),
+        ("```text\n![Job handoff](diagram.svg)\n```", 1),
+        ("![Job handoff](missing.svg)", 1),
+    ],
+)
+def test_svg_counts_when_displayed(tmp_path: Path, markup: str, expected: int) -> None:
+    page(tmp_path, '<svg xmlns="http://www.w3.org/2000/svg"/>', "diagram.svg")
+    result = lint(page(tmp_path, GOOD.replace(DIAGRAM, markup + "\n")))
+    assert result.returncode == expected, result.stderr
+
+
+@pytest.mark.parametrize(
     ("text", "problem"),
     [
         (GOOD + "\nline\n" * 80, "lines, at most 150"),

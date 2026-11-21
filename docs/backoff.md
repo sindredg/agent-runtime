@@ -4,24 +4,12 @@ A rate limit or overload from the provider slows a job; it does not fail it.
 The job waits in `waiting` and goes on from its step log
 ([ADR 0018](adr/0018-wait-out-a-busy-provider-in-the-waiting-status.md)).
 
-```mermaid
-sequenceDiagram
-    participant W1 as worker
-    participant P as provider
-    participant DB as postgres
-    participant W2 as any worker
-    W1->>DB: model_request step
-    W1->>P: request
-    P-->>W1: 429, retry-after: 5
-    W1->>DB: waiting, not_before = now + delay,<br/>status_changed step (one statement)
-    Note over DB: the claim skips the job until not_before
-    W2->>DB: claim after not_before
-    W2->>P: the same request again
-    P-->>W2: answer
-```
+![A five-second retry request plus 0.1 seconds of jitter makes the job eligible for a claim after 5.1 seconds. Any worker can then retry the request.](diagrams/provider-backoff.svg)
 
-The code is `worker/backoff.py`, `store/held.py` (`leave_running`) and the
-claim in `store/jobs.py`.
+The worker records `waiting`, the retry time (`not_before`) and the
+`status_changed` step in one database statement. Workers skip the job until
+the database clock reaches that time. See the [wait calculation](../src/runtime/worker/backoff.py)
+and [claim query](../src/runtime/store/jobs.py).
 
 ## Which errors wait
 

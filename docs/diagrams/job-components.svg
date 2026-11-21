@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="330" viewBox="0 0 480 330" role="img" aria-labelledby="title desc">
+  <title id="title">Components that run a job</title>
+  <desc id="desc">The CLI submits jobs through the API. Workers claim jobs and record steps in Postgres, call the model provider and start sandboxed tool containers through Docker.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="m0 0 8 4-8 4z" fill="#bdc8d6"/>
+    </marker>
+  </defs>
+  <rect width="480" height="330" rx="8" fill="#0d1117"/>
+  <g stroke="#bdc8d6" stroke-width="1.5" fill="none" marker-end="url(#arrow)">
+    <path d="M75 62v65"/>
+    <path d="M75 177v72"/>
+    <path d="M325 183v31q0 7-7 7H155q-7 0-7 7v21"/>
+    <path d="M266 126V66q0-6-6-6h-8"/>
+    <path d="M380 183v66"/>
+  </g>
+  <g fill="#1b2531" stroke="#788798">
+    <rect x="25" y="18" width="100" height="44" rx="5"/>
+    <rect x="25" y="129" width="100" height="48" rx="5"/>
+    <rect x="148" y="18" width="102" height="66" rx="5"/>
+    <rect x="298" y="251" width="164" height="62" rx="5"/>
+    <rect x="237" y="126" width="175" height="57" rx="5" stroke="#f3a579" fill="#322722"/>
+    <path d="M21 262c0-15 156-15 156 0v39c0 16-156 16-156 0z"/>
+    <path d="M21 262c0 15 156 15 156 0" fill="none"/>
+  </g>
+  <g font-family="system-ui, sans-serif" text-anchor="middle" fill="#eef2f6" font-size="17">
+    <g font-weight="600">
+      <text x="75" y="46">CLI</text>
+      <text x="75" y="159">API</text>
+      <text x="99" y="290">Postgres</text>
+      <text x="199" y="45">Model</text>
+      <text x="199" y="66">provider</text>
+      <text x="325" y="150" fill="#ffb991">Worker</text>
+      <text x="380" y="278">Sandboxed tool</text>
+      <text x="380" y="298">container</text>
+    </g>
+    <g font-size="15" fill="#d6dfe9">
+      <text x="325" y="171">one or more</text>
+      <text x="83" y="101" text-anchor="start">Submit job</text>
+      <text x="67" y="214" text-anchor="end">Queue</text>
+      <text x="276" y="96" text-anchor="start">Call model</text>
+      <text x="226" y="213">Claim job, record steps</text>
+      <text x="388" y="210" text-anchor="start">Start via</text>
+      <text x="388" y="229" text-anchor="start">Docker</text>
+      <text x="99" y="308">Jobs and steps</text>
+    </g>
+  </g>
+</svg>

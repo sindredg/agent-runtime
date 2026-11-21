@@ -29,6 +29,7 @@ _ITEM = re.compile(r"^\s*([-*]|\d+\.)\s+")
 _CODE = re.compile(r"`[^`]*`")
 _TARGET = re.compile(r"\]\([^)]*\)")
 _LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
+_SVG_IMAGE = re.compile(r"^!\[[^\]]*\]\(([^)\s]+\.svg)\)$")
 _SENTENCE_END = re.compile(r"[.!?](?=\s|$)")
 _HEADING = re.compile(r"^#{1,6}\s+(.*)$")
 
@@ -109,7 +110,9 @@ def check(path: Path) -> list[str]:
     if len(lines) > MAX_LINES:
         problems.append(f"{len(lines)} lines, at most {MAX_LINES}: split or cut")
     if "```mermaid" not in text and not NO_DIAGRAM.search(name):
-        problems.append("no Mermaid diagram")
+        images = (_SVG_IMAGE.fullmatch(line) for _, line in _prose(lines))
+        if not any(image and (path.parent / image[1]).is_file() for image in images):
+            problems.append("no Mermaid diagram or embedded SVG")
     if "—" in text:
         problems.append("an em dash")
     if KEPT_TEXT.search(name):

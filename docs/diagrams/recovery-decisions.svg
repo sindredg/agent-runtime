@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="308" viewBox="0 0 480 308" role="img" aria-labelledby="title desc">
+  <title id="title">Three decisions behind worker recovery</title>
+  <desc id="desc">Read ADR 0002 for the queue and claim, 0004 for fencing stale writes, then 0005 for recovering interrupted tool calls.</desc>
+  <rect width="480" height="308" rx="8" fill="#0d1117"/>
+  <g fill="none" stroke="#788798" stroke-width="2">
+    <path d="M58 62v63m-5-6 5 6 5-6"/>
+    <path d="M58 160v63m-5-6 5 6 5-6"/>
+  </g>
+  <g fill="#1b2531" stroke="#788798">
+    <rect x="20" y="26" width="76" height="36" rx="5"/>
+    <rect x="20" y="124" width="76" height="36" rx="5"/>
+    <rect x="20" y="222" width="76" height="36" rx="5" fill="#322722" stroke="#f3a579"/>
+  </g>
+  <g font-family="monospace" font-size="18" text-anchor="middle" fill="#eef2f6">
+    <text x="58" y="50">0002</text>
+    <text x="58" y="148">0004</text>
+    <text x="58" y="246" fill="#ffb991">0005</text>
+  </g>
+  <g font-family="system-ui, sans-serif">
+    <g fill="#eef2f6" font-size="20" font-weight="600">
+      <text x="114" y="49">Who can claim the job?</text>
+      <text x="114" y="147">Who can write to the log?</text>
+      <text x="114" y="245">Can the tool run again?</text>
+    </g>
+    <g fill="#ccd5df" font-size="17">
+      <text x="114" y="76">When the lease expires, another</text>
+      <text x="114" y="98">worker can claim the job in Postgres.</text>
+      <text x="114" y="174">Each claim advances the lease epoch.</text>
+      <text x="114" y="196">Postgres rejects the old worker’s writes.</text>
+      <text x="114" y="272">If a call has no recorded result, the</text>
+      <text x="114" y="294">worker can retry, check or ask a person.</text>
+    </g>
+  </g>
+</svg>
