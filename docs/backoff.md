@@ -27,9 +27,9 @@ claim in `store/jobs.py`.
 
 | Answer | Outcome |
 |---|---|
-| 429 `rate_limit_error` | Waits |
-| 529, or `overloaded_error` inside a stream | Waits |
-| 429 for a spend cap (`enforced_spend_limit_reached`) | Fails the job: waiting does not lift it |
+| 429, whatever its error type | Waits |
+| 529, or `rate_limit_error` or `overloaded_error` inside a stream | Waits |
+| A spend cap (`enforced_spend_limit_reached`), as a 429 or inside a stream | Fails the job: waiting does not lift it |
 | 5xx, 408, 409, timeouts, broken streams | Fails the job ([issue 99](https://github.com/sindredg/agent-runtime/issues/99)) |
 
 ## How long
@@ -57,7 +57,8 @@ Each wait is a `status_changed` step, written with the move:
  "delay_seconds": 5.1, "retry_after": 5, "error": "provider answered 429: ..."}
 ```
 
-`runtime logs` prints it as `running -> waiting (provider_busy) until ...`.
+`error` is the provider's text, cut to 1000 characters. `runtime logs` prints
+the step as `running -> waiting (provider_busy) until ...`.
 
 ## While it waits
 
@@ -72,5 +73,7 @@ Each wait is a `status_changed` step, written with the move:
 - Workers share no limit on provider calls. Jobs that were refused together
   are spread only by the random part. A shared limiter is planned.
 - A job can wait until its deadline. Nothing caps the number of waits.
+- Any 429 but a spend cap waits, also one that waiting cannot lift. ADR 0018
+  names only `rate_limit_error` ([issue 142](https://github.com/sindredg/agent-runtime/issues/142)).
 - The tests use the fake provider's busy window (`PUT /_fake/busy`). The
   Claude API's own rate limits have not been met in a run.
