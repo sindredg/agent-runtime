@@ -1,7 +1,8 @@
 """The lab demo's stack: the compose stack with Gitea, set up from scratch or reused.
 
 `make lab` builds the images and runs these tests. The setup is idempotent:
-a second run finds the users and the repository and makes a new token.
+a second run finds the users and the repository, sets new passwords and makes
+a new token. At the end Gitea stops and the stack goes back to `make up`'s.
 
 What happened is read from Gitea with the admin login, not through the
 runtime's tracker code, and from the workers' own logs.
@@ -12,7 +13,7 @@ import secrets
 import subprocess
 import time
 from collections.abc import Iterator
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +30,10 @@ DATABASE_URL = os.environ.get(
 # The repository owner, who also reads the issues back, and the user the
 # worker's token belongs to. The names match docker-compose.lab.yml.
 ADMIN, BOT, REPO = "lab-admin", "lab-bot", "shop"
-ADMIN_PASSWORD = os.environ.get("LAB_GITEA_PASSWORD", "lab-admin-dev")
+# New on each run unless the operator sets one. Not printed by a passing
+# run; the repository is public, so its issues can be read without it. A
+# failing `gitea admin user` call can show it in pytest's traceback.
+ADMIN_PASSWORD = os.environ.get("LAB_GITEA_PASSWORD") or secrets.token_urlsafe(24)
 TOKEN_NAME = "lab-demo"  # noqa: S105 - the token's name, not a secret
 WORKERS = 2
 # What a worker logs when it stops at a failpoint.
@@ -177,15 +181,23 @@ class Lab:
 
 
 @pytest.fixture(scope="session")
-def lab() -> Iterator[Lab]:
+def lab(request: pytest.FixtureRequest) -> Iterator[Lab]:
     print(f"\nSetting up Gitea at {GITEA_URL} ({ADMIN}/{REPO}, token for {BOT})", flush=True)
+    started = datetime.now(UTC)
     lab = Lab()
     lab.set_up()
     try:
         yield lab
     finally:
-        # The workers go back to no failpoint; the stack and Gitea stay up to look at.
-        lab.workers_up()
-        print(f"\nThe issues: {GITEA_URL}/{ADMIN}/{REPO}/issues", flush=True)
         lab.api.close()
         lab.gitea.close()
+        if request.session.testsfailed:
+            # The lab workers are replaced below, and their logs with them.
+            print(f"\nLab worker logs:\n{lab.worker_logs(started)}", flush=True)
+        try:
+            # Gitea stops, with its data kept for a restart (docs/lab-demo.md).
+            run(*COMPOSE, "stop", "gitea")
+        finally:
+            # The stack of `make up`: one worker, on the fake tracker.
+            run("docker", "compose", "up", "--detach", "--wait", "--no-build")
+        print("\nGitea is stopped. docs/lab-demo.md says how to start it again.", flush=True)

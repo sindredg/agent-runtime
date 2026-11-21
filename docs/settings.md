@@ -78,8 +78,8 @@ flowchart LR
 | `TRACKER_TOKEN` | unset | Gitea only: a token with `write:issue` and `read:user`. The check counts only its user's issues. |
 
 The [lab demo](lab-demo.md) sets these for Gitea. `tests/lab` reads
-`LAB_GITEA_PORT` (3000) and `LAB_GITEA_PASSWORD` (`lab-admin-dev`, Gitea's
-admin) from the shell, and compose reads the port from `.env` too.
+`LAB_GITEA_PORT` (3000) and `LAB_GITEA_PASSWORD` (Gitea's admin; unset, a new
+random one each run) from the shell. Compose reads the port from `.env` too.
 
 ## Worker: workspace and sandbox
 

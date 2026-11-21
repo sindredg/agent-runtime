@@ -221,6 +221,16 @@ jobs:
       # create_issue call to it, and counts the issues in Gitea.
       - name: Lab demo
         run: make lab
+      # The demo's end stops Gitea and puts the worker back on the fake
+      # tracker. Nothing of the lab may stay running.
+      - name: Gitea is stopped after the demo
+        run: |
+          running=$(docker compose -f docker-compose.yml -f docker-compose.lab.yml \
+            ps --status running --quiet gitea)
+          test -z "$running"
+          worker=$(docker compose ps --quiet worker)
+          test "$(printf '%s' "$worker" | grep -c .)" -eq 1
+          docker exec "$worker" printenv TRACKER_URL | grep -qx 'http://fake-tracker:8000'
       - name: Service logs
         if: failure()
         run: docker compose -f docker-compose.yml -f docker-compose.lab.yml logs --no-color
