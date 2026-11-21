@@ -97,9 +97,9 @@ such a run did not reach is named with its result.
 | Throughput scales with workers | Not measured | |
 
 Every result is from one run at commit `1f57ee4`, on one machine, against
-the fake provider. Seven switched-off runs are from `11b6792` on GitHub,
-with public logs, and two are older. Each names its commit. The run, and
-what it does not show: [Results](docs/results/README.md).
+the fake provider. Seven switched-off runs are from `11b6792` and one on the
+Claude API from `5a5bfa6`, on GitHub with public logs; two are older. Each
+names its commit. The run, and what it does not show: [Results](docs/results/README.md).
 
 The fake provider is compared with the Claude API by a contract test that is
 started by hand: [The contract test](docs/contract-test.md). Eight single

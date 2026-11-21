@@ -76,6 +76,9 @@ Seven more ran at `11b6792`, 2026-11-20, one per entry of
 `ubuntu-26.04` runners, fake provider, 1 run each. 12 of 12 tests ended as
 the list says. Each run's public log, kept 90 days, is linked from its page.
 
+One entry on the Claude API ran at `5a5bfa6`, 2026-11-21: [PASS, 5 of 5 jobs
+refused](kill-runs.md#with-the-stored-signature-changed).
+
 ## How a kill run works
 
 ```mermaid

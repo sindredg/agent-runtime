@@ -53,8 +53,8 @@ An arrow means the later record builds on, or follows from, the earlier one.
 | [0018](0018-wait-out-a-busy-provider-in-the-waiting-status.md) | Wait out a busy provider in the `waiting` status | [Yes](../backoff.md), for one worker. No shared limiter |
 | [0019](0019-find-a-gitea-issue-by-a-marker-line-not-by-search.md) | Find a Gitea issue by a marker line, not by search | [Yes](../lab-demo.md), in the lab demo |
 | [0020](0020-run-recorded-kill-and-api-runs-in-a-manual-workflow.md) | Run recorded kill runs and API runs in a manual workflow | [Yes](../results/kill-runs.md#runs), run on the fake provider and three models |
-| [0021](0021-run-switched-off-runs-from-a-reviewed-list.md) | Run switched-off runs from a reviewed list in the Manual runs workflow | Yes. No recorded run yet |
-| [0022](0022-run-switched-off-entries-on-the-claude-api-from-the-list.md) | Run switched-off entries on the Claude API from the reviewed list | Yes. No run on the Claude API yet |
+| [0021](0021-run-switched-off-runs-from-a-reviewed-list.md) | Run switched-off runs from a reviewed list in the Manual runs workflow | Yes, [seven runs](../results/README.md#runs-with-a-mechanism-switched-off) at `11b6792` |
+| [0022](0022-run-switched-off-entries-on-the-claude-api-from-the-list.md) | Run switched-off entries on the Claude API from the reviewed list | Yes, [run once](../results/kill-runs.md#with-the-stored-signature-changed) on `claude-fable-5-2` |
 | [0023](0023-a-running-job-has-a-lease.md) | A `running` job has a lease, and the database refuses one without | Yes, migration 0009 |
 
 Each record states what was built at the time it was written. What is built
