@@ -317,13 +317,17 @@ def test_a_late_removal_does_not_hold_the_call_past_its_bound(short: SandboxSett
 
 def test_the_commands_timeout_counts_from_the_start_request(short: SandboxSettings) -> None:
     """A slow set-up does not eat into the command's time."""
-    sandbox = Sandbox(FakeDocker(create_takes=0.15, late=frozenset({"wait"})), short)  # type: ignore[arg-type]
+    # The set-up bound leaves 0.85 s after the slow create, not 50 ms: a loaded
+    # test run must not end the call before the command starts (issue 145).
+    roomy = dataclasses.replace(short, start_within=1.0)
+    sandbox = Sandbox(FakeDocker(create_takes=0.15, late=frozenset({"wait"})), roomy)  # type: ignore[arg-type]
 
     took, outcome = timed_run(sandbox)
 
     assert isinstance(outcome, Run), outcome
     assert outcome.timed_out
-    # 0.15 s to create, then the full 0.2 s timeout.
+    # 0.15 s to create, then the full 0.2 s timeout. Counted from the call's
+    # start instead, the command would end at about 0.2 s.
     assert took >= 0.15 + 0.2
 
 
