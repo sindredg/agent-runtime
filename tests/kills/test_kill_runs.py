@@ -54,6 +54,7 @@ def test_the_job_passes_when_nobody_interrupts_it(stack: Stack) -> None:
             "runs": UNINTERRUPTED,
             "seconds": [round(run.seconds, 2) for run in runs],
             "failed_runs": failed_runs,
+            "problems": len(failures),
             **totals(runs),
         },
     )
@@ -113,6 +114,7 @@ def test_jobs_survive_a_kill_at_a_random_time(stack: Stack) -> None:
             "window_seconds": round(window, 2),
             "kills_sent_to_the_holder": sent,
             "failed_runs": failed_runs,
+            "problems": len(failures),
             **counted,
         },
     )
@@ -157,6 +159,7 @@ def test_jobs_survive_their_worker_stopping_inside_the_call(stack: Stack, failpo
             "runs": chosen.failpoint_runs,
             "failpoint_fired": fired_in_all,
             "failed_runs": failed_runs,
+            "problems": len(failures),
             **totals(runs),
         },
     )

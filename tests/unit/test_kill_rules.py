@@ -102,6 +102,37 @@ def test_a_run_on_the_api_may_not_plan_more_than_the_limit(rules: ModuleType) ->
     assert rules.settings({"KILLS_RUNS": "200"}).planned_jobs == 213
 
 
+def test_the_claude_api_has_a_job_limit_and_the_fake_provider_has_none(rules: ModuleType) -> None:
+    api = {"KILLS_PROVIDER": "claude", "KILLS_MODEL": "claude-haiku-5-5"}
+    assert rules.settings(api).job_limit == 40
+    assert rules.settings({}).job_limit is None
+    assert rules.settings({}).refusal(10_000) is None
+
+
+def test_a_lower_job_limit_can_be_given_and_refuses_the_next_job(rules: ModuleType) -> None:
+    """A switched-off run on the Claude API gives the number of jobs its bound is made of."""
+    api = {"KILLS_PROVIDER": "claude", "KILLS_MODEL": "claude-fable-5-2"}
+    found = rules.settings({**api, "KILLS_JOB_LIMIT": "5"})
+    assert found.job_limit == 5
+    assert found.refusal(4) is None
+    assert found.refusal(5) == "5 jobs were submitted to the Claude API: no more"
+    # The same limit on the fake provider, so a rehearsal runs under it too.
+    fake = rules.settings({"KILLS_JOB_LIMIT": "5"})
+    assert fake.refusal(4) is None
+    assert fake.refusal(5) == "5 jobs were submitted to the fake provider: no more"
+
+
+def test_a_job_limit_cannot_raise_the_limit_of_the_claude_api(rules: ModuleType) -> None:
+    api = {"KILLS_PROVIDER": "claude", "KILLS_MODEL": "claude-haiku-5-5"}
+    assert rules.settings({**api, "KILLS_JOB_LIMIT": "40"}).job_limit == 40
+    with pytest.raises(ValueError, match="KILLS_JOB_LIMIT is 41"):
+        rules.settings({**api, "KILLS_JOB_LIMIT": "41"})
+    with pytest.raises(ValueError, match="KILLS_JOB_LIMIT must be a whole number"):
+        rules.settings({**api, "KILLS_JOB_LIMIT": "0"})
+    with pytest.raises(ValueError, match="KILLS_JOB_LIMIT must be a whole number"):
+        rules.settings({"KILLS_JOB_LIMIT": "none"})
+
+
 # "0": a run with no kills would pass and record nothing.
 @pytest.mark.parametrize("text", ["-1", "2.5", "many", "", "0", "\u0663"])
 def test_a_count_that_is_not_a_whole_number_is_refused(rules: ModuleType, text: str) -> None:
@@ -508,9 +539,168 @@ def test_a_results_line_gets_the_counts_of_its_jobs(rules: ModuleType) -> None:
         "jobs_with_a_thinking_block": 2,
         "jobs_that_sent_one_back_after_a_takeover": 1,
         "block_types": {"text": 3, "thinking": 2, "tool_use": 3},
+        # These three need a `model_request` step after the claim, and the jobs have none.
+        "jobs_that_sent_a_rebuilt_thinking_block": 0,
+        "jobs_answered_after_sending_one": 0,
+        "jobs_refused_after_sending_one": 0,
     }
     assert rules.thinking_record([]) == {
         "jobs_with_a_thinking_block": 0,
         "jobs_that_sent_one_back_after_a_takeover": 0,
         "block_types": {},
+        "jobs_that_sent_a_rebuilt_thinking_block": 0,
+        "jobs_answered_after_sending_one": 0,
+        "jobs_refused_after_sending_one": 0,
     }
+
+
+# A rebuilt thinking block: sent, answered, refused. A switched-off run is judged by these.
+
+# The API's words for a signature it could not read, as the worker stores them.
+REFUSAL = (
+    "model call failed: provider answered 400: messages.3.content.0:"
+    " Invalid `signature` in `thinking` block."
+)
+# Its words when the signature is intact and the conversation before the block changed.
+OTHER_CONVERSATION = REFUSAL + " The block is bound to a different conversation. Remove the block."
+# The job of a failpoint run, as the recorded run on `claude-fable-5-2` shows it: the
+# second response holds the block and asks for the call, and the worker stops in the call.
+STOPPED_IN_THE_CALL = [
+    request("claude-fable-5-2"),
+    response(1, CALL_BLOCK),
+    request("claude-fable-5-2"),
+    response(1, THINKING, CALL_BLOCK),
+    intent(1),
+]
+
+
+def request_at(epoch: int) -> dict[str, Any]:
+    return {**request("claude-fable-5-2"), "lease_epoch": epoch}
+
+
+def refused_job(rules: ModuleType, error: str | None = REFUSAL, **changes: Any) -> Any:
+    """The next worker finds the call done, sends the block back, and the API answers 400."""
+    steps = [*STOPPED_IN_THE_CALL, result(2, recovered=True), request_at(2)]
+    return thinking_job(
+        rules,
+        steps,
+        **{"takeovers": 1, "lease_epoch": 2, "status": "failed", "error": error} | changes,
+    )
+
+
+def counts(rules: ModuleType, run: Any) -> tuple[bool, bool, bool]:
+    return (
+        rules.sent_a_rebuilt_thinking_block(run),
+        rules.answered_after_sending_one(run),
+        rules.refused_after_sending_one(run),
+    )
+
+
+def test_a_job_refused_for_the_signature_of_a_rebuilt_block_is_counted(rules: ModuleType) -> None:
+    assert counts(rules, refused_job(rules)) == (True, False, True)
+
+
+def test_a_job_answered_after_a_rebuilt_block_is_counted_as_answered(rules: ModuleType) -> None:
+    steps = [*STOPPED_IN_THE_CALL, result(2, recovered=True), request_at(2), response(2, TEXT)]
+    run = thinking_job(rules, steps, takeovers=1, lease_epoch=2)
+    assert counts(rules, run) == (True, True, False)
+
+
+def test_a_job_answered_and_then_failed_is_answered_and_not_refused(rules: ModuleType) -> None:
+    """The answer counts whatever became of the job: the API took the block."""
+    steps = [
+        *STOPPED_IN_THE_CALL,
+        result(2, recovered=True),
+        request_at(2),
+        response(2, CALL_BLOCK),
+        request_at(2),
+    ]
+    run = thinking_job(rules, steps, takeovers=1, lease_epoch=2, status="failed", error=REFUSAL)
+    assert counts(rules, run) == (True, True, False)
+
+
+def test_a_job_whose_block_was_never_rebuilt_sent_none(rules: ModuleType) -> None:
+    """Nobody interrupted it: the worker that received the block sent it back itself."""
+    steps = [*STOPPED_IN_THE_CALL, result(1), request_at(1), response(1, TEXT)]
+    assert counts(rules, thinking_job(rules, steps)) == (False, False, False)
+    # Taken over before the block came: the block is the later worker's own.
+    late = [request_at(1), request_at(2), response(2, THINKING, CALL_BLOCK), request_at(2)]
+    assert counts(rules, thinking_job(rules, late, lease_epoch=2)) == (False, False, False)
+
+
+def test_a_block_without_a_signature_is_not_a_rebuilt_block(rules: ModuleType) -> None:
+    """A switched-off run changes the signature. A block without one goes back as it was."""
+    for block in (
+        {"type": "thinking", "thinking": ""},
+        {"type": "thinking", "thinking": "", "signature": ""},
+        {"type": "thinking", "thinking": "", "signature": None},
+        {"type": "redacted_thinking", "data": "x"},
+    ):
+        steps = [request_at(1), response(1, block, CALL_BLOCK), request_at(2), response(2, TEXT)]
+        run = thinking_job(rules, steps, takeovers=1, lease_epoch=2)
+        assert counts(rules, run) == (False, False, False), block
+
+
+def test_a_400_about_another_conversation_is_not_the_refusal(rules: ModuleType) -> None:
+    """It means the conversation was rebuilt differently. The signature was read."""
+    assert counts(rules, refused_job(rules, OTHER_CONVERSATION)) == (True, False, False)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        # A 400 for another reason. An empty credit balance is a 400 too.
+        "model call failed: provider answered 400: Your credit balance is too low",
+        "model call failed: provider answered 401: invalid x-api-key",
+        "model call failed: provider answered 529: Overloaded",
+        "the deadline passed",
+        None,
+    ],
+)
+def test_a_job_that_failed_for_another_reason_is_not_refused(
+    rules: ModuleType, error: str | None
+) -> None:
+    assert counts(rules, refused_job(rules, error)) == (True, False, False)
+
+
+def test_a_job_that_did_not_fail_is_not_refused(rules: ModuleType) -> None:
+    assert counts(rules, refused_job(rules, status="running")) == (True, False, False)
+
+
+def test_a_refusal_before_any_claim_rebuilt_the_block_is_not_counted(rules: ModuleType) -> None:
+    """The worker that received the block sent it: nothing was rebuilt from the log."""
+    steps = [*STOPPED_IN_THE_CALL, result(1), request_at(1)]
+    run = thinking_job(rules, steps, status="failed", error=REFUSAL)
+    assert counts(rules, run) == (False, False, False)
+
+
+def test_the_claim_after_a_wait_rebuilds_the_block_too(rules: ModuleType) -> None:
+    """Every claim replays the log, not only a takeover."""
+    steps = [*STOPPED_IN_THE_CALL, result(1), request_at(1), changed(1, "waiting"), request_at(2)]
+    run = thinking_job(rules, steps, lease_epoch=2, status="failed", error=REFUSAL)
+    assert counts(rules, run) == (True, False, True)
+
+
+def test_a_results_line_counts_sent_answered_and_refused_jobs(rules: ModuleType) -> None:
+    answered = thinking_job(
+        rules,
+        [*STOPPED_IN_THE_CALL, result(2, recovered=True), request_at(2), response(2, TEXT)],
+        takeovers=1,
+        lease_epoch=2,
+    )
+    record = rules.thinking_record([refused_job(rules), refused_job(rules), answered])
+    assert record["jobs_that_sent_a_rebuilt_thinking_block"] == 3
+    assert record["jobs_answered_after_sending_one"] == 1
+    assert record["jobs_refused_after_sending_one"] == 2
+
+
+def test_a_results_line_keeps_each_different_error_of_its_failed_jobs(rules: ModuleType) -> None:
+    long = "model call failed: " + "x" * 2_000
+    runs = [
+        refused_job(rules),
+        refused_job(rules),
+        refused_job(rules, long),
+        thinking_job(rules, [], error="left over from a wait"),
+    ]
+    assert rules.errors_of_failed_jobs(runs) == sorted([REFUSAL, long[:500]])
+    assert rules.errors_of_failed_jobs([]) == []

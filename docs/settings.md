@@ -131,8 +131,14 @@ random one each run) from the shell. Compose reads the port from `.env` too.
 | `KILLS_SEED` | `20261119` | Fixes each kill time as a fraction of the window |
 | `KILLS_WINDOW` | measured | The window in seconds, to repeat a recorded run |
 | `KILLS_TESTS` | all | A `pytest -k` selection, for a must-fail run |
+| `KILLS_JOB_LIMIT` | 40 on the Claude API, none on the fake provider | Jobs one invocation may submit. On the Claude API at most 40. |
+| `SWITCHED_OFF` | none | The entry of `scripts/switched_off.py` that `make switched-off` runs |
+| `SWITCHED_OFF_PROVIDER` | `fake` | `claude` lets an entry of the Claude API start. Every job then costs money. |
 
-Read by the [kill runs](kill-runs.md), not by a service.
+Read by the [kill runs](kill-runs.md) and the
+[switched-off runs](testing.md#must-fail-runs), not by a service. A
+switched-off run sets the `KILLS_*` variables from its entry and passes on
+none it was given.
 
 The switches for failure tests (`FAILPOINT`, `FAILPOINT_TOOL`, `CHAOS_TOOLS`,
 `CHAOS_LOG_DIR`) are in [Testing](testing.md#failure-switches).

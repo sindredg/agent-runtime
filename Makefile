@@ -1,4 +1,5 @@
-.PHONY: all up up-claude down clean logs test integration escape chaos lab kills kills-claude switched-off
+.PHONY: all up up-claude down clean logs test integration escape chaos lab kills kills-claude
+.PHONY: switched-off switched-off-rehearsal
 
 # The group that owns the Docker socket. The worker joins it to start a
 # container for each sandboxed tool call. Every compose command needs it.
@@ -67,9 +68,18 @@ chaos:
 # One switched-off run from scripts/switched_off.py, named by SWITCHED_OFF:
 # switches one mechanism off in the checkout, starts the stack, runs the tests
 # that guard it, and fails unless each ends as the list says (ADR 0021).
-# Changes the checkout: `git checkout -- .` afterwards. Fake provider.
+# Changes the checkout: `git checkout -- .` afterwards. The entry names its
+# provider. One on the Claude API costs money, and starts only with
+# SWITCHED_OFF_PROVIDER=claude and CLAUDE_API_KEY in .env or the environment
+# (ADR 0022). Recorded runs start from the Manual runs workflow.
 switched-off:
 	uv run --frozen python scripts/switched_off.py run "$$SWITCHED_OFF"
+
+# An entry of the Claude API on the fake provider: every step of the run, no
+# key, no cost, and no result. It passes only if the test passes and the
+# run's one record says that no job sent a rebuilt thinking block.
+switched-off-rehearsal:
+	uv run --frozen python scripts/switched_off.py rehearse "$$SWITCHED_OFF"
 
 # The lab demo: create_issue against Gitea in a container, and a worker that
 # stops itself in the middle of the call. Sets Gitea up (users, repository,

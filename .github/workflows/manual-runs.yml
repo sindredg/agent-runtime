@@ -1,22 +1,29 @@
 # Runs started by hand, on a machine with a steady clock (ADR 0020): the
 # kill runs and their must-fail run, on the fake provider or the Claude API,
-# the contract test, and the switched-off runs of scripts/switched_off.py on
-# the fake provider (ADR 0021). Only `workflow_dispatch` starts this workflow.
+# the contract test, and the switched-off runs of scripts/switched_off.py
+# (ADR 0021). Each entry of that list names its provider: one on the Claude
+# API runs in the job that holds the key (ADR 0022). Only
+# `workflow_dispatch` starts this workflow.
 #
 # A job on the Claude API names the `claude-api` environment. It waits for a
 # reviewer of that environment, and only then gets the key, as an
-# environment secret. The environment allows `main` and `must-fail/*`.
+# environment secret. The environment's branch rule decides which branches
+# get that far. This file cannot: a branch runs its own copy of it.
 name: Manual runs
 
 on:
   workflow_dispatch:
     inputs:
       suite:
-        description: kills, kills-after-tool-ran (their must-fail run), contract, or switched-off
+        description: >-
+          kills, kills-after-tool-ran (their must-fail run), contract, switched-off,
+          or switched-off-rehearsal (an entry of the Claude API on the fake provider)
         type: choice
-        options: [kills, kills-after-tool-ran, contract, switched-off]
+        options: [kills, kills-after-tool-ran, contract, switched-off, switched-off-rehearsal]
       switched_off:
-        description: For suite switched-off. Always the fake provider; from main only
+        description: >-
+          For the switched-off suites. From main only. Provider and model have to be
+          the entry's: thinking-signature-changed is claude, claude-fable-5-2
         type: choice
         # The names in scripts/switched_off.py; a unit test keeps the two equal.
         options:
@@ -27,6 +34,7 @@ on:
           - overdue-timer-off
           - stop-release-off
           - takeover-outlast-off
+          - thinking-signature-changed
       provider:
         description: fake costs nothing; claude waits for a reviewer and costs money
         type: choice
@@ -41,9 +49,12 @@ permissions:
 
 jobs:
   fake:
-    name: ${{ inputs.suite }} on the fake provider
-    # A switched-off run never reaches the job that holds the key.
-    if: inputs.provider == 'fake' || inputs.suite == 'switched-off'
+    name: >-
+      ${{ startsWith(inputs.suite, 'switched-off')
+      && format('{0} {1}', inputs.suite, inputs.switched_off) || inputs.suite }}
+      on the fake provider
+    # A rehearsal never reaches the job that holds the key, whatever provider was picked.
+    if: inputs.provider == 'fake' || inputs.suite == 'switched-off-rehearsal'
     runs-on: ubuntu-26.04
     timeout-minutes: 40
     env:
@@ -69,6 +80,11 @@ jobs:
         with:
           version: "0.13.8"
       - run: uv sync --locked
+      # An entry of the Claude API does not start here as a run: the script
+      # refuses a provider that is not the entry's.
+      - name: Check the entry against the provider
+        if: inputs.suite == 'switched-off'
+        run: uv run --frozen python scripts/switched_off.py dispatch "$SWITCHED_OFF" fake
       - name: Docker socket group
         run: echo "DOCKER_GID=$(stat -c %g /var/run/docker.sock)" >> "$GITHUB_ENV"
       - name: Commit
@@ -83,6 +99,10 @@ jobs:
       - name: Switched-off run
         if: inputs.suite == 'switched-off'
         run: make switched-off
+      # Every step of an entry of the Claude API, on the fake provider. Not a result.
+      - name: Rehearsal of a switched-off run
+        if: inputs.suite == 'switched-off-rehearsal'
+        run: make switched-off-rehearsal
       - name: Results
         if: always()
         run: |
@@ -97,8 +117,13 @@ jobs:
         run: make clean
 
   claude:
-    name: ${{ inputs.suite }} on ${{ inputs.model }}
-    if: inputs.provider == 'claude' && inputs.suite != 'switched-off'
+    # The reviewer of the environment sees this name: for a switched-off run
+    # it says which entry's edit runs with the key.
+    name: >-
+      ${{ inputs.suite == 'switched-off'
+      && format('switched-off {0}', inputs.switched_off) || inputs.suite }}
+      on ${{ inputs.model }}
+    if: inputs.provider == 'claude' && inputs.suite != 'switched-off-rehearsal'
     runs-on: ubuntu-26.04
     environment: claude-api
     # One paid run at a time. A run in progress is never cancelled: that
@@ -110,7 +135,16 @@ jobs:
     env:
       SUITE: ${{ inputs.suite }}
       MODEL: ${{ inputs.model }}
+      SWITCHED_OFF: ${{ inputs.switched_off }}
     steps:
+      # A switched-off run is evidence for main's code: the list, the edit and
+      # the tests are main's, reviewed there. A branch can drop this step from
+      # its own copy; the environment's branch rule is what keeps the key from it.
+      - name: Refuse a switched-off run off main
+        if: inputs.suite == 'switched-off' && github.ref != 'refs/heads/main'
+        run: |
+          echo "A switched-off run starts from main only." >&2
+          exit 1
       # Only the choice values can reach here today. The check keeps it so if
       # the input ever becomes free text. `case` tests the whole string: grep
       # would pass a value with one good line among others.
@@ -128,6 +162,12 @@ jobs:
           version: "0.13.8"
           enable-cache: false
       - run: uv sync --locked
+      # Before the step with the key: the entry is one of the Claude API, and
+      # the model picked is the entry's. An entry of the fake provider stops here.
+      - name: Check the entry against the provider and the model
+        if: inputs.suite == 'switched-off'
+        run: |
+          uv run --frozen python scripts/switched_off.py dispatch "$SWITCHED_OFF" claude "$MODEL"
       - name: Docker socket group
         run: echo "DOCKER_GID=$(stat -c %g /var/run/docker.sock)" >> "$GITHUB_ENV"
       - name: Commit
@@ -141,6 +181,16 @@ jobs:
         run: |
           if [ "$SUITE" = kills-after-tool-ran ]; then export KILLS_TESTS=after_tool_ran; fi
           make kills-claude KILLS_MODEL="$MODEL"
+      # The key is given to this step only. The script hands it to the stack
+      # and the tests, runs its own git commands without it, and starts such
+      # an entry only when SWITCHED_OFF_PROVIDER says so. It prints the edit,
+      # the commit, a verdict per test, and PASS, FINDING or INCONCLUSIVE.
+      - name: Switched-off run on the Claude API
+        if: inputs.suite == 'switched-off'
+        env:
+          CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
+          SWITCHED_OFF_PROVIDER: claude
+        run: make switched-off
       # The contract test runs on the host against the normal stack's fake
       # provider and the API.
       - name: Contract test
