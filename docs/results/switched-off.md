@@ -66,6 +66,21 @@ flowchart LR
 | `workspace-stop-signal-off` | The signal that tells a walk to stop past its time box or on a cancel | None | 2 |
 | `workspace-walk-stop-off` | A walk's check of the signal to stop | None | 1 |
 
+## Entries added after that run
+
+Three entries came with [ADR 0025](../adr/0025-a-tool-in-the-worker-names-how-long-its-request-can-arrive.md).
+Each ran once from `main` at `fbb293f`, 2026-11-21, on the fake provider: 5
+of 5 tests failed on their named assertion.
+
+| Entry | Mechanism switched off | Stack | Tests | Run |
+|---|---|---|---|---|
+| `takeover-wait-for-a-request-off` | The bound `create_issue` names for its request, which a takeover waits out | Normal | 2 | [44919781490](https://github.com/sindredg/agent-runtime/actions/runs/44919781490) |
+| `create-deadline-off` | The one deadline of the request that opens an issue | None | 2 | [44919789084](https://github.com/sindredg/agent-runtime/actions/runs/44919789084) |
+| `abortive-close-off` | The reset of a given-up request's connection | None | 1 | [44919796574](https://github.com/sindredg/agent-runtime/actions/runs/44919796574) |
+
+With the bound off, the test with two workers and a stalled tracker ends
+with two issues for one call.
+
 The one entry on the Claude API, `thinking-signature-changed`, has
 [its own run](kill-runs.md#with-the-stored-signature-changed).
 
