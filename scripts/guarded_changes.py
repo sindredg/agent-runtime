@@ -5,14 +5,13 @@ request can change a mechanism and the test that guards it, so the pull
 request has to say so in its own text (ADR 0024). This script works out the
 section that text must carry, from two commits:
 
-- test functions under `tests/` that were removed or changed, and changed
-  support code there (fixtures, helpers, imports, other files);
+- under `tests/`: each removed test, the changed and the added tests per
+  file, changed support code (fixtures, helpers, imports), and every other
+  file that was added, changed or removed;
 - entries of `scripts/switched_off.py` that were removed or changed, and a
   change to the rest of that script;
-- whole files that decide what runs: the workflows, the `Makefile`, the
-  pytest settings, and this script.
-
-A test that was only added is not listed: it guards more, not less.
+- whole files that decide what runs: the workflows, the make files, the
+  pytest settings wherever they are, and this script.
 
 Both commits are read as text, through git. Nothing of either is imported,
 built or run, so the script can judge a pull request it does not trust.
@@ -22,10 +21,13 @@ built or run, so the script can judge a pull request it does not trust.
 
 BASE is the branch the pull request goes into. The comparison starts at the
 commit the two have in common. `--check` reads the pull request's text from
-the environment variable PR_BODY and exits 1 unless it holds the section.
+the environment variable PR_BODY and exits 1 unless it holds the section
+where its reader sees it. Exit 2: the two commits could not be compared.
 """
 
 import ast
+import copy
+import json
 import os
 import re
 import subprocess
@@ -41,42 +43,49 @@ NOTHING = "No guarded changes."
 TESTS = "tests/"
 LIST = "scripts/switched_off.py"
 ENTRIES = "ENTRIES"
+# A file of this name, wherever it is: a workspace member's plugin loads too.
 SETTINGS = "pyproject.toml"
-# Whole files: a change, an addition and a removal are each listed.
-# The other places pytest reads settings from come before `pyproject.toml`.
+# Whole files: a change, an addition and a removal are each listed. pytest and
+# make each read some of these before the file the repository has today.
 WHOLE_FILES = frozenset(
     {
         "scripts/guarded_changes.py",
         "Makefile",
+        "makefile",
+        "GNUmakefile",
         "conftest.py",
         "pytest.ini",
         ".pytest.ini",
+        "pytest.toml",
+        ".pytest.toml",
         "tox.ini",
         "setup.cfg",
     }
 )
 WHOLE_DIRECTORIES = (".github/workflows/",)
 
-_HEADING_LINE = re.compile(r"^#{1,6}\s")
-# A comment in the text is not shown to its reader. One left open hides the rest.
-_COMMENT = re.compile(r"<!--.*?(-->|\Z)", re.DOTALL)
+_HEADING_LINE = re.compile(r"^#{1,6}[ \t]")
+# The start of a tag, a comment or another piece of HTML.
+_HTML = re.compile(r"<[A-Za-z/!?]")
+_TEST_NAME = ("test", "Test")
 
 
 class Unreadable(Exception):
     """A file does not parse, or has not the shape the comparison needs."""
 
 
+class Unjudged(Exception):
+    """The two commits cannot be compared."""
+
+
 def guarded(path: str) -> bool:
     return (
         path.startswith(TESTS)
-        or path in (LIST, SETTINGS)
+        or path == LIST
+        or Path(path).name == SETTINGS
         or path in WHOLE_FILES
         or path.startswith(WHOLE_DIRECTORIES)
     )
-
-
-def _dumped(nodes: list[ast.stmt] | list[ast.expr]) -> list[str]:
-    return [ast.dump(node) for node in nodes]
 
 
 def _without_docstring(body: list[ast.stmt]) -> list[ast.stmt]:
@@ -95,15 +104,33 @@ def _is_test(node: ast.stmt) -> bool:
 
 
 def _test_print(node: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
-    """What a test is, without its docstring: its marks, arguments and body."""
-    return repr(
-        (
-            type(node).__name__,
-            _dumped(node.decorator_list),
-            ast.dump(node.args),
-            _dumped(_without_docstring(node.body)),
-        )
-    )
+    """What a test is: every part of it but its docstring, so no part is left out by name."""
+    bare = copy.copy(node)
+    bare.body = _without_docstring(node.body)
+    return ast.dump(bare)
+
+
+def _names(target: ast.expr) -> list[str]:
+    if isinstance(target, ast.Name):
+        return [target.id]
+    if isinstance(target, ast.Tuple | ast.List):
+        return [name for item in target.elts for name in _names(item)]
+    if isinstance(target, ast.Starred):
+        return _names(target.value)
+    return []
+
+
+def _bound_otherwise(node: ast.stmt) -> list[str]:
+    """Names a statement assigns or deletes that pytest would read as a test or a test class.
+
+    An import is not counted: it is support code, and a changed one is listed as that.
+    """
+    names: list[str] = []
+    if isinstance(node, ast.Assign | ast.Delete):
+        names = [name for target in node.targets for name in _names(target)]
+    elif isinstance(node, ast.AnnAssign | ast.AugAssign):
+        names = _names(node.target)
+    return [name for name in names if name.startswith(_TEST_NAME)]
 
 
 @dataclass(frozen=True)
@@ -140,27 +167,45 @@ def read_module(source: bytes) -> Module:
 
     A test inside a block of the module, an `if` for example, is found too.
     The block as a whole also counts as support code.
+
+    Raises Unreadable when the file does not say plainly which tests it has:
+    a test or a test class defined twice, or a name of that kind assigned
+    or deleted. Which one runs is then for a person to read.
     """
     tree = _parsed(source)
     tests: dict[str, str] = {}
+    classes: set[str] = set()
     support: list[str] = []
+
+    def test(name: str, node: ast.stmt) -> None:
+        assert isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)  # noqa: S101
+        if name in tests:
+            raise Unreadable(f"{name} is defined twice")
+        tests[name] = _test_print(node)
 
     def take(nodes: list[ast.stmt], *, top: bool) -> None:
         for node in nodes:
+            if rebound := _bound_otherwise(node):
+                raise Unreadable(f"{rebound[0]} is not bound by a def or a class")
             if _is_test(node):
-                assert isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)  # noqa: S101
-                tests[node.name] = _test_print(node)
+                test(node.name, node)  # type: ignore[attr-defined]
             elif isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
+                if node.name in classes:
+                    raise Unreadable(f"{node.name} is defined twice")
+                classes.add(node.name)
                 rest = []
                 for member in node.body:
+                    if rebound := _bound_otherwise(member):
+                        raise Unreadable(f"{rebound[0]} is not bound by a def")
                     if _is_test(member):
-                        assert isinstance(member, ast.FunctionDef | ast.AsyncFunctionDef)  # noqa: S101
-                        tests[f"{node.name}::{member.name}"] = _test_print(member)
+                        test(f"{node.name}::{member.name}", member)  # type: ignore[attr-defined]
                     else:
                         rest.append(member)
                 if top:
-                    head = (node.name, node.bases, node.decorator_list, rest)
-                    support.append(repr((head[0], *(_dumped(part) for part in head[1:]))))
+                    # The class without its tests: its name, bases, keywords, marks.
+                    shell = copy.copy(node)
+                    shell.body = rest
+                    support.append(ast.dump(shell))
             else:
                 if top:
                     support.append(ast.dump(node))
@@ -209,24 +254,31 @@ def entry_list(source: bytes) -> EntryList:
     return EntryList(entries, repr(rest))
 
 
-def pytest_settings(source: bytes) -> object:
-    """The `[tool.pytest]` table of a `pyproject.toml`, or None when it has none."""
+def pytest_settings(source: bytes) -> str:
+    """What a `pyproject.toml` tells pytest: its settings, and the plugins the project brings.
+
+    As JSON, so `true` and `1` are not the same.
+    """
     try:
         document = tomllib.loads(source.decode())
     except (tomllib.TOMLDecodeError, UnicodeDecodeError) as error:
-        raise Unreadable(str(error)) from error
-    tool = document.get("tool")
-    return tool.get("pytest") if isinstance(tool, dict) else None
+        raise Unreadable(type(error).__name__) from error
+    tool, project = document.get("tool"), document.get("project")
+    read = {
+        "settings": tool.get("pytest") if isinstance(tool, dict) else None,
+        "plugins": project.get("entry-points") if isinstance(project, dict) else None,
+    }
+    return json.dumps(read, sort_keys=True, default=str)
 
 
 def _tests_lines(path: str, old: bytes | None, new: bytes | None) -> list[str]:
-    if not path.endswith(".py"):
-        if old is None:
-            return []
-        return [f"- removed file: {path}" if new is None else f"- changed file: {path}"]
     if old is None:
-        # A new conftest.py acts on tests that were there before it.
-        return [f"- added file: {path}"] if Path(path).name == "conftest.py" else []
+        # Any new file: settings and a conftest act on older tests, a new
+        # package can stand in for the code under test, and a new test file
+        # runs in the same process as the others.
+        return [f"- added file: {path}"]
+    if not path.endswith(".py"):
+        return [f"- removed file: {path}" if new is None else f"- changed file: {path}"]
     before = read_module(old)
     if new is None:
         removed = [f"- removed test: {path}::{name}" for name in before.tests]
@@ -238,6 +290,9 @@ def _tests_lines(path: str, old: bytes | None, new: bytes | None) -> list[str]:
     )
     if changed:
         lines.append(f"- changed tests: {path}: {changed}")
+    added = sum(1 for name in after.tests if name not in before.tests)
+    if added:
+        lines.append(f"- added tests: {path}: {added}")
     if before.support != after.support:
         lines.append(f"- changed support code: {path}")
     return lines
@@ -260,10 +315,11 @@ def _list_lines(old: bytes | None, new: bytes | None) -> list[str]:
     return lines
 
 
-def _settings_lines(old: bytes | None, new: bytes | None) -> list[str]:
-    before = None if old is None else pytest_settings(old)
-    after = None if new is None else pytest_settings(new)
-    return [] if before == after else [f"- changed pytest settings: {SETTINGS}"]
+def _settings_lines(path: str, old: bytes | None, new: bytes | None) -> list[str]:
+    nothing = pytest_settings(b"")
+    before = nothing if old is None else pytest_settings(old)
+    after = nothing if new is None else pytest_settings(new)
+    return [] if before == after else [f"- changed pytest settings: {path}"]
 
 
 def _whole_file_lines(path: str, old: bytes | None, new: bytes | None) -> list[str]:
@@ -284,8 +340,8 @@ def changes(base: Mapping[str, bytes], head: Mapping[str, bytes]) -> list[str]:
                 lines += _tests_lines(path, old, new)
             elif path == LIST:
                 lines += _list_lines(old, new)
-            elif path == SETTINGS:
-                lines += _settings_lines(old, new)
+            elif Path(path).name == SETTINGS:
+                lines += _settings_lines(path, old, new)
             else:
                 lines += _whole_file_lines(path, old, new)
         except Unreadable, RecursionError:
@@ -298,35 +354,42 @@ def section(lines: list[str]) -> str:
     return "\n".join([HEADING, "", *lines])
 
 
-def stated(body: str) -> set[str] | None:
-    """The lines under the section's heading in a pull request's text. None: no such heading.
-
-    Only text a reader of the pull request sees counts: a comment is left out.
-    """
-    found: set[str] | None = None
-    inside = False
-    for raw in _COMMENT.sub("", body).splitlines():
-        line = raw.strip()
-        if line == HEADING:
-            inside = True
-            found = set() if found is None else found
-        elif _HEADING_LINE.match(line):
-            inside = False
-        elif inside and line:
-            assert found is not None  # noqa: S101 - set with `inside`
-            found.add(line)
-    return found
-
-
 def problems(lines: list[str], body: str) -> list[str]:
-    """What the pull request's text lacks or says beyond the section. Empty: it holds it."""
-    said = stated(body)
-    if said is None:
+    """What keeps the pull request's text from holding the section. Empty: it holds it.
+
+    The section counts only where a reader of the pull request sees it, and
+    the text is read here by rules that are simpler than Markdown's. So the
+    heading and each line start at the left edge, the heading has an empty
+    line on both sides, and no HTML comes before the section's end: a comment
+    or a tag could hide it.
+    """
+    # Line ends as Markdown has them. Other separators stay inside their line.
+    rows = [row.rstrip(" \t") for row in re.split(r"\r\n|\n|\r", body)]
+    at = [index for index, row in enumerate(rows) if row == HEADING]
+    if not at:
         return [f"the pull request's text has no {HEADING!r} section"] if lines else []
+    if len(at) > 1:
+        return [f"the pull request's text has {HEADING!r} more than once"]
+    start = at[0]
+    later = range(start + 1, len(rows))
+    end = next((index for index in later if _HEADING_LINE.match(rows[index])), len(rows))
+    said = {row for row in rows[start + 1 : end] if row}
+    if not lines and not said:
+        return []
+    wrong = []
+    if (start > 0 and rows[start - 1]) or (start + 1 < len(rows) and rows[start + 1]):
+        wrong.append(f"{HEADING!r} needs an empty line before and after it")
+    if any(_HTML.search(row) for row in rows[:end]):
+        wrong.append(
+            "the text has HTML or a `<...>` before the end of the section, which could hide it:"
+            " put the section above it"
+        )
     wanted = set(lines)
-    return [f"missing: {line}" for line in sorted(wanted - said)] + [
-        f"not a guarded change of this pull request: {line}" for line in sorted(said - wanted)
-    ]
+    return (
+        wrong
+        + [f"missing: {line}" for line in sorted(wanted - said)]
+        + [f"not a guarded change of this pull request: {line}" for line in sorted(said - wanted)]
+    )
 
 
 def _git(repo: Path, *arguments: str) -> bytes:
@@ -346,12 +409,21 @@ def _commit(repo: Path, name: str) -> str:
 
 LINK_MODE = "120000"
 LINK = b"link to "
+# Never printed as they are: they could start HTML in the pull request's text.
+_MARKUP = "<>&"
 
 
 def _shown(path: bytes) -> str:
     """A path as one printable line: other bytes and characters are written as escapes."""
     text = path.decode("utf-8", "backslashreplace")
-    return "".join(c if c.isprintable() else c.encode("unicode_escape").decode() for c in text)
+    return "".join(
+        f"\\x{ord(c):02x}"
+        if c in _MARKUP
+        else c
+        if c.isprintable()
+        else c.encode("unicode_escape").decode()
+        for c in text
+    )
 
 
 def _blobs(repo: Path, commit: str) -> dict[str, tuple[str, str]]:
@@ -371,8 +443,10 @@ def _blobs(repo: Path, commit: str) -> dict[str, tuple[str, str]]:
 def read(repo: Path, base: str, head: str) -> tuple[dict[str, bytes], dict[str, bytes]]:
     """The guarded files that differ between the two commits' common ancestor and `head`."""
     head = _commit(repo, head)
-    start = _git(repo, "merge-base", _commit(repo, base), head).decode().strip()
-    old, new = _blobs(repo, start), _blobs(repo, head)
+    starts = _git(repo, "merge-base", "--all", _commit(repo, base), head).decode().split()
+    if len(starts) != 1:
+        raise Unjudged(f"the two commits have {len(starts)} common ancestors to start from, not 1")
+    old, new = _blobs(repo, starts[0]), _blobs(repo, head)
     differing = [path for path in old.keys() | new.keys() if old.get(path) != new.get(path)]
 
     def content(blobs: dict[str, tuple[str, str]]) -> dict[str, bytes]:
@@ -399,8 +473,8 @@ def main(arguments: list[str], repo: Path = Path()) -> int:
     except subprocess.CalledProcessError as error:
         print(f"git failed: {error.stderr.decode(errors='replace').strip()}", file=sys.stderr)
         return 2
-    except OSError as error:
-        print(f"git could not be run: {error}", file=sys.stderr)
+    except (OSError, Unjudged) as error:
+        print(f"not compared: {error}", file=sys.stderr)
         return 2
     lines = changes(base, head)
     text = section(lines) if lines else NOTHING

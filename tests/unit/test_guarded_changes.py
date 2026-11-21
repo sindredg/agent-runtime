@@ -1,10 +1,11 @@
 """The guarded-changes check names what a pull request changed in the tests (ADR 0024).
 
-It reads two commits as text. A removed or changed test, a changed
+It reads two commits as text. A removed, changed or added test, a changed
 switched-off entry and a change to what runs the tests each give a line, and
-the pull request's text has to hold exactly those lines. The check runs on a
-pull request it does not trust, so it must never import or run what it reads,
-and its workflow must never check the pull request out.
+the pull request's text has to hold exactly those lines where a reader sees
+them. The check runs on a pull request it does not trust, so it must never
+import or run what it reads, and its workflow must never check the pull
+request out.
 """
 
 import importlib.util
@@ -73,9 +74,10 @@ def test_a_removed_test_is_named() -> None:
     assert lines(TWO_TESTS, new) == [f"- removed test: {A_TEST}::test_two"]
 
 
-def test_a_renamed_test_is_a_removed_one() -> None:
+def test_a_renamed_test_is_a_removed_and_an_added_one() -> None:
     assert lines(TWO_TESTS, TWO_TESTS.replace("test_two", "test_2")) == [
-        f"- removed test: {A_TEST}::test_two"
+        f"- added tests: {A_TEST}: 1",
+        f"- removed test: {A_TEST}::test_two",
     ]
 
 
@@ -87,17 +89,20 @@ def test_changed_tests_are_counted_per_file() -> None:
 
 
 @pytest.mark.parametrize(
-    "mark",
-    ["@pytest.mark.skip", "@pytest.mark.xfail", '@pytest.mark.parametrize("n", [1])'],
+    ("old", "new"),
+    [
+        ("def test_one():", "@pytest.mark.skip\n    def test_one():"),
+        ("def test_one():", "@pytest.mark.xfail\n    def test_one():"),
+        ("def test_one():", '@pytest.mark.parametrize("n", [1])\n    def test_one():'),
+        ("def test_one():", "def test_one(tmp_path):"),
+        ("def test_one():", "async def test_one():"),
+        # An annotation and a type parameter are evaluated when the file loads.
+        ("def test_one():", 'def test_one() -> pytest.skip("x"):'),
+        ("def test_one():", 'def test_one[T = pytest.skip("x")]():'),
+    ],
 )
-def test_a_mark_on_a_test_changes_it(mark: str) -> None:
-    new = TWO_TESTS.replace("def test_one():", f"{mark}\n    def test_one():")
-    assert lines(TWO_TESTS, new) == [f"- changed tests: {A_TEST}: 1"]
-
-
-def test_changed_arguments_change_a_test() -> None:
-    new = TWO_TESTS.replace("def test_one():", "def test_one(tmp_path):")
-    assert lines(TWO_TESTS, new) == [f"- changed tests: {A_TEST}: 1"]
+def test_every_part_of_a_test_but_its_docstring_is_the_test(old: str, new: str) -> None:
+    assert lines(TWO_TESTS, TWO_TESTS.replace(old, new)) == [f"- changed tests: {A_TEST}: 1"]
 
 
 def test_layout_comments_and_a_docstring_change_nothing() -> None:
@@ -110,9 +115,9 @@ def test_layout_comments_and_a_docstring_change_nothing() -> None:
     assert lines(TWO_TESTS, new) == []
 
 
-def test_an_added_test_is_not_listed() -> None:
-    assert lines(TWO_TESTS, TWO_TESTS + "\n    def test_three():\n        assert LIMIT\n") == []
-    assert lines(None, TWO_TESTS, "tests/unit/test_new.py") == []
+def test_added_tests_are_counted_because_they_run_beside_the_others() -> None:
+    more = TWO_TESTS + "\n    def test_three():\n        assert LIMIT\n"
+    assert lines(TWO_TESTS, more) == [f"- added tests: {A_TEST}: 1"]
 
 
 @pytest.mark.parametrize(
@@ -157,6 +162,9 @@ def test_tests_in_a_class_are_named_with_it() -> None:
         ("self.made = True", "self.made = False"),
         ("class TestThing:", "@pytest.mark.skip\n    class TestThing:"),
         ("class TestThing:", "class TestThing(Base):"),
+        # A keyword of the class is evaluated when the file loads.
+        ("class TestThing:", 'class TestThing(metaclass=pytest.skip("x")):'),
+        ("class TestThing:", 'class TestThing[T = pytest.skip("x")]:'),
     ],
 )
 def test_the_rest_of_a_test_class_is_support_code(old: str, new: str) -> None:
@@ -173,23 +181,60 @@ def test_a_removed_file_names_each_of_its_tests() -> None:
     ]
 
 
-def test_a_new_conftest_is_listed_because_it_acts_on_older_tests() -> None:
-    assert lines(None, "x = 1", "tests/lab/conftest.py") == ["- added file: tests/lab/conftest.py"]
-    assert lines("x = 1", "x = 2", "tests/lab/conftest.py") == [
-        "- changed support code: tests/lab/conftest.py"
-    ]
+@pytest.mark.parametrize(
+    "path",
+    [
+        # Each acts on tests that were there before it, or runs beside them.
+        "tests/lab/conftest.py",
+        "tests/unit/test_new.py",
+        "tests/unit/pytest.ini",
+        "tests/pyproject.toml",
+        "tests/unit/runtime/__init__.py",
+        "tests/integration/compose.orphans.yml",
+    ],
+)
+def test_every_file_added_under_tests_is_named(path: str) -> None:
+    assert lines(None, "x = 1", path) == [f"- added file: {path}"]
 
 
 def test_another_kind_of_file_under_tests_is_listed_whole() -> None:
     path = "tests/integration/compose.orphans.yml"
     assert lines("a: 1", "a: 2", path) == [f"- changed file: {path}"]
     assert lines("a: 1", None, path) == [f"- removed file: {path}"]
-    assert lines(None, "a: 1", path) == []
+    assert lines("x = 1", "x = 2", "tests/lab/conftest.py") == [
+        "- changed support code: tests/lab/conftest.py"
+    ]
 
 
 @pytest.mark.parametrize(("old", "new"), [(TWO_TESTS, "def test_one(:\n"), ("def (:\n", TWO_TESTS)])
 def test_a_file_that_does_not_parse_is_named_and_not_judged(old: str, new: str) -> None:
     assert lines(old, new) == [f"- cannot be compared: {A_TEST}"]
+
+
+def test_a_file_nested_too_deep_to_read_is_named_and_not_judged() -> None:
+    deep = "def test_one():\n    assert " + "(" * 5000 + "1" + ")" * 5000 + "\n"
+    assert lines(TWO_TESTS, deep) == [f"- cannot be compared: {A_TEST}"]
+
+
+@pytest.mark.parametrize(
+    "more",
+    [
+        "del test_one",
+        "test_one = None",
+        "test_one: object = helper",
+        "test_one, other = helper, helper",
+        "def test_one():\n        pass",
+        "if os.sep:\n        def test_one():\n            pass",
+        "TestThing = None",
+        "class TestThing:\n        pass\n\n    class TestThing:\n        pass",
+        "class TestThing:\n        def test_x(self): pass\n        def test_x(self): pass",
+        "class TestThing:\n        def test_x(self): pass\n        test_x = None",
+    ],
+)
+def test_a_file_that_does_not_say_plainly_which_tests_it_has_is_not_judged(more: str) -> None:
+    # Which of two definitions runs, or whether one still exists, is not worked out here.
+    new = TWO_TESTS + "\n    " + more + "\n"
+    assert lines(TWO_TESTS, new) == [f"- cannot be compared: {A_TEST}"]
 
 
 IN_BLOCKS = """
@@ -230,11 +275,6 @@ def test_a_function_inside_a_test_is_not_a_test() -> None:
     ]
 
 
-def test_a_file_nested_too_deep_to_read_is_named_and_not_judged() -> None:
-    deep = "def test_one():\n    assert " + "(" * 5000 + "1" + ")" * 5000 + "\n"
-    assert lines(TWO_TESTS, deep) == [f"- cannot be compared: {A_TEST}"]
-
-
 # --- the switched-off list ---
 
 THE_LIST = """
@@ -273,10 +313,14 @@ def test_an_added_entry_is_not_listed() -> None:
 
 @pytest.mark.parametrize(
     ("old", "new"),
-    [('"tests/a.py::test_x"', '"tests/a.py::test_y"'), ("return 1", "return 0")],
+    [
+        # A constant an entry uses, the judge, and a change of the list after it is made.
+        ('"tests/a.py::test_x"', '"tests/a.py::test_y"'),
+        ("return 1", "return 0"),
+        ("def judge():", 'del ENTRIES["budget-off"]\n\n    def judge():'),
+    ],
 )
 def test_a_change_outside_the_entries_is_named(old: str, new: str) -> None:
-    # A constant an entry uses, and the judge.
     assert in_list(THE_LIST.replace(old, new)) == [
         "- changed outside the entries: scripts/switched_off.py"
     ]
@@ -306,24 +350,37 @@ SETTINGS = """
     [project]
     dependencies = ["a==1"]
 
+    [project.entry-points.console]
+    run = "a:main"
+
+    [tool.pytest]
+    strict = true
+
     [tool.pytest.ini_options]
     testpaths = ["tests/unit"]
     addopts = "--strict-markers"
 """
 
 
-def test_only_the_pytest_settings_of_pyproject_are_guarded() -> None:
-    def settings(new: str) -> list[str]:
-        return lines(SETTINGS, new, "pyproject.toml")
+@pytest.mark.parametrize("path", ["pyproject.toml", "services/fake_provider/pyproject.toml"])
+def test_of_a_pyproject_the_pytest_settings_and_the_plugins_are_guarded(path: str) -> None:
+    def settings(old: str, new: str) -> list[str]:
+        return lines(SETTINGS, SETTINGS.replace(old, new), path)
 
-    assert settings(SETTINGS.replace("a==1", "a==2")) == []
-    assert settings(SETTINGS.replace("--strict-markers", "--deselect tests/unit")) == [
-        "- changed pytest settings: pyproject.toml"
-    ]
-    assert settings(SETTINGS.replace("[tool.pytest.ini_options]", "[tool.other]")) == [
-        "- changed pytest settings: pyproject.toml"
-    ]
-    assert settings("[tool") == ["- cannot be compared: pyproject.toml"]
+    changed = [f"- changed pytest settings: {path}"]
+    plugin = 'run = "a:main"\n[project.entry-points.pytest11]\nx = "p"'
+    assert settings("a==1", "a==2") == []
+    assert settings("--strict-markers", "--deselect tests/unit") == changed
+    assert settings("[tool.pytest.ini_options]", "[tool.other]") == changed
+    # Outside `ini_options`, and a value of another type that reads the same in Python.
+    assert settings("strict = true", "strict = false") == changed
+    assert settings("strict = true", "strict = 1") == changed
+    # A plugin the project itself brings is loaded by pytest without being named.
+    assert settings('run = "a:main"', plugin) == changed
+    assert lines(SETTINGS, "[tool", path) == [f"- cannot be compared: {path}"]
+    assert lines(None, SETTINGS, path) == changed
+    assert lines(SETTINGS, None, path) == changed
+    assert lines(None, '[project]\nname = "x"\n', path) == []
 
 
 @pytest.mark.parametrize(
@@ -333,9 +390,13 @@ def test_only_the_pytest_settings_of_pyproject_are_guarded() -> None:
         ".github/workflows/guarded-changes.yml",
         "scripts/guarded_changes.py",
         "Makefile",
+        "makefile",
+        "GNUmakefile",
         "conftest.py",
         "pytest.ini",
         ".pytest.ini",
+        "pytest.toml",
+        ".pytest.toml",
         "tox.ini",
         "setup.cfg",
     ],
@@ -366,70 +427,134 @@ def test_the_lines_are_sorted() -> None:
 # --- the pull request's text ---
 
 LINES = [f"- changed tests: {A_TEST}: 1", f"- removed test: {A_TEST}::test_two"]
+NO_SECTION = ["the pull request's text has no '## Guarded changes' section"]
+
+
+def held(body: str, wanted: list[str] = LINES) -> list[str]:
+    found: list[str] = guarded.problems(wanted, body)
+    return found
 
 
 def test_the_section_as_printed_is_accepted() -> None:
     body = "## Summary\n\nWhat changed.\n\n" + guarded.section(LINES) + "\n\n## Evidence\n\n- ran\n"
-    assert guarded.problems(LINES, body) == []
+    assert held(body) == []
+    assert held(guarded.section(LINES)) == []
 
 
-def test_line_ends_order_and_indentation_do_not_matter() -> None:
-    body = f"## Guarded changes\r\n\r\n  {LINES[1]}\r\n{LINES[0]}  \r\n"
-    assert guarded.problems(LINES, body) == []
+def test_line_ends_order_and_spaces_at_a_lines_end_do_not_matter() -> None:
+    assert held(f"## Guarded changes  \r\n\r\n{LINES[1]}\r\n{LINES[0]}\t\r\n") == []
+    assert held(f"## Guarded changes\r\r{LINES[1]}\r{LINES[0]}") == []
 
 
 def test_a_missing_line_and_a_line_too_many_are_each_named() -> None:
     body = f"## Guarded changes\n\n{LINES[0]}\n- removed test: tests/unit/test_b.py::test_x\n"
-    assert guarded.problems(LINES, body) == [
+    assert held(body) == [
         f"missing: {LINES[1]}",
         "not a guarded change of this pull request: - removed test: tests/unit/test_b.py::test_x",
     ]
 
 
-def test_a_changed_count_does_not_pass_for_another() -> None:
-    body = guarded.section([LINES[0].replace(": 1", ": 2"), LINES[1]])
-    assert len(guarded.problems(LINES, body)) == 2
+@pytest.mark.parametrize(
+    "said",
+    [
+        LINES[0].replace(": 1", ": 2"),
+        LINES[0] + "0",
+        LINES[0][:-3],
+        LINES[0].upper(),
+        "  " + LINES[0],
+        "> " + LINES[0],
+        LINES[0] + "\u200b",
+    ],
+)
+def test_a_line_counts_only_as_it_was_printed(said: str) -> None:
+    assert held(guarded.section([said, LINES[1]])) == [
+        f"missing: {LINES[0]}",
+        f"not a guarded change of this pull request: {said}",
+    ]
 
 
 @pytest.mark.parametrize(
-    "body",
-    ["", "## Summary\n\n" + "\n".join(LINES), "### Guarded changes\n\n" + "\n".join(LINES)],
+    "heading",
+    [
+        "### Guarded changes",
+        "## Guarded changes and more",
+        "## guarded changes",
+        "  ## Guarded changes",
+        "> ## Guarded changes",
+        "## Summary",
+    ],
 )
-def test_lines_outside_the_section_do_not_count(body: str) -> None:
-    assert guarded.problems(LINES, body) == [
-        "the pull request's text has no '## Guarded changes' section"
-    ]
+def test_only_the_heading_as_printed_at_the_left_edge_starts_the_section(heading: str) -> None:
+    assert held(heading + "\n\n" + "\n".join(LINES)) == NO_SECTION
+    assert held("") == NO_SECTION
+
+
+def test_the_next_heading_ends_the_section() -> None:
+    body = f"## Guarded changes\n\n{LINES[0]}\n\n## Evidence\n\n{LINES[1]}\n"
+    assert held(body) == [f"missing: {LINES[1]}"]
+
+
+def test_the_section_is_there_once() -> None:
+    body = guarded.section(LINES) + "\n\n" + guarded.section(LINES)
+    assert held(body) == ["the pull request's text has '## Guarded changes' more than once"]
+
+
+HIDDEN = "the text has HTML or a `<...>` before the end of the section"
 
 
 @pytest.mark.parametrize(
     "body",
     [
-        "<!--\n## Guarded changes\n\n{0}\n{1}\n-->",
-        "<!--\n## Guarded changes\n\n{0}\n{1}\n## x -->",
+        "<!--\n\n## Guarded changes\n\n{0}\n{1}\n-->",
         "<!-- a note\n\n## Guarded changes\n\n{0}\n{1}\n",
         "## Guarded changes\n\n{0}\n<!-- {1} -->\n",
         "## Guarded changes\n\n{0}\n<!--\n{1}\n-->\n",
+        "<details>\n\n## Guarded changes\n\n{0}\n{1}\n</details>",
+        "<?\n\n## Guarded changes\n\n{0}\n{1}\n?>",
+        "<!X\n\n## Guarded changes\n\n{0}\n{1}\n>",
+        "<![CDATA[\n\n## Guarded changes\n\n{0}\n{1}\n]]>",
+        "A <b>word</b> in the summary.\n\n## Guarded changes\n\n{0}\n{1}\n",
     ],
 )
-def test_a_section_or_a_line_in_a_comment_does_not_count(body: str) -> None:
-    # A comment is not shown to whoever reads the pull request.
-    assert guarded.problems(LINES, body.format(*LINES)) != []
+def test_html_before_the_end_of_the_section_could_hide_it_and_is_refused(body: str) -> None:
+    # A comment, a closed block or a tag: what a reader sees is not worked out here.
+    assert any(problem.startswith(HIDDEN) for problem in held(body.format(*LINES)))
 
 
-def test_a_comment_elsewhere_changes_nothing() -> None:
-    body = "<!-- a template's hint -->\n" + guarded.section(LINES) + "\n<!-- more -->\n"
-    assert guarded.problems(LINES, body) == []
+def test_html_after_the_section_changes_nothing() -> None:
+    body = guarded.section(LINES) + "\n\n## Evidence\n\n<details>logs</details>\n<!-- more -->\n"
+    assert held(body) == []
+    # A text without the section, for a pull request without guarded changes.
+    assert held("<!-- a template's hint -->\n## Summary\n\nDocs only.", []) == []
 
 
-def test_the_next_heading_ends_the_section() -> None:
-    body = f"## Guarded changes\n\n{LINES[0]}\n\n## Evidence\n\n{LINES[1]}\n"
-    assert guarded.problems(LINES, body) == [f"missing: {LINES[1]}"]
+@pytest.mark.parametrize(
+    "body",
+    [
+        # The title of a link definition runs over lines, and none of it is shown.
+        '[x]: http://e.example "t\n## Guarded changes\n{0}\n{1}\n"',
+        '[x]: http://e.example "t\n## Guarded changes\n\n{0}\n{1}\n"',
+        "Some text\n## Guarded changes\n\n{0}\n{1}\n",
+        "## Guarded changes\n{0}\n{1}\n",
+    ],
+)
+def test_the_heading_needs_an_empty_line_on_both_sides(body: str) -> None:
+    assert held(body.format(*LINES))[0] == (
+        "'## Guarded changes' needs an empty line before and after it"
+    )
+
+
+@pytest.mark.parametrize("separator", ["\u2028", "\u2029", "\x85", "\x0c", "\x0b", "\x1c"])
+def test_only_a_line_end_of_markdown_ends_a_line(separator: str) -> None:
+    # Python's own line splitting would see a section in the title of this link definition.
+    hidden = separator.join(['[x]: http://e.example "t', "## Guarded changes", "", *LINES, '"'])
+    assert held(hidden) == NO_SECTION
 
 
 def test_nothing_changed_needs_no_section_and_allows_no_claim() -> None:
-    assert guarded.problems([], "## Summary\n\nDocs only.") == []
-    assert guarded.problems([], "## Guarded changes\n\n") == []
-    assert guarded.problems([], guarded.section(LINES[:1])) == [
+    assert held("## Summary\n\nDocs only.", []) == []
+    assert held("## Guarded changes\n\n", []) == []
+    assert held(guarded.section(LINES[:1]), []) == [
         f"not a guarded change of this pull request: {LINES[0]}"
     ]
 
@@ -494,6 +619,13 @@ def run(repo: Repo, *arguments: str) -> int:
     return code
 
 
+def printed(capsys: pytest.CaptureFixture[str]) -> list[str]:
+    """The lines of the section the script printed, without its heading."""
+    out = capsys.readouterr().out.splitlines()
+    assert out[:2] == ["## Guarded changes", ""]
+    return out[2:]
+
+
 def test_only_what_the_branch_changed_is_listed(
     repo: Repo, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -533,9 +665,9 @@ def test_the_check_is_red_until_the_text_holds_the_section(
 
     # No text at all, as for a pull request opened without one.
     assert run(repo, "main", "work", "--check") == 1
-    printed = capsys.readouterr()
-    assert printed.out == wanted
-    assert "has no '## Guarded changes' section" in printed.err
+    shown = capsys.readouterr()
+    assert shown.out == wanted
+    assert "has no '## Guarded changes' section" in shown.err
     assert summary.read_text() == wanted
 
     monkeypatch.setenv("PR_BODY", f"## Guarded changes\n\n- removed test: {A_TEST}::test_one\n")
@@ -566,6 +698,32 @@ def test_a_start_that_cannot_be_judged_is_an_error_not_a_pass(
     assert capsys.readouterr().out == ""
 
 
+def test_two_commits_that_meet_in_more_than_one_place_are_not_compared(
+    repo: Repo, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo.git("switch", "--quiet", "--create", "work")
+    ours = repo.commit({A_TEST: None})
+    repo.git("switch", "--quiet", "main")
+    theirs = repo.commit({"src/a.py": "a = 1\n"})
+    # Each takes the other in: two common ancestors, and which one to start from is open.
+    repo.git("merge", "--quiet", "--no-edit", ours)
+    repo.git("switch", "--quiet", "work")
+    repo.git("merge", "--quiet", "--no-edit", theirs)
+
+    assert run(repo, "main", "work", "--check") == 2
+    shown = capsys.readouterr()
+    assert (shown.out, "2 common ancestors" in shown.err) == ("", True)
+
+
+def test_histories_that_never_meet_are_not_compared(
+    repo: Repo, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo.git("switch", "--quiet", "--orphan", "work")
+    repo.commit({"src/a.py": "a = 1\n"})
+    assert run(repo, "main", "work", "--check") == 2
+    assert capsys.readouterr().out == ""
+
+
 def test_nothing_of_the_pull_request_is_imported_or_run(
     repo: Repo, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -581,13 +739,12 @@ def test_nothing_of_the_pull_request_is_imported_or_run(
             "scripts/guarded_changes.py": hostile,
             "scripts/switched_off.py": hostile,
             "pyproject.toml": "[tool.pytest.ini_options]\naddopts = '-p no:terminal'\n",
-            ".gitattributes": "* filter=run diff=run\n",
             ".github/workflows/ci.yml": "on: push\n",
         }
     )
     assert run(repo, "main", "work") == 0
     assert not ran.exists()
-    assert capsys.readouterr().out.splitlines()[2:] == [
+    assert printed(capsys) == [
         "- added file: .github/workflows/ci.yml",
         "- added file: conftest.py",
         "- added file: scripts/guarded_changes.py",
@@ -602,15 +759,19 @@ def test_nothing_of_the_pull_request_is_imported_or_run(
 def test_a_link_is_read_as_what_it_holds_not_followed(
     repo: Repo, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    (repo.root / "tests" / "unit" / "test_link.py").symlink_to("/etc/hostname")
+    link = repo.root / "tests" / "unit" / "test_link.py"
+    link.symlink_to("/etc/hostname")
     repo.commit({})
     repo.git("switch", "--quiet", "--create", "work")
-    (repo.root / "tests" / "unit" / "test_link.py").unlink()
-    (repo.root / "tests" / "unit" / "test_link.py").symlink_to("/etc/passwd")
+    link.unlink()
+    link.symlink_to("/etc/passwd")
+    (repo.root / "tests" / "unit" / "more").symlink_to("../../docs")
     repo.commit({})
     assert run(repo, "main", "work") == 0
-    assert capsys.readouterr().out.splitlines()[2:] == [
-        "- cannot be compared: tests/unit/test_link.py"
+    # A new link is a new file, whatever it leads to: pytest would follow it.
+    assert printed(capsys) == [
+        "- added file: tests/unit/more",
+        "- cannot be compared: tests/unit/test_link.py",
     ]
 
 
@@ -625,20 +786,24 @@ def test_a_file_that_became_a_link_is_a_changed_file(
     data.symlink_to("other.txt")
     repo.commit({})
     assert run(repo, "main", "work") == 0
-    assert capsys.readouterr().out.splitlines()[2:] == ["- changed file: tests/unit/data.txt"]
+    assert printed(capsys) == ["- changed file: tests/unit/data.txt"]
 
 
-def test_a_path_is_printed_as_one_line_whatever_bytes_it_holds(
-    repo: Repo, capsys: pytest.CaptureFixture[str]
+def test_a_path_is_printed_as_one_line_without_markup_whatever_bytes_it_holds(
+    repo: Repo, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    odd = os.fsencode(repo.root / "tests" / "unit") + b"/a\nb\xff.yml"
-    Path(os.fsdecode(odd)).write_text("a: 1\n")
+    odd = os.fsdecode(os.fsencode(repo.root / "tests" / "unit") + b"/a\nb\xff<!--c&.yml")
+    Path(odd).write_text("a: 1\n")
     repo.commit({})
     repo.git("switch", "--quiet", "--create", "work")
-    Path(os.fsdecode(odd)).write_text("a: 2\n")
+    Path(odd).write_text("a: 2\n")
     repo.commit({})
     assert run(repo, "main", "work") == 0
-    assert capsys.readouterr().out.splitlines()[2:] == ["- changed file: tests/unit/a\\nb\\xff.yml"]
+    line = "- changed file: tests/unit/a\\nb\\xff\\x3c!--c\\x26.yml"
+    assert printed(capsys) == [line]
+    # The line can be stated: it does not read as HTML in the text.
+    monkeypatch.setenv("PR_BODY", guarded.section([line]))
+    assert run(repo, "main", "work", "--check") == 0
 
 
 def test_the_script_uses_only_the_standard_library() -> None:
@@ -657,41 +822,63 @@ def test_the_script_uses_only_the_standard_library() -> None:
 
 # --- the workflow ---
 
+# Every line of the workflow that is not a comment. The job is safe because of
+# what it does not do, and a list of forbidden words would miss the next way
+# to run a pull request's code. So the whole of it is pinned: a change to the
+# workflow changes this list, and both show in the pull request that makes it.
+#
+# - `pull_request_target`: main's copy of the workflow and the script run.
+#   `edited`: a change of the pull request's text starts a run.
+# - `contents: read`, no secret, no environment, no cache, no credentials kept.
+# - The checkout is the default branch. The pull request's commits are fetched
+#   under a name of their own and never checked out; the commit judged is the
+#   one the run is for.
+# - `--no-project` and `-I`: nothing is installed or importable from the checkout.
+# - The pull request's number, commit and text reach a step as variables only.
+THE_WORKFLOW = """\
+name: Guarded changes
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, edited]
+permissions:
+  contents: read
+concurrency:
+  group: guarded-changes-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  guarded:
+    name: Guarded changes
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        with:
+          version: "0.13.8"
+          enable-cache: false
+      - name: Fetch the pull request's commits
+        env:
+          NUMBER: ${{ github.event.pull_request.number }}
+          COMMIT: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git -c fetch.fsckObjects=true fetch --no-tags --no-recurse-submodules origin \\
+            "+refs/pull/${NUMBER}/head:refs/remotes/pull/head"
+          test "$(git rev-parse refs/remotes/pull/head)" = "$COMMIT"
+      - name: Compare with the pull request's text
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: >-
+          uv run --no-project --python "$(cat .python-version)"
+          python -I scripts/guarded_changes.py HEAD refs/remotes/pull/head --check
+"""
 
-def test_the_workflow_runs_mains_copy_on_every_pull_request_and_on_an_edit_of_its_text() -> None:
-    trigger = "\non:\n  pull_request_target:\n    types: [opened, reopened, synchronize, edited]\n"
-    assert trigger in WORKFLOW
-    assert WORKFLOW.count("\n  pull_request") == 1
-    assert "ref: ${{ github.event.repository.default_branch }}" in WORKFLOW
 
-
-def test_the_workflow_holds_no_secret_and_cannot_write() -> None:
-    assert "\npermissions:\n  contents: read\n\n" in WORKFLOW
-    assert WORKFLOW.count("permissions:") == 1
-    for word in ("secrets.", "environment:", "id-token", "write"):
-        assert word not in WORKFLOW
-    assert WORKFLOW.count("persist-credentials: false") == WORKFLOW.count("actions/checkout@") == 1
-    assert "enable-cache: false" in WORKFLOW
-
-
-def test_the_workflow_never_checks_the_pull_request_out() -> None:
-    # Its commits are fetched under a name of their own and read with git.
-    for word in ("head.sha", "head.ref", "head_ref", "merge_commit", "git checkout", "git switch"):
-        assert word not in WORKFLOW
-    fetch = 'git fetch --no-tags origin "+refs/pull/${NUMBER}/head:refs/remotes/pull/head"'
-    assert fetch in WORKFLOW
-    assert "python -I scripts/guarded_changes.py HEAD refs/remotes/pull/head --check" in WORKFLOW
-    assert "uv run --no-project" in WORKFLOW
-    for word in ("uv sync", "pip install", "make ", "pytest"):
-        assert word not in WORKFLOW
-
-
-def test_the_pull_requests_text_reaches_the_script_as_a_variable_never_as_shell() -> None:
-    steps = WORKFLOW.split("    steps:\n", 1)[1]
-    commands = [line for line in steps.splitlines() if not line.lstrip().startswith("#")]
-    used = [line.strip() for line in commands if "${{" in line]
-    assert used == [
-        "ref: ${{ github.event.repository.default_branch }}",
-        "NUMBER: ${{ github.event.pull_request.number }}",
-        "PR_BODY: ${{ github.event.pull_request.body }}",
+def test_the_workflow_is_exactly_the_reviewed_one() -> None:
+    kept = [
+        line for line in WORKFLOW.splitlines() if line.strip() and not line.lstrip().startswith("#")
     ]
+    assert kept == THE_WORKFLOW.splitlines()

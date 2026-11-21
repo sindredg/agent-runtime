@@ -74,13 +74,9 @@ holds the key, and is [judged by its record](kill-runs.md#a-switched-off-run-on-
 
 ## Guarded changes
 
-A pull request that removes or changes a test, changes an entry of
-`scripts/switched_off.py`, or changes what runs the tests has to say so in
-its own text ([ADR 0024](adr/0024-show-a-changed-test-in-the-pull-request.md)).
-The `Guarded changes` check prints the section and is red until the text
-holds it. Configured, not tested: it has not run on a pull request yet.
-
-`python -I scripts/guarded_changes.py main HEAD` prints a branch's section.
+A pull request that changes a test, an entry of `scripts/switched_off.py`, or
+what runs the tests has to say so in its own text. The `Guarded changes`
+check is red until it does: see [Guarded changes](guarded-changes.md).
 
 ## Failure switches
 

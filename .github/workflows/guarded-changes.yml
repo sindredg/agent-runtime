@@ -23,6 +23,7 @@ jobs:
   guarded:
     name: Guarded changes
     runs-on: ubuntu-26.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -34,10 +35,17 @@ jobs:
         with:
           version: "0.13.8"
           enable-cache: false
+      # Objects are checked as they arrive, and no submodule is fetched. The
+      # commit judged is the one this run is recorded on: a newer push has a
+      # run of its own.
       - name: Fetch the pull request's commits
         env:
           NUMBER: ${{ github.event.pull_request.number }}
-        run: git fetch --no-tags origin "+refs/pull/${NUMBER}/head:refs/remotes/pull/head"
+          COMMIT: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git -c fetch.fsckObjects=true fetch --no-tags --no-recurse-submodules origin \
+            "+refs/pull/${NUMBER}/head:refs/remotes/pull/head"
+          test "$(git rev-parse refs/remotes/pull/head)" = "$COMMIT"
       # The Python of .python-version, so the files parse as they do in CI.
       # --no-project and -I: nothing is installed, and no path of the
       # checkout is on the import path. The script needs the standard
