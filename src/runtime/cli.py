@@ -438,7 +438,8 @@ def _list(client: httpx2.Client, args: argparse.Namespace, out: TextIO, err: Tex
             print("    question: not in the log yet", file=out)
     if len(found) == args.limit:
         # Not a command to copy: how `runtime` is started depends on the install.
-        last = _one_line(str(found[-1]["id"]))
+        # A UUID or nothing: a user pastes this text into a shell.
+        last = UUID(str(found[-1]["id"]))
         print(f"More jobs may be older. Add --before {last} to read them.", file=err)
     return 0
 

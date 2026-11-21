@@ -53,8 +53,10 @@ FastAPI also serves `/docs`, `/redoc` and `/openapi.json`.
 - `before=<id>` returns the jobs older than that id. The last id of a page
   asks for the next one. A page shorter than `limit` is the last.
 - An item has no spec and no lease; `GET /jobs/{id}` has them. A job in
-  `needs_approval` has `question`: its number, tool and reason, without the
-  call's input. The input is in the job's steps.
+  `needs_approval` has `question`: its number, tool and reason. The call's
+  `input` field is left out; a reason can still quote it.
+- A job inserted while a client pages can be missed: its id is made when the
+  insert runs, and it is visible only once its transaction commits.
 - Anyone who reaches the API can list every job. See
   [Limits](limits.md#api).
 

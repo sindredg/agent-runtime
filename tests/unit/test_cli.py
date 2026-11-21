@@ -945,6 +945,16 @@ def test_a_full_page_says_how_to_read_the_older_jobs() -> None:
     assert err == f"More jobs may be older. Add --before {OTHER_ID} to read them.\n"
 
 
+def test_a_full_page_whose_last_id_is_not_a_uuid_prints_no_hint() -> None:
+    """The hint is text a user pastes into a shell: only a job id goes in it."""
+    api = StubApi()
+    api.jobs = [summary(), summary(job_id="x; rm -rf ~")]
+    code, _, err = run("list", "--limit", "2", api=api)
+    assert code == 2
+    assert "rm -rf" not in err
+    assert err.startswith("runtime: unexpected data: ValueError")
+
+
 def test_a_page_that_is_not_full_is_the_last_and_says_nothing_more() -> None:
     api = StubApi()
     api.jobs = [summary()]
