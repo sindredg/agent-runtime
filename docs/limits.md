@@ -45,10 +45,10 @@ refused, but the tool ran. An idempotency key on the other side closes this.
 
 ## Tool calls
 
-- "Not done" from a tool's check is the tool author's claim. A check that
-  cannot rule out a request still on its way has to answer unknown.
-  `create_issue` does not wait out a stalled request of an in-process call
-  ([issue 103](https://github.com/sindredg/agent-runtime/issues/103)).
+- "Not done" from a tool's check is the tool author's claim, and so is the
+  bound a tool names for its request. `create_issue` waits its request out
+  for 12 s after a takeover. One the tracker stores later still makes two
+  ([ADR 0025](adr/0025-a-tool-in-the-worker-names-how-long-its-request-can-arrive.md)).
 - On Gitea, the `create_issue` check misses an issue whose marker line a
   person edited or wrote below, and is fooled by a bot issue edited to end
   with another call's marker. It trusts that each page's `X-Total-Count`

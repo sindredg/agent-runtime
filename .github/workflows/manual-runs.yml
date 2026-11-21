@@ -70,6 +70,8 @@ on:
           - workspace-timeout-off
           - workspace-stop-signal-off
           - workspace-walk-stop-off
+          - takeover-wait-for-a-request-off
+          - create-deadline-off
       provider:
         description: fake costs nothing; claude waits for a reviewer and costs money
         type: choice

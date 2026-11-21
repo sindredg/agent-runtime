@@ -48,11 +48,14 @@ AGENT = "src/runtime/worker/agent.py"
 SANDBOXED = "src/runtime/tools/sandboxed.py"
 WORKSPACE = "src/runtime/sandbox/workspace.py"
 RUNNER = "src/runtime/sandbox/runner.py"
+CREATE_ISSUE = "src/runtime/tools/create_issue.py"
 CHAIN_MIGRATION = "migrations/versions/0007_step_log_chain.py"
 KILLS = "tests/chaos/test_kills.py"
 FAILPOINT = f"{KILLS}::test_a_job_survives_its_worker_stopping_at_the_failpoint"
 HALT = "tests/integration/test_halt_store.py"
 SANDBOX = "tests/integration/test_sandbox.py"
+STALLED = "tests/integration/test_stalled_tool_call.py"
+CREATE_ISSUE_TESTS = "tests/unit/test_create_issue.py"
 WATCHER = "tests/unit/test_workspace_watcher.py"
 APPROVAL = "tests/integration/test_approval.py"
 CHAOS_APPROVAL = "tests/chaos/test_approval.py"
@@ -931,6 +934,52 @@ ENTRIES: dict[str, SwitchedOff] = {
             Expect(
                 f"{WATCHER}::test_a_walk_told_to_stop_cannot_be_measured",
                 'pytest.raises(Unmeasurable, match="was stopped")',
+            ),
+        ),
+    ),
+    # A request to the tracker that outlives its worker's lease (ADR 0025)
+    "takeover-wait-for-a-request-off": SwitchedOff(
+        issue=103,
+        what="the bound create_issue names for its request, which a takeover waits out",
+        edits=(
+            Edit(
+                CREATE_ISSUE,
+                "        ends_within=create_within + MARGIN,\n",
+                "        # switched off\n",
+            ),
+        ),
+        stack="up",
+        expect=(
+            Expect(
+                f"{STALLED}::test_a_request_that_arrives_after_the_takeover_is_found_and_not_sent_again",
+                "assert len(tracker.issues) == 1",
+            ),
+            Expect(
+                f"{STALLED}::test_a_request_given_up_at_its_deadline_is_sent_again_once",
+                "assert waited >= 1.0 + MARGIN",
+            ),
+        ),
+    ),
+    "create-deadline-off": SwitchedOff(
+        issue=103,
+        what="the one deadline of the request that opens an issue",
+        edits=(
+            Edit(
+                CREATE_ISSUE,
+                "async with asyncio.timeout(create_within), tracker.sender(transport) as http:",
+                "async with tracker.sender(transport) as http:  # switched off",
+            ),
+        ),
+        stack="none",
+        expect=(
+            Expect(
+                f"{CREATE_ISSUE_TESTS}::test_a_request_that_gets_no_answer_is_given_up_at_its_deadline",
+                "assert result == ToolResult(",
+            ),
+            Expect(
+                f"{CREATE_ISSUE_TESTS}"
+                "::test_an_issue_the_tracker_stored_before_the_deadline_passed_is_reported_as_created",
+                "assert slow.given_up",
             ),
         ),
     ),

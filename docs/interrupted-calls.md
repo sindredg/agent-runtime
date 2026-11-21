@@ -92,6 +92,18 @@ sequenceDiagram
 request, or a Docker daemon that acts on a request late. See
 [Known limits](limits.md#tool-calls).
 
+## Before the decision: a tool in the worker
+
+A tool that is runtime code runs in a thread, and the thread goes on when
+its worker loses the job without being killed. A request it sent can then
+still arrive
+([ADR 0025](adr/0025-a-tool-in-the-worker-names-how-long-its-request-can-arrive.md)).
+
+- `create_issue` gives the request that opens the issue one deadline of
+  10 s, and names 12 s as `ends_within` in its intent.
+- The worker that takes the job over waits that long after the intent, as
+  above, before it asks the check. There is no container to remove.
+
 ## When `create_issue` gets no answer
 
 `create_issue` uses the same lookup when its own request times out, the
