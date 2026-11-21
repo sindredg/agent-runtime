@@ -54,9 +54,22 @@ In 15 jobs a worker that never received the block rebuilt it from the step
 log, sent it, and the API answered. All 15 succeeded. In the other jobs the
 takeover came before the first block, or no answer held one.
 
-One run, with no switched-off run yet. The API's documentation says this
-model checks a block it gets back; no run here shows it refuse one
-([issue 122](https://github.com/sindredg/agent-runtime/issues/122)).
+### With the stored signature changed
+
+The switched-off run `thinking-signature-changed`
+([how it is judged](../kill-runs.md#a-switched-off-run-on-the-claude-api)):
+on every claim, replay changed the first character of each stored
+signature. 5 jobs of the `after_tool_ran` test on `claude-fable-5-2`, at
+`5a5bfa6`, GitHub Actions, run [44901355863](https://github.com/sindredg/agent-runtime/actions/runs/44901355863). PASS.
+
+| Jobs | Sent a changed block | Refused for its signature | Answered | Tokens |
+|---|---|---|---|---|
+| 5 | 5 | 5 | 0 | 12,691 |
+
+Each refusal was the API's 400
+``messages.3.content.0: Invalid `signature` in `thinking` block``.
+Status: tested. Not shown: that the API answers an unchanged rebuilt block
+at `5a5bfa6`. The 15 answered jobs are from `88e652a`.
 
 ### With the intent write switched off
 
