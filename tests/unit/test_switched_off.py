@@ -56,6 +56,7 @@ def test_the_workflow_offers_exactly_the_listed_runs() -> None:
     assert options(WORKFLOW, "switched_off") == list(switched_off.ENTRIES)
     assert "switched-off" in options(WORKFLOW, "suite")
     assert "switched-off-rehearsal" in options(WORKFLOW, "suite")
+    assert "switched-off-all" in options(WORKFLOW, "suite")
 
 
 def test_an_edit_whose_text_is_not_unique_is_refused(tmp_path: Path) -> None:
@@ -336,6 +337,7 @@ def test_a_refused_start_changes_nothing(
     monkeypatch.setattr(switched_off, "_git", reached)
     monkeypatch.setattr(switched_off, "_sh", reached)
     monkeypatch.setattr(switched_off, "edited", reached)
+    monkeypatch.setattr(switched_off, "edited_files", reached)
     monkeypatch.delenv("SWITCHED_OFF_PROVIDER", raising=False)
     if asked is not None:
         monkeypatch.setenv("SWITCHED_OFF_PROVIDER", asked)
@@ -355,6 +357,7 @@ def test_an_entry_over_its_bound_is_refused_at_the_start_too(
     monkeypatch.setattr(switched_off, "_git", reached)
     monkeypatch.setattr(switched_off, "_sh", reached)
     monkeypatch.setattr(switched_off, "edited", reached)
+    monkeypatch.setattr(switched_off, "edited_files", reached)
     monkeypatch.setenv("SWITCHED_OFF_PROVIDER", "claude")
     assert switched_off.run(NAME) == 2
     assert switched_off.main(["dispatch", NAME, "claude", "claude-fable-5-2"]) == 1
@@ -722,9 +725,15 @@ def index(found: list[str], text: str) -> int:
     return at
 
 
+# Every way a job can name a secret.
+SECRET_FORMS = ("secrets.", "secrets[", "toJSON(secrets", "secrets: inherit")
+
+
 def test_the_job_on_the_fake_provider_holds_no_secret() -> None:
     fake = job("fake")
-    assert "secrets." not in fake
+    assert not [form for form in SECRET_FORMS if form in fake]
+    # The job with the key names its secret one way only.
+    assert not [form for form in SECRET_FORMS[1:] if form in WORKFLOW]
     assert "environment:" not in fake
     assert "SWITCHED_OFF_PROVIDER" not in fake
     assert WORKFLOW.count("secrets.") == job("claude").count("secrets.") == 3
@@ -732,12 +741,16 @@ def test_the_job_on_the_fake_provider_holds_no_secret() -> None:
 
 
 def test_a_rehearsal_never_reaches_the_job_with_the_key() -> None:
-    assert "    if: inputs.provider == 'fake' || inputs.suite == 'switched-off-rehearsal'" in job(
-        "fake"
-    )
-    assert "    if: inputs.provider == 'claude' && inputs.suite != 'switched-off-rehearsal'" in job(
-        "claude"
-    )
+    assert (
+        "    if: >-\n"
+        "      (inputs.provider == 'fake' || inputs.suite == 'switched-off-rehearsal')\n"
+        "      && inputs.suite != 'switched-off-all'\n"
+    ) in job("fake")
+    assert (
+        "    if: >-\n"
+        "      inputs.provider == 'claude' && inputs.suite != 'switched-off-rehearsal'\n"
+        "      && inputs.suite != 'switched-off-all'\n"
+    ) in job("claude")
     assert "make switched-off-rehearsal" in job("fake")
     assert "rehears" not in job("claude").split("    steps:")[1]
 
@@ -769,3 +782,320 @@ def test_the_job_on_the_fake_provider_checks_the_entry_before_it_runs_it() -> No
 def test_the_reviewer_sees_which_entry_gets_the_key() -> None:
     name = job("claude").split("    if:")[0]
     assert "format('switched-off {0}', inputs.switched_off)" in name
+
+
+# Edits, stacks and the list of the fake provider
+
+
+def test_two_edits_of_one_file_both_land_in_the_lists_order(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("x = 1\ny = 2\n")
+    first = switched_off.Edit("a.py", "x = 1\n", "x = 3\n")
+    second = switched_off.Edit("a.py", "y = 2\n", "y = 4\n")
+    assert switched_off.edited_files((first, second), tmp_path) == {"a.py": "x = 3\ny = 4\n"}
+    # Each edit must occur once in the text the edits before it left.
+    again = switched_off.Edit("a.py", "x = 1\n", "x = 5\n")
+    with pytest.raises(ValueError, match="0 times"):
+        switched_off.edited_files((first, again), tmp_path)
+
+
+def test_the_check_reads_an_entrys_edits_of_one_file_together(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each edit by itself matches the file once; the second no longer matches after the first."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "a.py").write_text("x = 1\n")
+    (tmp_path / "tests" / "unit").mkdir(parents=True)
+    (tmp_path / "tests" / "unit" / "test_x.py").write_text("def test_y():\n    assert x\n")
+    edits = (
+        switched_off.Edit("src/a.py", "x = 1\n", "x = 2\n"),
+        switched_off.Edit("src/a.py", "x = 1\n", "x = 3\n"),
+    )
+    entry = replace(ENTRY, stack="none", edits=edits, expect=(switched_off.Expect(NODE, "x"),))
+    monkeypatch.setattr(switched_off, "ENTRIES", {"twice": entry})
+    assert switched_off.check(tmp_path) == [
+        "twice: src/a.py: the edit's text occurs 0 times, not once"
+    ]
+    monkeypatch.setattr(switched_off, "ENTRIES", {"once": replace(entry, edits=edits[:1])})
+    assert switched_off.check(tmp_path) == []
+
+
+def test_an_edit_of_a_migration_is_made_like_one_of_the_source() -> None:
+    """Both of the entry's edits land in the one migration file, and nothing else changes."""
+    entry = switched_off.ENTRIES["refusal-triggers-off"]
+    path = switched_off.CHAIN_MIGRATION
+    assert path.startswith("migrations/")
+    texts = switched_off.edited_files(entry.edits)
+    assert list(texts) == [path]
+    before = (ROOT / path).read_text()
+    assert before.count("CREATE TRIGGER steps_no_") == 2
+    assert texts[path].count("CREATE TRIGGER steps_no_") == 0
+    assert texts[path].count('"SELECT 1"  # switched off') == 2
+    compile(texts[path], path, "exec")
+
+
+@pytest.mark.parametrize(
+    ("stack", "provider", "commands"),
+    [
+        ("none", "fake", []),
+        ("up", "fake", [["make", "up"]]),
+        (
+            "chaos",
+            "fake",
+            [["docker", "compose", "-f", "docker-compose.yml", "-f", "docker-compose.chaos.yml",
+              "up", "--build", "--wait"]],
+        ),
+        (
+            "kills",
+            "fake",
+            [["docker", "compose", "-f", "docker-compose.yml", "-f", "docker-compose.kills.yml",
+              "up", "--build", "--wait"]],
+        ),
+        (
+            "kills",
+            "claude",
+            [["docker", "compose", "-f", "docker-compose.yml", "-f", "docker-compose.kills.yml",
+              "-f", "docker-compose.claude.yml", "up", "--build", "--wait"]],
+        ),
+        # As `make lab`: the lab's tests start the stack from these images.
+        (
+            "lab",
+            "fake",
+            [["docker", "compose", "-f", "docker-compose.yml", "-f", "docker-compose.lab.yml",
+              "build"]],
+        ),
+    ],
+)  # fmt: skip
+def test_each_stack_starts_as_its_make_target_does(
+    stack: str, provider: str, commands: list[list[str]]
+) -> None:
+    assert switched_off.stack_commands(stack, provider) == commands
+
+
+def test_a_stack_the_script_does_not_know_is_refused_and_every_entry_has_one_it_knows() -> None:
+    with pytest.raises(ValueError, match="no stack 'lab2'"):
+        switched_off.stack_commands("lab2", "fake")
+    for entry in switched_off.ENTRIES.values():
+        switched_off.stack_commands(entry.stack, entry.provider)
+
+
+@pytest.mark.parametrize(
+    ("stack", "node", "problem"),
+    [
+        ("none", "tests/integration/test_x.py::test_y", "stack 'none' runs tests/unit/ only"),
+        ("none", "tests/lab/test_x.py::test_y", "stack 'none' runs tests/unit/ only"),
+        ("lab", "tests/unit/test_x.py::test_y", "stack 'lab' runs tests/lab/ only"),
+        ("lab", "tests/chaos/test_x.py::test_y", "stack 'lab' runs tests/lab/ only"),
+    ],
+)
+def test_a_run_with_no_stack_or_the_lab_names_only_the_tests_it_can_run(
+    stack: str, node: str, problem: str
+) -> None:
+    fits = {"none": "tests/unit/test_x.py::test_y", "lab": "tests/lab/test_x.py::test_y"}
+    assert (
+        switched_off.run_problems(
+            replace(ENTRY, stack=stack, expect=(switched_off.Expect(fits[stack], "x"),))
+        )
+        == []
+    )
+    wrong = replace(ENTRY, stack=stack, expect=(switched_off.Expect(node, "x"),))
+    assert any(problem in found for found in switched_off.run_problems(wrong))
+
+
+def test_the_list_of_the_fake_provider_leaves_out_the_entries_of_the_claude_api(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    fake = switched_off.names("fake")
+    assert fake == [n for n, e in switched_off.ENTRIES.items() if e.provider == "fake"]
+    assert NAME not in fake
+    assert set(fake) | set(switched_off.names("claude")) == set(switched_off.ENTRIES)
+    assert switched_off.main(["names", "fake"]) == 0
+    assert json.loads(capsys.readouterr().out) == fake
+    assert switched_off.main(["names", "claude"]) == 2
+
+
+# The workflow: every entry of the fake provider, one job each
+
+ALL = ("fake-names", "fake-entries")
+
+
+def run_lines(name: str) -> list[str]:
+    """The shell lines of a job's steps: each `run:` line and the block under it."""
+    found, block = [], False
+    for line in job(name).splitlines():
+        if line.strip().startswith("run:"):
+            found.append(line)
+            # A literal or folded block: its lines are shell too.
+            block = line.strip() in {f"run: {style}" for style in ("|", "|-", ">", ">-")}
+        elif block and line.startswith("          "):
+            found.append(line)
+        else:
+            block = False
+    return found
+
+
+def test_the_jobs_of_every_entry_hold_no_secret_and_read_no_input_but_the_suite() -> None:
+    for name in ALL:
+        text = job(name)
+        assert not [form for form in SECRET_FORMS if form in text]
+        assert "environment:" not in text
+        assert "SWITCHED_OFF_PROVIDER" not in text
+        assert [line for line in text.splitlines() if "inputs." in line] == [
+            "    if: inputs.suite == 'switched-off-all'"
+        ]
+        # No expression is pasted into a shell line: values reach it through env.
+        assert run_lines(name)
+        assert not [line for line in run_lines(name) if "${{" in line]
+
+
+def test_the_names_of_the_matrix_come_from_mains_list_of_the_fake_provider() -> None:
+    names = steps("fake-names")
+    assert index(names, "name: Refuse a switched-off run off main") == 0
+    assert "if: github.ref != 'refs/heads/main'" in names[0]
+    assert index(names, "switched_off.py names fake") > index(names, "actions/checkout@")
+    entries = job("fake-entries")
+    assert "    needs: fake-names\n" in entries
+    assert "        entry: ${{ fromJSON(needs.fake-names.outputs.names || '[\"\"]') }}\n" in entries
+    assert "      fail-fast: false\n" in entries
+    assert "      SWITCHED_OFF: ${{ matrix.entry }}\n" in entries
+    assert "    name: switched-off ${{ matrix.entry }} on the fake provider\n" in entries
+
+
+def test_each_entry_is_refused_off_main_and_checked_before_it_runs() -> None:
+    each = steps("fake-entries")
+    assert index(each, "name: Refuse a switched-off run off main") == 0
+    assert "if: github.ref != 'refs/heads/main'" in each[0]
+    entry = index(each, 'switched_off.py dispatch "$SWITCHED_OFF" fake')
+    assert "rehears" not in job("fake-entries")
+    assert entry < index(each, "run: make switched-off")
+
+
+@pytest.mark.parametrize(
+    ("name", "started"),
+    [("tool-timeout-off", [["make", "up"]]), ("workspace-walk-stop-off", [])],
+)
+def test_a_run_makes_every_edit_and_starts_only_its_stack(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, started: list[list[str]]
+) -> None:
+    """The edits are read from the checkout and written to `tmp_path`; nothing starts."""
+    entry = switched_off.ENTRIES[name]
+    for edit in entry.edits:
+        (tmp_path / edit.path).parent.mkdir(parents=True, exist_ok=True)
+    commands: list[list[str]] = []
+
+    def sh(*args: str, env: Any) -> None:
+        commands.append(list(args))
+
+    monkeypatch.setattr(switched_off, "ROOT", tmp_path)
+    monkeypatch.setattr(switched_off, "_git", lambda *args: "" if args[0] == "status" else HEAD)
+    monkeypatch.setattr(switched_off, "_sh", sh)
+    monkeypatch.setattr(
+        switched_off.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=1)
+    )
+    monkeypatch.delenv("SWITCHED_OFF_PROVIDER", raising=False)
+    # No junit file: the run is wrong, and has edited the files and started its stack.
+    assert switched_off.run(name) == 1
+    assert commands[0][:3] == ["git", "--no-pager", "diff"]
+    assert commands[1:] == started
+    expected = switched_off.edited_files(entry.edits, ROOT)
+    assert {path: (tmp_path / path).read_text() for path in expected} == expected
+    for edit in entry.edits:
+        assert edit.new in expected[edit.path]
+
+
+def test_the_workflow_reads_the_repository_only_and_keeps_no_credentials() -> None:
+    """One `permissions` block, the top-level one, and each checkout drops its token."""
+    assert "\npermissions:\n  contents: read\n\njobs:\n" in WORKFLOW
+    assert WORKFLOW.count("permissions:") == 1
+    lines = WORKFLOW.splitlines()
+    checkouts = [i for i, line in enumerate(lines) if "actions/checkout@" in line]
+    assert len(checkouts) == 4
+    for at in checkouts:
+        assert [line.strip() for line in lines[at + 1 : at + 3]] == [
+            "with:",
+            "persist-credentials: false",
+        ]
+
+
+# What an edit may change, and what an entry may be called
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/home/runner/work/src/runtime/worker/agent.py",
+        "src/../tests/unit/test_backoff.py",
+        "tests/unit/test_backoff.py",
+        "scripts/switched_off.py",
+    ],
+)
+def test_an_edit_outside_the_code_and_its_migrations_is_refused(
+    path: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entry = replace(ENTRY, edits=(switched_off.Edit(path, "x", "y"),))
+    problem = f"an edit may change src/ or migrations/ only, not {path!r}"
+    assert problem in switched_off.run_problems(entry)
+    # The check names it without reading the file.
+    monkeypatch.setattr(switched_off, "ENTRIES", {"outside": entry})
+    monkeypatch.setattr(switched_off, "edited_files", lambda *a: pytest.fail("read"))
+    assert f"outside: {problem}" in switched_off.check()
+
+
+def test_every_entry_edits_the_code_or_its_migrations_only() -> None:
+    assert len(switched_off.ENTRIES) == 35
+    for entry in switched_off.ENTRIES.values():
+        assert switched_off.edit_path_problems(entry) == []
+    paths = {edit.path for e in switched_off.ENTRIES.values() for edit in e.edits}
+    assert switched_off.CHAIN_MIGRATION in paths
+
+
+def test_a_test_outside_its_suite_by_a_dot_dot_part_is_refused() -> None:
+    sneaky = "tests/unit/../integration/test_x.py::test_y"
+    for stack in ("none", "lab"):
+        node = sneaky.replace("unit", "lab") if stack == "lab" else sneaky
+        entry = replace(ENTRY, stack=stack, expect=(switched_off.Expect(node, "x"),))
+        assert any("only, not" in found for found in switched_off.run_problems(entry))
+
+
+@pytest.mark.parametrize("name", ["Budget-off", "budget off", "budget_off", "x;rm", ""])
+def test_an_entry_name_outside_the_pattern_is_refused(
+    monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    monkeypatch.setattr(switched_off, "ENTRIES", {name: switched_off.ENTRIES["budget-off"]})
+    assert switched_off.check() == [
+        f"{name!r}: a name is lowercase letters, digits and hyphens only"
+    ]
+
+
+# A rehearsal: every step on the fake provider, captured here, none run
+
+
+def test_a_rehearsal_starts_the_kill_runs_on_the_fake_provider_and_passes_on_no_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for edit in KEYED.edits:
+        (tmp_path / edit.path).parent.mkdir(parents=True, exist_ok=True)
+    calls: list[tuple[list[str], dict[str, str]]] = []
+
+    def sh(*args: str, env: Any) -> None:
+        calls.append((list(args), dict(env)))
+
+    def pytest_run(args: list[str], **more: Any) -> Any:
+        calls.append((list(args), dict(more["env"])))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(switched_off, "ROOT", tmp_path)
+    monkeypatch.setattr(switched_off, "_git", lambda *args: "" if args[0] == "status" else HEAD)
+    monkeypatch.setattr(switched_off, "_sh", sh)
+    monkeypatch.setattr(switched_off.subprocess, "run", pytest_run)
+    monkeypatch.delenv("SWITCHED_OFF_PROVIDER", raising=False)
+    monkeypatch.setenv("CLAUDE_API_KEY", "sk-ant-not-a-key")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-not-a-key-either")
+    # No record and no junit file: a wrong rehearsal, after every step ran.
+    assert switched_off.run(NAME, rehearsal=True) == 1
+    commands = [args for args, _ in calls]
+    assert commands[1][:3] == ["docker", "compose", "-f"]
+    assert commands[2][:4] == ["uv", "run", "--frozen", "pytest"]
+    assert not [args for args in commands if "docker-compose.claude.yml" in args]
+    for _, env in calls:
+        assert not {"CLAUDE_API_KEY", "ANTHROPIC_API_KEY"} & env.keys()
+    assert [env["KILLS_PROVIDER"] for _, env in calls[1:]] == ["fake", "fake"]

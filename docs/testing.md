@@ -64,13 +64,18 @@ mechanism switched off, which had to fail. The outcomes are in
 |---|---|
 | `ESCAPE_DOCKER_DEFAULTS=1` | The escape attempts run as root with Docker's default container settings |
 | `ESCAPE_NO_RULES=1` | The scope tests run with a guard that has no rules |
-| `make switched-off SWITCHED_OFF=<name>` | One named edit from `scripts/switched_off.py`, its tests, and a verdict per test ([ADR 0021](adr/0021-run-switched-off-runs-from-a-reviewed-list.md)) |
+| `make switched-off SWITCHED_OFF=<name>` | One named entry of `scripts/switched_off.py`: its edits, its tests, and a verdict per test ([ADR 0021](adr/0021-run-switched-off-runs-from-a-reviewed-list.md)) |
 | `make switched-off-rehearsal SWITCHED_OFF=<name>` | An entry of the Claude API on the fake provider: every step, no key. Not a result. |
 
 Recorded switched-off runs start from the Manual runs workflow, from `main`.
 An entry names its provider. One on the Claude API runs in the job that
 holds the key, and is [judged by its record](kill-runs.md#a-switched-off-run-on-the-claude-api)
 ([ADR 0022](adr/0022-run-switched-off-entries-on-the-claude-api-from-the-list.md)).
+
+`suite: switched-off-all` runs every entry of the fake provider from `main`,
+one job and one verdict each. The names come from `main`'s list, and no job
+of that start holds a secret. An entry names its stack: the normal one, the
+chaos, kill runs' or lab stack, or none for unit tests.
 
 ## Failure switches
 
