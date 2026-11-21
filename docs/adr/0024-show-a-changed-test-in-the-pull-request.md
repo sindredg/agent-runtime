@@ -46,10 +46,12 @@ fails until the pull request's text states what changed.
   no environment.
 - The script reads both trees as text, with `git` and `ast`. It imports
   nothing from the pull request and collects no tests.
-- Guarded: test functions under `tests/`, the entries of
-  `scripts/switched_off.py`, and the check's own script and workflow.
-- The section names each removed test and each removed or changed entry. It
-  counts changed tests and changed support code per file.
+- Guarded: test functions and their support code under `tests/`, and the
+  entries of `scripts/switched_off.py`.
+- Guarded as whole files: what runs the tests (the workflows, the
+  `Makefile`, the pytest settings) and the check's own script.
+- The section names each removed test, each removed or changed entry, and
+  each other changed file. It counts changed tests per file.
 - The job is red until the pull request's text holds that section, word for
   word. An edit of the text runs the job again.
 - No label and no comment.
