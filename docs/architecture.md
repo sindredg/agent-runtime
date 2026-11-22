@@ -8,7 +8,7 @@
 
 | Component | Code | What it does |
 |---|---|---|
-| `api` | `src/runtime/api/` | Accepts jobs, serves jobs and steps, takes cancels and approval answers. Holds no state. |
+| `api` | `src/runtime/api/` | Accepts jobs, serves jobs, steps and a read-only [status page](api.md#status-page), takes cancels and approval answers. Holds no state. |
 | `worker` | `src/runtime/worker/` | Runs one job at a time under a lease; any worker can continue any job. Posts parked jobs' questions to `NOTIFY_URL`. |
 | `postgres` | `migrations/`, `src/runtime/store/` | Jobs, the step log and the queue. Runs under an init process. |
 | `migrate` | `migrations/`, `src/runtime/store/migrate.py` | Runs the migrations as the owner, sets the login of the [app role](database-roles.md), and exits. `api` and `worker` start after it. |
@@ -20,7 +20,7 @@
 | Provider client | `src/runtime/provider/` | The worker's one way to call a model: the official SDK behind a `Provider` interface. |
 | Tools | `src/runtime/tools/` | `run_shell` and `list_dir` run in a container per call. `read_file` and `create_issue` run in the worker; `trackers.py` holds the two trackers. |
 | Sandbox | `src/runtime/sandbox/` | Starts, reads and removes the container of each sandboxed call. A scoped call also gets a guard container. |
-| CLI | `src/runtime/cli.py`, `src/runtime/verify.py` | `runtime submit`, `status`, `logs`, `approve`, `deny`, `cancel` talk to the API. `runtime verify` reads the database. |
+| CLI | `src/runtime/cli.py`, `src/runtime/verify.py` | `runtime submit`, `list`, `status`, `logs`, `answer`, `approve`, `deny`, `cancel` talk to the API. `runtime verify` reads the database. |
 
 The API has no authentication, so the stack publishes it on localhost only.
 
