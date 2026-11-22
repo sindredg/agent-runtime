@@ -34,6 +34,7 @@ and `127.0.0.1`.
 | Route | Returns |
 |---|---|
 | `POST /jobs` | 201 and the job. The body is a [job file](usage.md#job-files). |
+| `GET /?status=&limit=&before=` | The [status page](#status-page): the same list as HTML |
 | `GET /jobs?status=&limit=&before=` | Jobs newest first, at most `limit` (1 to 200, default 50). [Listing jobs](#listing-jobs) |
 | `GET /jobs/{id}` | The job |
 | `GET /jobs/{id}/steps?after=&limit=` | Steps with `seq` above `after`, in order, at most 1000 |
@@ -59,6 +60,16 @@ FastAPI also serves `/docs`, `/redoc` and `/openapi.json`.
   insert runs, and it is visible only once its transaction commits.
 - Anyone who reaches the API can list every job. See
   [Limits](limits.md#api).
+
+## Status page
+
+`GET /` shows one page of the list as HTML, with a link to each job's
+steps. It takes the list's parameters and loads again every 5 s.
+
+- It changes nothing: no form, no script. Answer and cancel with the CLI.
+- A script at the API's origin would pass the Origin check. So every value
+  is escaped and the Content-Security-Policy allows only the page's own
+  style. The code is `src/runtime/api/page.py`.
 
 ## Refusals
 

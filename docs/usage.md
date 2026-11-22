@@ -75,7 +75,8 @@ To refuse it:        uv run runtime deny 01a1dc46-ae79-75d6-9dd9-070e7dc3e400 7
   and may have run. See [Approval](approval.md#the-two-reasons-a-job-waits).
 - A job nobody answers is failed at its deadline.
 - `runtime list --status needs_approval` shows every job that waits, with
-  its question.
+  its question. So does <http://127.0.0.1:8000/?status=needs_approval> in a
+  browser, the [status page](api.md#status-page).
 
 ## Job files
 
