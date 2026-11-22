@@ -45,6 +45,8 @@ from .test_sandbox import OwnClientSandbox, settings, workspace_volume  # noqa: 
 KEY = "canaryKey7Qm2Xv9"
 TOKEN = "canaryToken4Rt8Wz1"  # noqa: S105 - a marker, not a secret
 SECRETS = {"the provider key": KEY, "the tracker token": TOKEN}
+# The loggers uvicorn's own config sets up (uvicorn.config.LOGGING_CONFIG).
+UVICORN_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access")
 
 # Every route of the API. A new route fails the test until it is searched too.
 ROUTES = {
@@ -71,10 +73,16 @@ def every_record() -> Iterator[io.StringIO]:
     """Every log record of this process, as `configure_logging` writes it in the worker and the API.
 
     A handler on the root logger sees what reaches stderr, whatever pytest
-    does with stderr.
+    does with stderr. uvicorn's loggers are put in the state the API process
+    runs with: `log_config=None` leaves them as created. A test that served
+    with uvicorn's own config leaves them on WARNING, off the root handler.
     """
     root, httpx2_logger = logging.getLogger(), logging.getLogger("httpx2")
     handlers, level, httpx2_level = root.handlers[:], root.level, httpx2_logger.level
+    uvicorn_loggers = [logging.getLogger(name) for name in UVICORN_LOGGERS]
+    kept = [(lg.level, lg.propagate, lg.handlers[:], lg.disabled) for lg in uvicorn_loggers]
+    for lg in uvicorn_loggers:
+        set_state(lg, logging.NOTSET, True, [], False)
     configure_logging()
     written = io.StringIO()
     try:
@@ -86,6 +94,19 @@ def every_record() -> Iterator[io.StringIO]:
         root.handlers[:] = handlers
         root.setLevel(level)
         httpx2_logger.setLevel(httpx2_level)
+        for lg, state in zip(uvicorn_loggers, kept, strict=True):
+            set_state(lg, *state)
+
+
+def set_state(
+    logger: logging.Logger,
+    level: int,
+    propagate: bool,
+    handlers: list[logging.Handler],
+    disabled: bool,
+) -> None:
+    logger.setLevel(level)
+    logger.propagate, logger.handlers[:], logger.disabled = propagate, handlers, disabled
 
 
 def api_routes() -> set[tuple[str, str]]:
