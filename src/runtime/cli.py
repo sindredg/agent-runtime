@@ -1,5 +1,5 @@
-"""The `runtime` command: submit a job, list jobs, read its status and steps,
-cancel it, and approve or deny a tool call that waits for a person.
+"""The `runtime` command: submit a job, list jobs, read a job's status, steps
+and answer, cancel it, and approve or deny a tool call that waits for a person.
 
 It talks to the API over HTTP. The API's address comes from --api-url or
 RUNTIME_API_URL and defaults to http://127.0.0.1:8000. `runtime verify` is
@@ -147,6 +147,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="keep printing new steps until the job ends or needs approval",
     )
 
+    answer = commands.add_parser(
+        "answer",
+        help="print a succeeded job's final answer in full",
+        description=(
+            "Prints the text of the job's last model response, the answer it ended with,"
+            " whole and with its line breaks. Characters a terminal would act on are shown"
+            " as ?. A job that has not succeeded has no final answer: exit status 2."
+        ),
+    )
+    answer.add_argument("job_id", type=_job_id)
+
     approve = commands.add_parser(
         "approve",
         help="let the tool call of a job's question run",
@@ -212,6 +223,13 @@ def _one_line(text: str) -> str:
     """The text on one line. Text from a model, a tool or another server can
     hold terminal control codes; anything that is not printable is shown as `?`."""
     return "".join(char if char.isprintable() else "?" for char in " ".join(text.split()))
+
+
+def _text(text: str) -> str:
+    """Text to print whole: line breaks and tabs stay, anything else that is
+    not printable is shown as `?`. A carriage return is one of those: it
+    would let the text write over what was printed before it."""
+    return "".join(c if c.isprintable() or c in "\n\t" else "?" for c in text)
 
 
 def _preview(text: str) -> str:
@@ -386,6 +404,16 @@ def _open_question(client: httpx2.Client, job_id: str) -> dict[str, Any] | None:
     return asked
 
 
+def _how_to_run() -> str:
+    """How to start `runtime` again from the shell this command was started in.
+
+    `uv run` sets UV for the command it starts. After the quickstart the CLI
+    runs that way and `runtime` alone is not on the PATH. Otherwise the
+    command was found on the PATH, or in an activated environment.
+    """
+    return "uv run runtime" if os.environ.get("UV") else "runtime"
+
+
 def _finish(status: str, asked: Any, client: httpx2.Client, job_id: str, out: TextIO) -> int:
     """Print the line for the status the job stopped at and turn it into an exit code.
 
@@ -402,7 +430,8 @@ def _finish(status: str, asked: Any, client: httpx2.Client, job_id: str, out: Te
             asked = _open_question(client, job_id)
         print("The job waits for a person to decide about a tool call.", file=out)
         if asked is None:
-            print("Its question is not in the log yet: run `runtime status` again.", file=out)
+            again = f"run `{_how_to_run()} status` again"
+            print(f"Its question is not in the log yet: {again}.", file=out)
             return EXIT_NEEDS_APPROVAL
         payload, number = asked["payload"], int(asked["seq"])
         # In full: this is what the person decides about. The input is
@@ -412,8 +441,9 @@ def _finish(status: str, asked: Any, client: httpx2.Client, job_id: str, out: Te
         print(f"  tool:     {_one_line(str(payload.get('name')))}", file=out)
         print(f"  input:    {json.dumps(payload.get('input'))}", file=out)
         print(f"  reason:   {_one_line(str(payload.get('reason')))}", file=out)
-        print(f"To let the call run: runtime approve {_one_line(job_id)} {number}", file=out)
-        print(f"To refuse it:        runtime deny {_one_line(job_id)} {number}", file=out)
+        command = _how_to_run()
+        print(f"To let the call run: {command} approve {_one_line(job_id)} {number}", file=out)
+        print(f"To refuse it:        {command} deny {_one_line(job_id)} {number}", file=out)
         return EXIT_NEEDS_APPROVAL
     return 0 if status == "succeeded" else 1
 
@@ -470,6 +500,30 @@ def _logs(client: httpx2.Client, args: argparse.Namespace, out: TextIO) -> int:
     return 0
 
 
+def _answer(client: httpx2.Client, args: argparse.Namespace, out: TextIO) -> int:
+    """The text of the last model response. A job succeeds only on a response
+    that ends its turn, so for a succeeded job that response is the answer."""
+    status = _job(client, args.job_id)["status"]
+    if status != "succeeded":
+        raise CommandError(
+            f"the job is {_one_line(str(status))}: only a succeeded job has an answer"
+        )
+    final = None
+    for step in _steps(client, args.job_id):
+        if step["kind"] == "model_response":
+            final = step
+    if final is None:
+        raise CommandError("the job's log has no model response")
+    blocks = final["payload"]["content"]
+    text = "\n".join(
+        str(b["text"]) for b in blocks if isinstance(b, dict) and b.get("type") == "text"
+    )
+    if not text:
+        raise CommandError("the job's last model response has no text")
+    print(_text(text), file=out)
+    return 0
+
+
 def _approve(client: httpx2.Client, args: argparse.Namespace, out: TextIO) -> int:
     answer = {"question": args.question}
     job = _check(client.post(f"/jobs/{args.job_id}/approve", json=answer)).json()
@@ -512,6 +566,7 @@ def main(
         "submit": _submit,
         "status": _status,
         "logs": _logs,
+        "answer": _answer,
         "approve": _approve,
         "deny": _deny,
         "cancel": _cancel,
