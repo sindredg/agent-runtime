@@ -354,10 +354,12 @@ class Stack:
             heartbeat=heartbeat,
         )
 
-    def run[T](self, body: Callable[[AsyncEngine, AnthropicProvider], Awaitable[T]]) -> T:
+    def run[T](
+        self, body: Callable[[AsyncEngine, AnthropicProvider], Awaitable[T]], api_key: str = "test"
+    ) -> T:
         async def go() -> T:
             engine = create_engine(self.database_url)
-            provider = AnthropicProvider(api_key="test", base_url=self.fake_provider_url)
+            provider = AnthropicProvider(api_key=api_key, base_url=self.fake_provider_url)
             try:
                 return await body(engine, provider)
             finally:
@@ -381,7 +383,11 @@ class Stack:
         )
 
     def run_one(
-        self, spec: dict[str, Any], tools: ToolRegistry = FIXED, default_model: str = "hello"
+        self,
+        spec: dict[str, Any],
+        tools: ToolRegistry = FIXED,
+        default_model: str = "hello",
+        api_key: str = "test",
     ) -> Ran:
         """Create one job, claim it, run it, and read back everything about it."""
 
@@ -396,7 +402,7 @@ class Stack:
                 assert job is not None
                 return job, await read_steps(conn, job.id)
 
-        job, steps = self.run(body)
+        job, steps = self.run(body, api_key)
         return Ran(job, steps, self.requests_for(job))
 
 
