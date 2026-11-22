@@ -73,8 +73,8 @@ was local, during the build, and is not recorded here.
 
 - One run of each test per commit, 20 jobs, one kill seed. Two commits
   passed; more runs take other paths.
-- The receiver-down test never reaches the longer retry delays: each row
-  failed once or twice in the 30 s
+- The receiver-down test never reaches the longer retry delays. In a local
+  measurement each row failed once or twice in the 30 s
   ([issue 194](https://github.com/sindredg/agent-runtime/issues/194)).
 - The receiver is a fake on the same host. A real receiver over a network,
   with TLS, was not tested.
