@@ -104,5 +104,16 @@ Root with `NET_ADMIN` and no other capability, a read-only root, 32 MiB. It
 loads the rules and prints `ready` with a random token of the call. On TERM
 it prints its counter.
 
-What the scope does not cover is in
-[Known limits](limits.md#sandbox-and-scope).
+## Limits
+
+- The scope is enforced on IPv4 addresses and ports. Two sites on one address
+  cannot be told apart, and URL paths cannot be scoped. No wildcards.
+- A name is resolved once per call. A name with only IPv6 addresses is
+  accepted at submit, and each `run_shell` call is then refused.
+- A scope that covers an address of the host that is not on a denied Docker
+  network reaches whatever the host serves there. Keep such addresses out of
+  scopes.
+- A name lookup that hangs is given up after 5 s, but its thread runs on
+  until the system resolver gives up.
+
+The sandbox's own limits are in [Known limits](limits.md#sandbox-and-scope).

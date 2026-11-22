@@ -86,21 +86,19 @@ refused, but the tool ran. An idempotency key on the other side closes this.
   ([issue 45](https://github.com/sindredg/agent-runtime/issues/45)).
 - A container whose `create` was cut off is removed by name. If Docker had
   not created it yet, it is left in the `created` state, without running.
-- The scope is enforced on IPv4 addresses and ports. Two sites on one address
-  cannot be told apart, and URL paths cannot be scoped. No wildcards.
-- A name is resolved once per call. A name with only IPv6 addresses is
-  accepted at submit, and each `run_shell` call is then refused.
-- A scope that covers an address of the host that is not on a denied Docker
-  network reaches whatever the host serves there. Keep such addresses out of
-  scopes.
-- A name lookup that hangs is given up after 5 s, but its thread runs on
-  until the system resolver gives up.
+- What a scope does not cover is on [Scope](scope.md#limits).
 - `read_file` checks paths and symlinks, not hard links. Nothing built so far
   can create a hard link out of a workspace. It checks the file it opened,
   so a link swapped in after the path check is refused too.
 - Before a workspace is removed, its directories get mode 700. A link swapped
   in during that walk is followed. Its target is the worker's own, and gets
   the same mode.
+
+## Secrets
+
+- [A test](../tests/integration/test_secret_canary.py) follows the provider key
+  and the tracker token through a job. Not covered: a secret in a job's files
+  or a tool's output, text written past the logger, the database password, `NOTIFY_URL`.
 
 ## Halt and budget
 
