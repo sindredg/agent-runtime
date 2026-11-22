@@ -24,6 +24,7 @@ from uuid import UUID
 
 import httpx2
 
+from runtime.text import one_line
 from runtime.verify import DEFAULT_DATABASE_URL, verify
 
 DEFAULT_API_URL = "http://127.0.0.1:8000"
@@ -219,12 +220,6 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _one_line(text: str) -> str:
-    """The text on one line. Text from a model, a tool or another server can
-    hold terminal control codes; anything that is not printable is shown as `?`."""
-    return "".join(char if char.isprintable() else "?" for char in " ".join(text.split()))
-
-
 def _text(text: str) -> str:
     """Text to print whole: line breaks and tabs stay, anything else that is
     not printable is shown as `?`. A carriage return is one of those: it
@@ -233,8 +228,8 @@ def _text(text: str) -> str:
 
 
 def _preview(text: str) -> str:
-    """One short line: `_one_line`, cut to PREVIEW characters."""
-    line = _one_line(text)
+    """One short line: `one_line`, cut to PREVIEW characters."""
+    line = one_line(text)
     return line if len(line) <= PREVIEW else line[: PREVIEW - 3] + "..."
 
 
@@ -291,7 +286,7 @@ def _check(response: httpx2.Response) -> httpx2.Response:
             detail = json.dumps(response.json().get("detail"))
         except ValueError, AttributeError:
             detail = response.text
-        raise CommandError(f"the API answered {response.status_code}: {_one_line(detail)}")
+        raise CommandError(f"the API answered {response.status_code}: {one_line(detail)}")
     return response
 
 
@@ -438,12 +433,12 @@ def _finish(status: str, asked: Any, client: httpx2.Client, job_id: str, out: Te
         # printed exactly, as JSON: that is one line of ASCII, with
         # everything a terminal would act on escaped.
         print(f"  question: {number}", file=out)
-        print(f"  tool:     {_one_line(str(payload.get('name')))}", file=out)
+        print(f"  tool:     {one_line(str(payload.get('name')))}", file=out)
         print(f"  input:    {json.dumps(payload.get('input'))}", file=out)
-        print(f"  reason:   {_one_line(str(payload.get('reason')))}", file=out)
+        print(f"  reason:   {one_line(str(payload.get('reason')))}", file=out)
         command = _how_to_run()
-        print(f"To let the call run: {command} approve {_one_line(job_id)} {number}", file=out)
-        print(f"To refuse it:        {command} deny {_one_line(job_id)} {number}", file=out)
+        print(f"To let the call run: {command} approve {one_line(job_id)} {number}", file=out)
+        print(f"To refuse it:        {command} deny {one_line(job_id)} {number}", file=out)
         return EXIT_NEEDS_APPROVAL
     return 0 if status == "succeeded" else 1
 
@@ -456,7 +451,7 @@ def _list(client: httpx2.Client, args: argparse.Namespace, out: TextIO, err: Tex
         params["before"] = args.before
     found: list[dict[str, Any]] = _check(client.get("/jobs", params=params)).json()["jobs"]
     for job in found:
-        fields = [_one_line(str(job[name])) for name in ("id", "status", "created_at")]
+        fields = [one_line(str(job[name])) for name in ("id", "status", "created_at")]
         tokens = f"tokens {int(job['tokens_used'])}/{int(job['token_budget'])}"
         print(f"{fields[0]}  {fields[1]:<14}  {fields[2]}  {tokens}", file=out)
         asked = job.get("question")
@@ -482,11 +477,11 @@ def _status(client: httpx2.Client, args: argparse.Namespace, out: TextIO) -> int
     for field in ("id", "status", "tokens_used", "token_budget", "deadline", "created_at", "error"):
         if job[field] is not None:
             # The error is not cut: this is where it is read in full.
-            print(f"{field + ':':<14}{_one_line(str(job[field]))}", file=out)
+            print(f"{field + ':':<14}{one_line(str(job[field]))}", file=out)
     if job["status"] == "needs_approval":
         asked = _open_question(client, args.job_id)
         if asked is not None:
-            name = _one_line(str(asked["payload"].get("name")))
+            name = one_line(str(asked["payload"].get("name")))
             print(f"{'question:':<14}{int(asked['seq'])} ({name})", file=out)
     return 0
 
@@ -506,7 +501,7 @@ def _answer(client: httpx2.Client, args: argparse.Namespace, out: TextIO) -> int
     status = _job(client, args.job_id)["status"]
     if status != "succeeded":
         raise CommandError(
-            f"the job is {_one_line(str(status))}: only a succeeded job has an answer"
+            f"the job is {one_line(str(status))}: only a succeeded job has an answer"
         )
     final = None
     for step in _steps(client, args.job_id):
@@ -527,20 +522,20 @@ def _answer(client: httpx2.Client, args: argparse.Namespace, out: TextIO) -> int
 def _approve(client: httpx2.Client, args: argparse.Namespace, out: TextIO) -> int:
     answer = {"question": args.question}
     job = _check(client.post(f"/jobs/{args.job_id}/approve", json=answer)).json()
-    print(_one_line(str(job["status"])), file=out)
+    print(one_line(str(job["status"])), file=out)
     return 0
 
 
 def _deny(client: httpx2.Client, args: argparse.Namespace, out: TextIO) -> int:
     answer = {"question": args.question}
     job = _check(client.post(f"/jobs/{args.job_id}/deny", json=answer)).json()
-    print(_one_line(str(job["status"])), file=out)
+    print(one_line(str(job["status"])), file=out)
     return 0
 
 
 def _cancel(client: httpx2.Client, args: argparse.Namespace, out: TextIO) -> int:
     response = _check(client.post(f"/jobs/{args.job_id}/cancel"))
-    status = _one_line(str(response.json()["status"]))
+    status = one_line(str(response.json()["status"]))
     if response.status_code == 202:
         print(f"{status}; cancel requested, its worker stops it", file=out)
     else:

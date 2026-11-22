@@ -1,5 +1,6 @@
 """The API application: submit jobs, read them, follow their steps, cancel them,
-and approve or deny a tool call that waits for a person.
+and approve or deny a tool call that waits for a person. `GET /` is a status
+page that lists the jobs and changes nothing (`runtime.api.page`).
 
 There is no authentication. The service listens on localhost and answers
 only requests addressed to it by an allowed name (package `allowed_hosts`).
@@ -17,10 +18,11 @@ from uuid import UUID
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from allowed_hosts import AllowedHosts
+from runtime.api import page
 from runtime.api.models import (
     MAX_SEQ,
     Answer,
@@ -254,6 +256,19 @@ def create_app(
         async with engine().connect() as conn:
             found = await list_jobs(conn, status=status, before=before, limit=limit)
         return JobList(jobs=[JobSummaryView.model_validate(job) for job in found])
+
+    @app.get("/", response_class=HTMLResponse)
+    async def status_page(
+        status: JobStatus | None = None,
+        before: UUID | None = None,
+        limit: Annotated[int, Query(ge=1, le=MAX_JOBS)] = DEFAULT_JOBS,
+    ) -> HTMLResponse:
+        """The jobs as `GET /jobs` lists them, as one HTML page with no form and no script."""
+        async with engine().connect() as conn:
+            found = await list_jobs(conn, status=status, before=before, limit=limit)
+        return HTMLResponse(
+            page.render(found, status=status, before=before, limit=limit), headers=page.HEADERS
+        )
 
     @app.get("/jobs/{job_id}/events")
     async def follow_job(
