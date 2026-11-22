@@ -26,6 +26,8 @@ flowchart LR
   later migration adds is not writable until that migration grants it.
 - Migration 0006 grants the rights. 0007 narrows INSERT to columns and
   takes UPDATE of `id` back.
+- Migration 0011 grants `notifications`: SELECT, INSERT of three columns,
+  UPDATE of four, no DELETE. The start check below does not read these.
   Their downgrades take them back and keep the role: a role belongs to the
   server, not to one database.
 
@@ -41,9 +43,9 @@ sequenceDiagram
 ```
 
 `python -m runtime.store.migrate` does both. The password never sits in a
-migration. Compose puts the same value into the URL of the API and the
-worker without encoding it, so it has to be URL-safe. One that is not stops
-the service with an error that does not repeat the URL.
+migration. Compose puts it unencoded into the API's and the worker's URL,
+so it has to be URL-safe. A URL that does not parse stops the service and
+is not repeated. One that parses otherwise fails to connect and is retried.
 
 ## The start check
 

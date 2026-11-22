@@ -124,5 +124,5 @@ Only a tool call with an intent and no result needs more: see
 | [Results](results/README.md) | The evidence behind each guarantee |
 | [Runs against the Claude API](results/api.md) | Eight jobs with a real model |
 | [Known limits](limits.md) | What is accepted and what is not built |
-| [OWASP APTS](apts.md) | The APTS requirements of the runtime's layer, and what meets each |
+| [OWASP APTS](apts.md) | The APTS requirements of the runtime's layer, and the status of each |
 | [Framework mapping](framework-mapping.md) | OWASP Agentic Top 10, 12-Factor Agents and AWS reliability, item by item |

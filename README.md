@@ -19,8 +19,9 @@ uv run runtime submit examples/hello.json --follow
 ```
 
 `make up` builds the images and starts Postgres, the API, one worker, the
-fake provider and a fake issue tracker. The job asks the agent to read one
-file. The output is the job id, one line per step, and the outcome:
+fake provider, a fake issue tracker and a fake notification receiver. The
+job asks the agent to read one file. The output is the job id, one line per
+step, and the outcome:
 
 ```text
 01a1e686-e31e-73d2-af47-e26d4b14a322
@@ -48,9 +49,9 @@ and [Known limits](docs/limits.md) for the boundaries of each guarantee.
 
 ## Results
 
-Each guarantee has a test with a pass line fixed before the run, and a run
-with the mechanism switched off to show that the test can fail. A check that
-such a run did not reach is named with its result.
+Each tested guarantee has a test with a pass line fixed before the run, and
+a run with the mechanism switched off to show that the test can fail. A check
+that such a run did not reach is named with its result.
 
 | Guarantee | Status | Evidence |
 |---|---|---|
@@ -67,10 +68,10 @@ such a run did not reach is named with its result.
 | A job that waits for a person tells the operator, at least once | Tested. In the kill run the receiver holds each POST 1.5 s. | [Every question arrived, in three runs of 20 jobs](docs/results/notify.md) |
 | Throughput scales with workers | Not measured | |
 
-Every result except the notification's is from one run at commit `1f57ee4`,
-on one machine, against the fake provider. Seven switched-off runs are from
-`11b6792` and one on the Claude API from `5a5bfa6`, on GitHub with public
-logs; two are older. Each names its commit. The run, and what it does not show: [Results](docs/results/README.md).
+The table's results, except the notification's, are from one run at
+`1f57ee4`, on one machine, against the fake provider. The code has changed
+since and that run was not repeated ([issue 205](https://github.com/sindredg/agent-runtime/issues/205)). CI runs the suites
+on each pull request, with 20 kills. Later runs name their commit: [Results](docs/results/README.md).
 
 The notification came after that run. Its results are from runs on GitHub
 from `main` at `30108d4` and `7096a5c`, against the fake provider.
@@ -92,7 +93,7 @@ models: every job succeeded and no issue was opened twice
 | [Results](docs/results/README.md) | The evidence behind each guarantee |
 | [Runs against the Claude API](docs/results/api.md) | Eight jobs with a real model, and what they do not show |
 | [Known limits](docs/limits.md) | What is accepted and what is not built |
-| [OWASP APTS](docs/apts.md) | The security standard's requirements that the runtime meets, and its gaps |
+| [OWASP APTS](docs/apts.md) | The security standard's requirements for the runtime's layer: status and gaps |
 | [Decision records](docs/adr/README.md) | Why it is built this way |
 
 ## Development
@@ -110,7 +111,7 @@ uv installs the pinned Python and tools into `.venv`.
 | `make integration` | Integration tests. Needs the stack from `make up`. |
 | `make escape` | Escape tests: tries to get out of the sandbox. Needs no stack. |
 | `make chaos` | Chaos tests: kills, pauses and crashes workers. Run `make up` afterwards. |
-| `make lab` | [Lab demo](docs/lab-demo.md): a worker stopped in a call to Gitea. Run `make up` afterwards. |
+| `make lab` | [Lab demo](docs/lab-demo.md): a worker stopped in a call to Gitea. Puts the normal stack back. |
 | `make kills` | [Kill runs](docs/kill-runs.md): killed workers, judged without a reference run. Run `make up` afterwards. |
 
 Suites, failure switches and the lint commands are in

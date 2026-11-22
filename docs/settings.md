@@ -43,7 +43,7 @@ flowchart LR
 - Only `docker-compose.claude.yml` reads `CLAUDE_API_KEY`, so the key can
   stay in `.env`. `CLAUDE_MODEL` defaults to `claude-haiku-5-5`.
 - Recorded runs get the key from the `claude-api` environment of the
-  Manual runs workflow, after a reviewer approves
+  Manual runs workflow, from `main` only, after a reviewer approves
   ([ADR 0020](adr/0020-run-recorded-kill-and-api-runs-in-a-manual-workflow.md)).
 - `make kills-claude` has no default model: it does not start without
   `KILLS_MODEL`.
