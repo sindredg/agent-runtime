@@ -1,6 +1,6 @@
 # Testing
 
-Seven suites, each with its own needs. Nothing here calls a paid API except
+Eight suites, each with its own needs. Nothing here calls a paid API except
 the contract test and `make kills-claude`, which are started by hand
 ([ADR 0020](adr/0020-run-recorded-kill-and-api-runs-in-a-manual-workflow.md)).
 
@@ -13,6 +13,7 @@ flowchart LR
     L[tests/lab] --> LS[make lab:<br/>Gitea, two workers,<br/>a failpoint]
     R[tests/kills] --> RS[make kills:<br/>three workers, 6 s lease,<br/>a failpoint]
     R -.->|make kills-claude| KEY
+    T[tests/notify_timing] --> S
     K[tests/contract] --> S
     K --> KEY[a Claude API key]
 ```
@@ -27,6 +28,7 @@ flowchart LR
 | `tests/chaos` | `make chaos` | Workers that are killed, paused, crashed or stopped while jobs run |
 | `tests/lab` | `make lab` | A worker stopped in a call to Gitea ([Lab demo](lab-demo.md)) |
 | `tests/kills` | `make kills` | Killed workers, judged without a reference run ([Kill runs](kill-runs.md)) |
+| `tests/notify_timing` | `make notify-timing` | G12's timed run: each parked job's question reaches the fake receiver within 5 s |
 | `tests/contract` | the Manual runs workflow | The fake provider against the Claude API |
 
 - The integration and chaos suites never mock Postgres.
@@ -39,6 +41,9 @@ flowchart LR
 - `make chaos`, `make lab` and `make kills` replace the normal stack. Run
   `make up` afterwards.
 - `CHAOS_RUNS` and `CHAOS_SEED` set the number and times of random kills.
+  `CHAOS_NOTIFY_JOBS` sets the jobs of each G12 run (default 20).
+- `NOTIFY_TIMING_JOBS` sets the jobs of the timed run (default 50).
+  Recorded timed runs start from the Manual runs workflow, `suite: notify-timing`.
 - CI runs unit, integration, escape, the short chaos run, the lab demo and
   the kill runs on the fake provider on every pull request.
 
@@ -49,6 +54,7 @@ step log. It reads:
 
 - The fake provider's request log, and the fake tracker's or Gitea's list
   of issues.
+- The fake receiver's log of every POST it was sent.
 - The `crash_worker` tool's log file, and a worker's container log.
 - The records of a stand-in provider or tool.
 - Docker's list of containers, and the Postgres log.

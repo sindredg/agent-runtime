@@ -743,16 +743,24 @@ def test_the_job_on_the_fake_provider_holds_no_secret() -> None:
 def test_a_rehearsal_never_reaches_the_job_with_the_key() -> None:
     assert (
         "    if: >-\n"
-        "      (inputs.provider == 'fake' || inputs.suite == 'switched-off-rehearsal')\n"
+        "      (inputs.provider == 'fake' || inputs.suite == 'switched-off-rehearsal'\n"
+        "      || inputs.suite == 'notify-timing')\n"
         "      && inputs.suite != 'switched-off-all'\n"
     ) in job("fake")
     assert (
         "    if: >-\n"
         "      inputs.provider == 'claude' && inputs.suite != 'switched-off-rehearsal'\n"
-        "      && inputs.suite != 'switched-off-all'\n"
+        "      && inputs.suite != 'switched-off-all' && inputs.suite != 'notify-timing'\n"
     ) in job("claude")
     assert "make switched-off-rehearsal" in job("fake")
     assert "rehears" not in job("claude").split("    steps:")[1]
+
+
+def test_the_timed_notification_run_never_reaches_the_job_with_the_key() -> None:
+    # Its `if` is pinned with the rehearsal's above: the fake job takes it
+    # whatever provider was picked, and the job with the key never does.
+    assert "make notify-timing" in job("fake")
+    assert "notify-timing" not in job("claude").split("    steps:")[1]
 
 
 def test_the_key_reaches_a_step_only_after_the_refusals() -> None:
@@ -1041,7 +1049,7 @@ def test_an_edit_outside_the_code_and_its_migrations_is_refused(
 
 
 def test_every_entry_edits_the_code_or_its_migrations_only() -> None:
-    assert len(switched_off.ENTRIES) == 38
+    assert len(switched_off.ENTRIES) == 40
     for entry in switched_off.ENTRIES.values():
         assert switched_off.edit_path_problems(entry) == []
     paths = {edit.path for e in switched_off.ENTRIES.values() for edit in e.edits}

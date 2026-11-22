@@ -29,3 +29,6 @@ dist/
 # Results and worker logs written by the kill runs.
 .kills/
 .switched-off/
+
+# Results written by the timed notification run.
+.notify-timing/
