@@ -67,9 +67,9 @@ FastAPI also serves `/docs`, `/redoc` and `/openapi.json`.
 steps. It takes the list's parameters and loads again every 5 s.
 
 - It changes nothing: no form, no script. Answer and cancel with the CLI.
-- It is the API's only HTML. A script at the API's origin would pass the
-  Origin check, so every value is escaped and the Content-Security-Policy
-  allows only the page's own style. The code is `src/runtime/api/page.py`.
+- A script at the API's origin would pass the Origin check. So every value
+  is escaped and the Content-Security-Policy allows only the page's own
+  style. The code is `src/runtime/api/page.py`.
 
 ## Refusals
 
