@@ -21,7 +21,7 @@ flowchart LR
 |---|---|
 | `runtime submit <file> [--follow]` | Posts the job file. With `--follow`, prints each step until the job stops. |
 | `runtime status <job id>` | The job's status. `--json` prints the whole job. |
-| `runtime logs <job id> [--follow]` | The job's steps, one line each, cut to 100 characters |
+| `runtime logs <job id> [--follow]` | The job's steps, one short line each |
 | `runtime answer <job id>` | A succeeded job's final answer, in full |
 | `runtime approve <job id> <question>` | Lets the call a question asks about run once |
 | `runtime deny <job id> <question>` | Refuses that call. The model gets an error result and the job goes on. |
