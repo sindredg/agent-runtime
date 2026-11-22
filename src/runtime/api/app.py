@@ -47,7 +47,7 @@ from runtime.store.listing import list_jobs
 from runtime.store.payload import InvalidPayload
 from runtime.store.roles import check_app_role
 from runtime.store.status import FINAL_STATUSES, JobStatus
-from runtime.store.steps import read_progress
+from runtime.store.steps import StepKind, read_progress
 
 # Most steps one request or one poll of the event stream reads.
 MAX_PAGE = 1000
@@ -305,10 +305,12 @@ def create_app(
                     return
                 # Said once each time the job stops there, after its steps. A
                 # job can stop there again between two polls, when it was
-                # answered and its next call asks too. New steps show that:
-                # a job that waits gets none.
+                # answered and its next call asks too. New steps show that.
+                # A job that waits gets only one kind: the step that says its
+                # question was delivered (ADR 0029), which is no new stop.
                 waiting = status is JobStatus.NEEDS_APPROVAL
-                if waiting and (steps or not told_waiting):
+                moved = any(step.kind is not StepKind.NOTIFICATION_SENT for step in steps)
+                if waiting and (moved or not told_waiting):
                     yield _event("status", json.dumps({"status": status.value}))
                 told_waiting = waiting
                 if steps:

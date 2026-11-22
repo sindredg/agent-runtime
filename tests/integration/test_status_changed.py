@@ -20,7 +20,7 @@ from runtime.store.jobs import Job, cancel_job, claim_job, get_job
 from runtime.store.status import JobStatus
 from runtime.store.steps import Step, StepKind, read_steps
 
-from .conftest import alembic, expire_lease, new_job, on, with_engine
+from .conftest import alembic, ask, expire_lease, new_job, on, with_engine
 
 S = JobStatus
 
@@ -41,9 +41,14 @@ async def held_job(engine: AsyncEngine) -> Job:
     return job
 
 
-async def leave(engine: AsyncEngine, job: Job, status: JobStatus) -> Job:
+async def leave(
+    engine: AsyncEngine, job: Job, status: JobStatus, question: held.Question | None = None
+) -> Job:
+    """Leave `running`. A park without `question` writes one first, at the next seq."""
+    if status is S.NEEDS_APPROVAL and question is None:
+        question = await ask(engine, job.id, job.lease_epoch)
     return await held.leave_running(
-        engine, job_id=job.id, lease_epoch=job.lease_epoch, new_status=status
+        engine, job_id=job.id, lease_epoch=job.lease_epoch, new_status=status, question=question
     )
 
 
@@ -75,8 +80,9 @@ def test_a_park_is_written_with_the_move(database_url: str) -> None:
 
     left, status, steps = with_engine(database_url, body)
     assert left.status is status is S.NEEDS_APPROVAL
-    assert changes(steps) == [(1, PARKED)]
-    assert steps[0].lease_epoch == 1
+    # After the question.
+    assert changes(steps) == [(2, PARKED)]
+    assert steps[1].lease_epoch == 1
 
 
 def test_a_park_while_a_cancel_is_requested_is_written_as_the_cancel(database_url: str) -> None:
@@ -89,7 +95,7 @@ def test_a_park_while_a_cancel_is_requested_is_written_as_the_cancel(database_ur
 
     status, steps = with_engine(database_url, body)
     assert status is S.CANCELLED
-    assert changes(steps) == [(1, CANCELLED_FROM_RUNNING)]
+    assert changes(steps) == [(2, CANCELLED_FROM_RUNNING)]
 
 
 def test_the_holder_writes_its_cancel(database_url: str) -> None:
@@ -121,7 +127,10 @@ def test_a_stale_holder_writes_neither_the_move_nor_the_step(database_url: str) 
             await expire_lease(conn, job.id)
             assert await claim_job(conn, worker_id="w2") is not None
         with pytest.raises(LeaseLost):
-            await leave(engine, job, S.NEEDS_APPROVAL)
+            # The question is not written: the park itself is refused.
+            await leave(
+                engine, job, S.NEEDS_APPROVAL, held.Question(1, held.QuestionReason.BEFORE_RUN)
+            )
         return await log(engine, job.id)
 
     status, steps = with_engine(database_url, body)

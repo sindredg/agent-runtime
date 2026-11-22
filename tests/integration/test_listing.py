@@ -9,12 +9,14 @@ from uuid import UUID
 
 import asyncpg
 import pytest
+from sqlalchemy import update
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from runtime.store import held
 from runtime.store.jobs import Job, approve_job, cancel_job, claim_job, create_job
 from runtime.store.listing import JobSummary, Question, list_jobs, list_statement
+from runtime.store.schema import jobs
 from runtime.store.status import JobStatus
 from runtime.store.steps import StepKind, read_steps
 
@@ -44,7 +46,11 @@ async def ask(engine: AsyncEngine, job: Job, tool: str = "run_shell") -> int:
         payload=asked,
     )
     await held.leave_running(
-        engine, job_id=job.id, lease_epoch=job.lease_epoch, new_status=S.NEEDS_APPROVAL
+        engine,
+        job_id=job.id,
+        lease_epoch=job.lease_epoch,
+        new_status=S.NEEDS_APPROVAL,
+        question=held.Question(seq, held.QuestionReason.BEFORE_RUN),
     )
     return seq
 
@@ -239,9 +245,14 @@ def test_a_waiting_job_whose_question_cannot_be_read_is_listed_without_one(
 
     async def body(engine: AsyncEngine) -> list[JobSummary]:
         bare = await job_in(engine, S.RUNNING)
-        await held.leave_running(
-            engine, job_id=bare.id, lease_epoch=bare.lease_epoch, new_status=S.NEEDS_APPROVAL
-        )
+        # A park writes its question since migration 0011 and cannot leave
+        # a job like this. A hand-edited database can.
+        async with engine.begin() as conn:
+            await conn.execute(
+                update(jobs)
+                .where(jobs.c.id == bare.id)
+                .values(status=S.NEEDS_APPROVAL.value, lease_owner=None, lease_expires_at=None)
+            )
         odd = await job_in(engine, S.RUNNING)
         await held.append_step(
             engine,
@@ -252,7 +263,11 @@ def test_a_waiting_job_whose_question_cannot_be_read_is_listed_without_one(
             payload={"name": {"not": "text"}},
         )
         await held.leave_running(
-            engine, job_id=odd.id, lease_epoch=odd.lease_epoch, new_status=S.NEEDS_APPROVAL
+            engine,
+            job_id=odd.id,
+            lease_epoch=odd.lease_epoch,
+            new_status=S.NEEDS_APPROVAL,
+            question=held.Question(1, held.QuestionReason.BEFORE_RUN),
         )
         return await listed(engine)
 

@@ -18,6 +18,7 @@ import pytest
 from runtime.failpoints import Failpoints
 from runtime.sandbox.runner import Run, SandboxSettings
 from runtime.scope import Network, Resolved, Target
+from runtime.store.held import Question
 from runtime.store.jobs import Job
 from runtime.store.status import JobStatus
 from runtime.store.steps import Step, StepKind
@@ -108,7 +109,9 @@ def held_job() -> Job:
 type Lookup = Callable[[asyncio.Event], Awaitable[Resolved]]
 
 
-def next_call(monkeypatch: pytest.MonkeyPatch, lookup: Lookup) -> tuple[bool, Writer, Sandbox]:
+def next_call(
+    monkeypatch: pytest.MonkeyPatch, lookup: Lookup
+) -> tuple[Question | None, Writer, Sandbox]:
     """Deal with the open call, with `lookup` in place of the name lookup."""
     writer, sandbox, stop = Writer(), Sandbox(), asyncio.Event()
 
@@ -117,7 +120,7 @@ def next_call(monkeypatch: pytest.MonkeyPatch, lookup: Lookup) -> tuple[bool, Wr
 
     monkeypatch.setattr(agent, "resolve", resolve)
 
-    async def go() -> bool:
+    async def go() -> Question | None:
         return await asyncio.wait_for(
             agent._next_tool_call(
                 writer,  # type: ignore[arg-type]
@@ -148,10 +151,10 @@ def test_a_stop_during_the_lookup_ends_it_and_starts_no_call(
         await asyncio.Event().wait()
         raise AssertionError("never answers")
 
-    done, writer, sandbox = next_call(monkeypatch, lookup)
+    asked, writer, sandbox = next_call(monkeypatch, lookup)
 
     # Not a question for a person: the job goes back with the call open.
-    assert done is True
+    assert asked is None
     assert writer.kinds == []
     assert sandbox.runs == 0
 
@@ -163,9 +166,9 @@ def test_a_stop_that_came_while_the_lookup_answered_starts_no_call(
         stop.set()
         return RESOLVED
 
-    done, writer, sandbox = next_call(monkeypatch, lookup)
+    asked, writer, sandbox = next_call(monkeypatch, lookup)
 
-    assert done is True
+    assert asked is None
     assert writer.kinds == []
     assert sandbox.runs == 0
 
@@ -174,8 +177,8 @@ def test_without_a_stop_the_call_runs_after_its_lookup(monkeypatch: pytest.Monke
     async def lookup(stop: asyncio.Event) -> Resolved:
         return RESOLVED
 
-    done, writer, sandbox = next_call(monkeypatch, lookup)
+    asked, writer, sandbox = next_call(monkeypatch, lookup)
 
-    assert done is True
+    assert asked is None
     assert writer.kinds == [StepKind.TOOL_INTENT, StepKind.TOOL_RESULT]
     assert sandbox.runs == 1

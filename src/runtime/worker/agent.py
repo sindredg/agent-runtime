@@ -381,8 +381,9 @@ async def _next_tool_call(
     scope: tuple[Target, ...] | None,
     halt: Halt,
     gated: tuple[str, ...] = (),
-) -> bool:
-    """Deal with the first open tool call. False means the job now waits for a person.
+) -> held.Question | None:
+    """Deal with the first open tool call. Returns the question the job now
+    waits on when a person has to decide, None when the call was dealt with.
 
     Normally that is: write the intent, run the tool, write the result. A
     call whose intent is already in the log was interrupted when a worker
@@ -418,20 +419,23 @@ async def _next_tool_call(
     else:
         needs_person = why_gated is not None or answer is not None
 
-    async def ask(reason: str) -> None:
+    async def ask(reason: str, why: held.QuestionReason) -> held.Question:
         # A worker may have stopped between asking and parking the job. The
-        # question is then already in the log.
-        if answer != "requested":
-            await writer.append(
-                StepKind.APPROVAL_REQUESTED,
-                {
-                    "tool_use_id": tool_use_id,
-                    "name": name,
-                    "input": block["input"],
-                    "operation_id": call.operation_id,
-                    "reason": reason,
-                },
-            )
+        # question is then already in the log, and the job is parked on it.
+        if answer == "requested":
+            assert state.approval_question is not None  # noqa: S101 - set with "requested"
+            return held.Question(state.approval_question, why)
+        step = await writer.append(
+            StepKind.APPROVAL_REQUESTED,
+            {
+                "tool_use_id": tool_use_id,
+                "name": name,
+                "input": block["input"],
+                "operation_id": call.operation_id,
+                "reason": reason,
+            },
+        )
+        return held.Question(step.seq, why)
 
     async def refuse(content: str) -> None:
         await writer.append(
@@ -444,13 +448,13 @@ async def _next_tool_call(
         if not await _outlast_container(
             writer, tool, job, lease, interrupted, state.interrupted_at, stop, halt
         ):
-            return True
+            return None
         lease.check()
         if answer == "denied":
             # A person refused the rerun. Whether the interrupted run
             # happened stays unknown, and the result says so.
             await refuse(DENIED_RERUN)
-            return True
+            return None
         # Raced: a halt does not wait for a slow check. The check runs on in
         # its thread; it only asks, it changes nothing.
         _, found = await _race(
@@ -480,27 +484,28 @@ async def _next_tool_call(
                     "recovered": True,
                 },
             )
-            return True
+            return None
         if isinstance(decision, Ask):
-            await ask(decision.reason)
-            return False
+            return await ask(decision.reason, held.QuestionReason.INTERRUPTED)
         if stop.is_set():
             # Asking the check took time and the worker was told to stop
             # meanwhile. The rerun has no intent yet, so it does not start.
-            return True
+            return None
     elif answer == "denied":
         # Checked before the gate: a denial holds also on a worker whose
         # tools would not have asked.
         lease.check()
         await refuse(DENIED)
-        return True
+        return None
     elif needs_person and answer != "given":
         # The gate. No intent is written, so nothing of the call has
         # happened and nothing looks interrupted. Without a reason of this
         # worker's own, the question is already in the log.
         lease.check()
-        await ask(why_gated or "a person was asked about this call before it ran")
-        return False
+        return await ask(
+            why_gated or "a person was asked about this call before it ran",
+            held.QuestionReason.BEFORE_RUN,
+        )
 
     # Before the intent: a call that will not start must not leave an
     # intent behind, which would look interrupted. Once the intent is
@@ -533,7 +538,7 @@ async def _next_tool_call(
                 if not done:
                     # Told to stop during the lookup. Nothing of the call has
                     # happened, so the job is handed back without it.
-                    return True
+                    return None
                 assert looked_up is not None  # noqa: S101 - _race returns the result
                 resolved = looked_up
             except ScopeRefused as refused:
@@ -546,13 +551,13 @@ async def _next_tool_call(
                         "is_error": True,
                     },
                 )
-                return True
+                return None
             call = dataclasses.replace(call, scope=resolved)
             intent["scope"] = resolved.record()
     # The last moment to give up a call: after the intent the tool runs. A
     # worker told to stop starts no call; the job goes back with it open.
     if stop.is_set():
-        return True
+        return None
     halt.check()
     # Read before the write: a worker that takes the job over counts from
     # the intent, and the write itself can be slow.
@@ -574,7 +579,7 @@ async def _next_tool_call(
         payload["dropped_packets"] = result.dropped_packets
     await writer.append(StepKind.TOOL_RESULT, payload)
     failpoints.hit("after_tool_result", takeovers=job.takeovers, tool=name)
-    return True
+    return None
 
 
 def _response_problem(response: ModelResponse, used_ids: set[str]) -> str | None:
@@ -639,11 +644,12 @@ async def _loop(
     steps: list[Step],
     stop: asyncio.Event,
     halt: Halt,
-) -> JobStatus:
+) -> tuple[JobStatus, held.Question | None]:
     """Run until the model ends its turn, a person has to decide, or the worker is stopped.
 
     Returns the status to leave the job in: `succeeded`, `needs_approval`,
-    or `queued` when `stop` was set and the job is to be given back. Raises
+    or `queued` when `stop` was set and the job is to be given back. With
+    `needs_approval` comes the question the job waits on, else None. Raises
     _JobFailed if the job cannot finish, _ProviderBusy when it has to wait,
     LeaseLost as soon as the worker can no longer rely on its lease, and
     Halted when the job is halted.
@@ -675,7 +681,7 @@ async def _loop(
         # that was told to stop starts nothing more. A job with nothing left
         # to start is finished below instead of being handed back.
         if stop.is_set() and (state.needs_model_call or calls_open):
-            return JobStatus.QUEUED
+            return JobStatus.QUEUED, None
 
         if state.needs_model_call:
             definitions = tools.definitions()
@@ -767,7 +773,7 @@ async def _loop(
         # stop reason is checked before any tool runs. The calls of one
         # response run one after another, one per pass.
         if calls_open:
-            if not await _next_tool_call(
+            asked = await _next_tool_call(
                 writer,
                 tools,
                 job,
@@ -779,12 +785,13 @@ async def _loop(
                 spec.scope,
                 halt,
                 gated,
-            ):
-                return JobStatus.NEEDS_APPROVAL
+            )
+            if asked is not None:
+                return JobStatus.NEEDS_APPROVAL, asked
             continue
 
         if state.stop_reason in _FINISHED:
-            return JobStatus.SUCCEEDED
+            return JobStatus.SUCCEEDED, None
         failure = _FAILURES.get(
             state.stop_reason or "", f"unexpected stop_reason: {state.stop_reason}"
         )
@@ -833,6 +840,8 @@ async def _run(
     status = JobStatus.FAILED
     failure: str | None = None
     wait: Wait | None = None
+    # The question a parked job waits on.
+    question: held.Question | None = None
     left = await _stored(seconds_until(engine, job.deadline))
     if left <= 0:
         halt.set(HaltReason.DEADLINE)
@@ -848,7 +857,7 @@ async def _run(
         workspace = await asyncio.to_thread(
             prepare_workspace, settings.workspace_root, job.id, spec.files
         )
-        status = await _loop(
+        status, question = await _loop(
             writer, provider, tools, job, spec, settings, workspace, lease, steps, stop, halt
         )
     except Halted as halted:
@@ -882,7 +891,12 @@ async def _run(
     else:
         left_as = await _stored(
             held.leave_running(
-                engine, job_id=job.id, lease_epoch=lease.epoch, new_status=status, wait=wait
+                engine,
+                job_id=job.id,
+                lease_epoch=lease.epoch,
+                new_status=status,
+                wait=wait,
+                question=question,
             )
         )
         # A job that would wait for a person or a busy provider is

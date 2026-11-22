@@ -29,6 +29,8 @@ from runtime.store.jobs import Job, cancel_job, claim_job, create_job, get_job
 from runtime.store.status import JobStatus
 from runtime.store.steps import StepKind, append_step, read_steps
 
+from .conftest import ask
+
 
 @dataclass
 class Api:
@@ -65,11 +67,16 @@ class Api:
                     lease_epoch=1,
                 )
 
-    async def finish(self, job: Job, status: JobStatus = JobStatus.SUCCEEDED) -> None:
+    async def finish(
+        self,
+        job: Job,
+        status: JobStatus = JobStatus.SUCCEEDED,
+        question: held.Question | None = None,
+    ) -> None:
         """Finish the job the way its worker does: a fenced move out of `running`.
 
         A failure brings its `error` step, as it does from a worker. A move
-        to `waiting` is a wait for a busy provider.
+        to `waiting` is a wait for a busy provider, a park takes its question.
         """
         if status is JobStatus.FAILED:
             await held.fail(self.engine, job_id=job.id, lease_epoch=job.lease_epoch, error="boom")
@@ -77,8 +84,15 @@ class Api:
         wait = None
         if status is JobStatus.WAITING:
             wait = held.Wait(seconds=60, attempt=1, retry_after=None, error="busy")
+        if status is JobStatus.NEEDS_APPROVAL and question is None:
+            question = await ask(self.engine, job.id, job.lease_epoch)
         await held.leave_running(
-            self.engine, job_id=job.id, lease_epoch=job.lease_epoch, new_status=status, wait=wait
+            self.engine,
+            job_id=job.id,
+            lease_epoch=job.lease_epoch,
+            new_status=status,
+            wait=wait,
+            question=question,
         )
 
     async def events(self, job_id: UUID, **request: Any) -> list[tuple[int | None, str, Any]]:
@@ -542,7 +556,11 @@ async def parked_for_approval(api: Api) -> Job:
             api.engine, job_id=job.id, lease_epoch=1, seq=seq, kind=kind, payload=payload
         )
     return await held.leave_running(
-        api.engine, job_id=job.id, lease_epoch=1, new_status=JobStatus.NEEDS_APPROVAL
+        api.engine,
+        job_id=job.id,
+        lease_epoch=1,
+        new_status=JobStatus.NEEDS_APPROVAL,
+        question=held.Question(2, held.QuestionReason.INTERRUPTED),
     )
 
 
@@ -616,7 +634,11 @@ def test_event_stream_says_it_again_when_the_job_waits_again_between_two_polls(
                         kind=StepKind.APPROVAL_REQUESTED,
                         payload={"tool_use_id": "toolu_2", "operation_id": f"{job.id}:toolu_2"},
                     )
-                    await api.finish(claimed, JobStatus.NEEDS_APPROVAL)
+                    await api.finish(
+                        claimed,
+                        JobStatus.NEEDS_APPROVAL,
+                        held.Question(5, held.QuestionReason.BEFORE_RUN),
+                    )
                 elif event[1] == "status":
                     async with api.engine.begin() as conn:
                         await cancel_job(conn, job.id)
@@ -649,6 +671,50 @@ def test_event_stream_says_it_again_when_the_job_waits_again_between_two_polls(
         {"from": "needs_approval", "to": "cancelled", "cause": "cancel_requested"},
     ]
     assert events[9][2] == {"status": "cancelled"}
+
+
+def test_event_stream_does_not_take_a_delivered_notification_for_a_new_stop(
+    database_url: str,
+) -> None:
+    """A job that waits gets one kind of step: the one that says its question
+    was delivered (ADR 0029). The job did not stop again, so the stream says
+    nothing more about it."""
+
+    async def body(api: Api) -> list[tuple[int | None, str, Any]]:
+        job = await parked_for_approval(api)
+        events = []
+        async with asyncio.timeout(20):
+            async for event in api.follow(job.id):
+                events.append(event)
+                if event[1] == "status":
+                    async with api.engine.begin() as conn:
+                        await append_step(
+                            conn,
+                            job_id=job.id,
+                            seq=4,
+                            kind=StepKind.NOTIFICATION_SENT,
+                            payload={"question": 2},
+                            lease_epoch=1,
+                        )
+                elif event[1] == "step" and event[0] == 4:
+                    # Two more polls of the stream with nothing new, then the end.
+                    await asyncio.sleep(0.3)
+                    async with api.engine.begin() as conn:
+                        await cancel_job(conn, job.id)
+        return events
+
+    events = api_test(database_url, body, poll_interval=0.1)
+    assert [(event_id, name) for event_id, name, _ in events] == [
+        (1, "step"),
+        (2, "step"),
+        (3, "step"),
+        (None, "status"),
+        # Sent as a step, and no second `status` after it.
+        (4, "step"),
+        (5, "step"),
+        (None, "end"),
+    ]
+    assert events[4][2]["kind"] == "notification_sent"
 
 
 ANSWERS = [("approve", StepKind.APPROVAL_GIVEN), ("deny", StepKind.APPROVAL_DENIED)]
