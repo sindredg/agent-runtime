@@ -32,6 +32,7 @@ from runtime.store.notify import (
 from runtime.store.schema import notifications
 from runtime.store.status import JobStatus
 from runtime.store.steps import StepKind, read_steps
+from runtime.worker import notify as worker_notify
 from runtime.worker.notify import deliver_due
 
 from .conftest import ask, database_now, new_job, with_engine
@@ -416,3 +417,38 @@ def test_a_stop_during_a_post_leaves_the_row_to_come_due_again(database_url: str
     assert found["attempts"] == 1 and found["closed_at"] is None
     # Due again once the claim's push has run out.
     assert (found["next_try"] - before).total_seconds() > 10
+
+
+def test_the_posts_deadline_counts_from_before_the_claim(
+    database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A slow claim takes time from the POST, not from the margin to the claim's push.
+
+    Here the claim takes 2 s and the deadline is 2 s: counted from before the
+    claim, the POST is given up at once; counted after, it would run 2 s more.
+    """
+    monkeypatch.setattr(worker_notify, "POST_WITHIN", 2.0)
+
+    claims = 0
+
+    async def slow_claim(conn: Any) -> Due | None:
+        nonlocal claims
+        claims += 1
+        if claims == 1:
+            await asyncio.sleep(2)
+        return await claim_due(conn)
+
+    monkeypatch.setattr(worker_notify, "claim_due", slow_claim)
+
+    async def body(engine: AsyncEngine) -> tuple[int, float]:
+        await parked_job(engine)
+        async with serving(create_app()) as url:
+            await queue(url, {"hang": 30})
+            started = time.monotonic()
+            delivered = await deliver_due(engine, f"{url}{PATH}", asyncio.Event())
+            return delivered, time.monotonic() - started
+
+    delivered, took = with_engine(database_url, body)
+    assert delivered == 0
+    # About 2 s; counted from after the claim it would be about 4.
+    assert took < 3

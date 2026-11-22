@@ -7,7 +7,7 @@ requires-python = "==3.15.*"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 dependencies = [
-    # The Host and Origin check, shared with the two fakes. A workspace member.
+    # The Host and Origin check, shared with the fakes. A workspace member.
     "allowed-hosts",
     # Schema migrations, run by the one-shot migrate service.
     "alembic==1.20.1",

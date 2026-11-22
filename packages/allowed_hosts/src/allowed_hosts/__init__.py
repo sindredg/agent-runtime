@@ -1,6 +1,6 @@
 """Answer only requests addressed to a service by one of its names.
 
-The API and the two fakes have no authentication and are published on
+The API and the fakes have no authentication and are published on
 localhost. A browser still reaches localhost for any page it shows:
 
 - A page can point a name it controls at 127.0.0.1 (DNS rebinding). Its

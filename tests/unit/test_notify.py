@@ -14,13 +14,14 @@ from uuid import UUID
 
 import httpx2
 import pytest
+from sqlalchemy.dialects import postgresql
 
 from fake_receiver.app import create_app
 from fake_receiver.serve import serving
 from runtime.config import ConfigError, WorkerConfig
 from runtime.logs import configure_logging
 from runtime.store.held import QuestionReason
-from runtime.store.notify import CLAIM_AHEAD, Due, retry_in
+from runtime.store.notify import CLAIM_AHEAD, Due, claim_statement, retry_in
 from runtime.worker import notify
 from runtime.worker.notify import body, post
 
@@ -287,3 +288,14 @@ def test_a_cancelled_wait_cancels_the_post_too() -> None:
         return work.cancelled()
 
     assert asyncio.run(run())
+
+
+def test_the_claim_picks_its_row_once_in_a_materialized_query() -> None:
+    """Inside an `IN`, a `LIMIT 1 ... SKIP LOCKED` could run again per row and claim several."""
+    dialect = postgresql.dialect()  # type: ignore[no-untyped-call]
+    sql = " ".join(str(claim_statement().compile(dialect=dialect)).split())
+    picked = sql[: sql.index(" UPDATE notifications ")]
+    assert picked.startswith("WITH due AS MATERIALIZED (SELECT")
+    assert picked.endswith("LIMIT %(param_1)s::INTEGER FOR UPDATE SKIP LOCKED)")
+    assert "FROM due WHERE notifications.job_id = due.job_id" in sql
+    assert " IN " not in sql

@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, and_, exists, func, not_, select, update
+from sqlalchemy import ColumnElement, Update, and_, exists, func, not_, select, update
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from runtime.store.held import QuestionReason
@@ -74,18 +74,8 @@ async def close_settled(conn: AsyncConnection) -> int:
     return result.rowcount
 
 
-async def claim_due(conn: AsyncConnection) -> Due | None:
-    """Claim the open row that has been due longest, if any, and count the try.
-
-    One row: rows are posted one after another, and a later row of a batch
-    could pass its 12 s push while those before it were sent. Rows another
-    worker is claiming are skipped. Run it in a transaction of its own and
-    commit before the POST: `now()` is that transaction's start.
-
-    The row is picked in a MATERIALIZED query that runs once. Inside an `IN`
-    the planner could run a `LIMIT 1 ... SKIP LOCKED` again for each row it
-    compares, and update more than one.
-    """
+def claim_statement() -> Update:
+    """The one statement that is a claim. Separate so a test can read its SQL."""
     due = (
         select(notifications.c.job_id, notifications.c.question)
         .where(
@@ -104,26 +94,39 @@ async def claim_due(conn: AsyncConnection) -> Due | None:
         .where(steps.c.job_id == notifications.c.job_id, steps.c.seq == notifications.c.question)
         .scalar_subquery()
     )
-    row = (
-        await conn.execute(
-            update(notifications)
-            .where(
-                notifications.c.job_id == due.c.job_id,
-                notifications.c.question == due.c.question,
-            )
-            .values(
-                attempts=notifications.c.attempts + 1,
-                next_try=func.now() + CLAIM_AHEAD,
-            )
-            .returning(
-                notifications.c.job_id,
-                notifications.c.question,
-                notifications.c.reason,
-                notifications.c.attempts,
-                tool.label("tool"),
-            )
+    return (
+        update(notifications)
+        .where(
+            notifications.c.job_id == due.c.job_id,
+            notifications.c.question == due.c.question,
         )
-    ).one_or_none()
+        .values(
+            attempts=notifications.c.attempts + 1,
+            next_try=func.now() + CLAIM_AHEAD,
+        )
+        .returning(
+            notifications.c.job_id,
+            notifications.c.question,
+            notifications.c.reason,
+            notifications.c.attempts,
+            tool.label("tool"),
+        )
+    )
+
+
+async def claim_due(conn: AsyncConnection) -> Due | None:
+    """Claim the open row that has been due longest, if any, and count the try.
+
+    One row: rows are posted one after another, and a later row of a batch
+    could pass its 12 s push while those before it were sent. Rows another
+    worker is claiming are skipped. Run it in a transaction of its own and
+    commit before the POST: `now()` is that transaction's start.
+
+    The row is picked in a MATERIALIZED query that runs once. Inside an `IN`
+    the planner could run a `LIMIT 1 ... SKIP LOCKED` again for each row it
+    compares, and update more than one.
+    """
+    row = (await conn.execute(claim_statement())).one_or_none()
     if row is None:
         return None
     return Due(row.job_id, row.question, QuestionReason(row.reason), row.attempts, row.tool)
