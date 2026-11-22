@@ -42,6 +42,8 @@ flowchart LR
   `make up` afterwards.
 - `CHAOS_RUNS` and `CHAOS_SEED` set the number and times of random kills.
   `CHAOS_NOTIFY_JOBS` sets the jobs of each G12 run (default 20).
+- `NOTIFY_TIMING_JOBS` sets the jobs of the timed run (default 50).
+  Recorded timed runs start from the Manual runs workflow, `suite: notify-timing`.
 - CI runs unit, integration, escape, the short chaos run, the lab demo and
   the kill runs on the fake provider on every pull request.
 
