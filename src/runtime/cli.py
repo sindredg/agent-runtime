@@ -1,5 +1,5 @@
-"""The `runtime` command: submit a job, read its status, steps and answer,
-cancel it, and approve or deny a tool call that waits for a person.
+"""The `runtime` command: submit a job, list jobs, read a job's status, steps
+and answer, cancel it, and approve or deny a tool call that waits for a person.
 
 It talks to the API over HTTP. The API's address comes from --api-url or
 RUNTIME_API_URL and defaults to http://127.0.0.1:8000. `runtime verify` is
@@ -37,6 +37,19 @@ FOLLOW_RETRY_DELAY = 1.0
 PREVIEW = 100
 # Exit status when a followed job stopped to wait for approval.
 EXIT_NEEDS_APPROVAL = 3
+# Jobs in one page of `runtime list`: the most the API returns, and the default.
+MAX_LIST = 200
+DEFAULT_LIST = 50
+# The statuses a job can have, as the API names them.
+STATUSES = (
+    "queued",
+    "waiting",
+    "needs_approval",
+    "running",
+    "succeeded",
+    "failed",
+    "cancelled",
+)
 
 
 class CommandError(Exception):
@@ -51,6 +64,12 @@ def _job_id(text: str) -> str:
         # The text is not repeated: a URL with a password typed in the wrong
         # place would be printed whole.
         raise argparse.ArgumentTypeError("not a job id") from error
+
+
+def _page_size(text: str) -> int:
+    if not (text.isascii() and text.isdigit()) or not 1 <= int(text) <= MAX_LIST:
+        raise argparse.ArgumentTypeError(f"not a number from 1 to {MAX_LIST}")
+    return int(text)
 
 
 def _question(text: str) -> int:
@@ -94,6 +113,26 @@ def build_parser() -> argparse.ArgumentParser:
         "--follow",
         action="store_true",
         help="print the steps as they happen, until the job ends or needs approval",
+    )
+
+    listing = commands.add_parser(
+        "list",
+        help="list jobs, newest first",
+        description=(
+            "One line per job: id, status, creation time, tokens used of the budget. A job"
+            " that waits for approval shows its question under it. When the page is full,"
+            " the id to continue from is printed on stderr."
+        ),
+    )
+    listing.add_argument("--status", choices=STATUSES, help="only jobs in this status")
+    listing.add_argument(
+        "--limit",
+        type=_page_size,
+        default=DEFAULT_LIST,
+        help=f"jobs in the page, 1 to {MAX_LIST} (default: %(default)s)",
+    )
+    listing.add_argument(
+        "--before", type=_job_id, help="only jobs older than this job id: the next page"
     )
 
     status = commands.add_parser("status", help="show a job's status")
@@ -409,6 +448,32 @@ def _finish(status: str, asked: Any, client: httpx2.Client, job_id: str, out: Te
     return 0 if status == "succeeded" else 1
 
 
+def _list(client: httpx2.Client, args: argparse.Namespace, out: TextIO, err: TextIO) -> int:
+    params: dict[str, str | int] = {"limit": args.limit}
+    if args.status is not None:
+        params["status"] = args.status
+    if args.before is not None:
+        params["before"] = args.before
+    found: list[dict[str, Any]] = _check(client.get("/jobs", params=params)).json()["jobs"]
+    for job in found:
+        fields = [_one_line(str(job[name])) for name in ("id", "status", "created_at")]
+        tokens = f"tokens {int(job['tokens_used'])}/{int(job['token_budget'])}"
+        print(f"{fields[0]}  {fields[1]:<14}  {fields[2]}  {tokens}", file=out)
+        asked = job.get("question")
+        if asked is not None:
+            # A glance: the reason is cut. `runtime status` and `logs` read the job.
+            text = _preview(f"{asked['tool']}: {asked['reason']}")
+            print(f"    question {int(asked['seq'])}: {text}", file=out)
+        elif job["status"] == "needs_approval":
+            print("    question: not in the log yet", file=out)
+    if len(found) == args.limit:
+        # Not a command to copy: how `runtime` is started depends on the install.
+        # A UUID or nothing: a user pastes this text into a shell.
+        last = UUID(str(found[-1]["id"]))
+        print(f"More jobs may be older. Add --before {last} to read them.", file=err)
+    return 0
+
+
 def _status(client: httpx2.Client, args: argparse.Namespace, out: TextIO) -> int:
     job = _job(client, args.job_id)
     if args.json:
@@ -506,10 +571,11 @@ def main(
         "deny": _deny,
         "cancel": _cancel,
     }
-    handler = handlers[args.command]
     try:
         with httpx2.Client(base_url=args.api_url, timeout=30.0, transport=transport) as client:
-            return handler(client, args, out)
+            if args.command == "list":
+                return _list(client, args, out, err)
+            return handlers[args.command](client, args, out)
     except BrokenPipeError:
         # The reader went away, as in `runtime logs <id> | head`. Not an
         # error. Python would complain again when it flushes stdout at exit,

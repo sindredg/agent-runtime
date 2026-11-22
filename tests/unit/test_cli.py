@@ -96,12 +96,16 @@ class StubApi:
         self.cancel_response = httpx2.Response(200, json=job("cancelled"))
         # A `status` event the stream carries after the steps, if any.
         self.status: str | None = None
+        # The answer to `GET /jobs`.
+        self.jobs: list[dict[str, Any]] = []
 
     def __call__(self, request: httpx2.Request) -> httpx2.Response:
         self.requests.append(request)
         path = request.url.path
         if request.method == "POST" and path == "/jobs":
             return self.submit_response
+        if request.method == "GET" and path == "/jobs":
+            return httpx2.Response(200, json={"jobs": self.jobs})
         if path == f"/jobs/{JOB_ID}":
             return httpx2.Response(200, json=self.final)
         if request.method == "POST" and path == f"/jobs/{JOB_ID}/approve":
@@ -186,6 +190,11 @@ def test_api_url_comes_from_the_flag_then_the_environment_then_the_default(
         # A job id goes into the URL. Only a UUID is accepted.
         ["status", "../healthz"],
         ["logs", "not-a-uuid", "--follow"],
+        ["list", "--status", "done"],
+        ["list", "--limit", "0"],
+        ["list", "--limit", "201"],
+        ["list", "--limit", "ten"],
+        ["list", "--before", "../healthz"],
     ],
 )
 def test_bad_usage_exits_with_2(argv: list[str], capsys: pytest.CaptureFixture[str]) -> None:
@@ -935,3 +944,127 @@ def test_verify_reports_a_url_parameter_the_driver_refuses_as_cannot_check() -> 
     assert main(["verify", "--database-url", url, "--all"], out=out, err=err) == 2
     assert err.getvalue().startswith("runtime: cannot check the database: ")
     assert "x9" not in out.getvalue() + err.getvalue()
+
+
+# list
+
+OTHER_ID = "01a1d655-88bd-7468-afc4-5ca3a1947905"
+
+
+def summary(
+    job_id: str = JOB_ID,
+    status: str = "succeeded",
+    question: dict[str, Any] | None = None,
+    **fields: Any,
+) -> dict[str, Any]:
+    return {
+        "id": job_id,
+        "status": status,
+        "token_budget": 1000,
+        "tokens_used": 19,
+        "deadline": "2026-11-13T20:00:00Z",
+        "error": None,
+        "created_at": "2026-11-13T19:00:00Z",
+        "question": question,
+        **fields,
+    }
+
+
+def test_list_prints_one_line_per_job_in_the_order_the_api_gave() -> None:
+    api = StubApi()
+    api.jobs = [summary(), summary(OTHER_ID, "failed", tokens_used=0, error="boom")]
+    code, out, err = run("list", api=api)
+    assert (code, err) == (0, "")
+    assert out.splitlines() == [
+        f"{JOB_ID}  succeeded       2026-11-13T19:00:00Z  tokens 19/1000",
+        f"{OTHER_ID}  failed          2026-11-13T19:00:00Z  tokens 0/1000",
+    ]
+    (request,) = api.requests
+    # The page size is always sent: a full page is how the command knows to say more.
+    assert (request.method, request.url.path, dict(request.url.params)) == (
+        "GET",
+        "/jobs",
+        {"limit": "50"},
+    )
+
+
+def test_list_sends_status_limit_and_before() -> None:
+    api = StubApi()
+    code, _, _ = run(
+        "list", "--status", "needs_approval", "--limit", "200", "--before", OTHER_ID, api=api
+    )
+    assert code == 0
+    (request,) = api.requests
+    assert dict(request.url.params) == {
+        "status": "needs_approval",
+        "limit": "200",
+        "before": OTHER_ID,
+    }
+
+
+def test_a_waiting_job_is_listed_with_its_question_under_it() -> None:
+    api = StubApi()
+    question = {"seq": 5, "tool": "run_shell", "reason": "the spec asks before this tool runs"}
+    api.jobs = [summary(status="needs_approval", question=question)]
+    code, out, _ = run("list", "--status", "needs_approval", api=api)
+    assert code == 0
+    assert out.splitlines() == [
+        f"{JOB_ID}  needs_approval  2026-11-13T19:00:00Z  tokens 19/1000",
+        "    question 5: run_shell: the spec asks before this tool runs",
+    ]
+
+
+def test_a_waiting_job_whose_question_is_not_in_the_log_yet_says_so() -> None:
+    api = StubApi()
+    api.jobs = [summary(status="needs_approval")]
+    _, out, _ = run("list", api=api)
+    assert out.splitlines()[1] == "    question: not in the log yet"
+
+
+def test_text_from_the_api_cannot_reach_the_terminal_as_control_codes() -> None:
+    hostile = "a\nb\x1b[2J\u202e\x07" + "x" * 300
+    api = StubApi()
+    api.jobs = [
+        summary(
+            job_id=hostile,
+            status=hostile,
+            created_at=hostile,
+            error=hostile,
+            question={"seq": 5, "tool": hostile, "reason": hostile},
+        )
+    ]
+    code, out, _ = run("list", api=api)
+    assert code == 0
+    lines = out.splitlines()
+    assert len(lines) == 2
+    assert all(char.isprintable() for line in lines for char in line)
+    # The reason is cut: the list is a glance, `runtime status` reads the job.
+    assert len(lines[1]) < 300
+
+
+def test_a_full_page_says_how_to_read_the_older_jobs() -> None:
+    api = StubApi()
+    api.jobs = [summary(), summary(OTHER_ID)]
+    code, out, err = run("list", "--limit", "2", api=api)
+    assert code == 0
+    assert len(out.splitlines()) == 2
+    # Not a command line to copy: how the CLI is started depends on the install.
+    assert err == f"More jobs may be older. Add --before {OTHER_ID} to read them.\n"
+
+
+def test_a_full_page_whose_last_id_is_not_a_uuid_prints_no_hint() -> None:
+    """The hint is text a user pastes into a shell: only a job id goes in it."""
+    api = StubApi()
+    api.jobs = [summary(), summary(job_id="x; rm -rf ~")]
+    code, _, err = run("list", "--limit", "2", api=api)
+    assert code == 2
+    assert "rm -rf" not in err
+    assert err.startswith("runtime: unexpected data: ValueError")
+
+
+def test_a_page_that_is_not_full_is_the_last_and_says_nothing_more() -> None:
+    api = StubApi()
+    api.jobs = [summary()]
+    assert run("list", "--limit", "2", api=api)[2] == ""
+    api.jobs = []
+    assert run("list", api=api) == (0, "", "")

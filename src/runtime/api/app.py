@@ -21,7 +21,16 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from allowed_hosts import AllowedHosts
-from runtime.api.models import MAX_SEQ, Answer, JobSubmission, JobView, StepList, StepView
+from runtime.api.models import (
+    MAX_SEQ,
+    Answer,
+    JobList,
+    JobSubmission,
+    JobSummaryView,
+    JobView,
+    StepList,
+    StepView,
+)
 from runtime.config import ApiConfig, allowed_hosts
 from runtime.store.engine import create_engine
 from runtime.store.jobs import (
@@ -34,6 +43,7 @@ from runtime.store.jobs import (
     deny_job,
     get_job,
 )
+from runtime.store.listing import list_jobs
 from runtime.store.payload import InvalidPayload
 from runtime.store.roles import check_app_role
 from runtime.store.status import FINAL_STATUSES, JobStatus
@@ -44,6 +54,9 @@ MAX_PAGE = 1000
 # A comment line is sent after this many silent seconds, so proxies and
 # clients do not take a quiet stream for a dead one.
 KEEP_ALIVE_SECONDS = 15.0
+# Jobs in one page of the list: the most, and the number when none is asked for.
+MAX_JOBS = 200
+DEFAULT_JOBS = 50
 
 
 def _event(name: str, data: str, event_id: int | None = None) -> bytes:
@@ -223,6 +236,24 @@ def create_app(
         if progress is None:
             raise HTTPException(status_code=404, detail="job not found")
         return StepList(steps=[StepView.model_validate(step) for step in progress[1]])
+
+    @app.get("/jobs")
+    async def read_jobs(
+        status: JobStatus | None = None,
+        before: UUID | None = None,
+        limit: Annotated[int, Query(ge=1, le=MAX_JOBS)] = DEFAULT_JOBS,
+    ) -> JobList:
+        """Jobs, newest first, at most `limit`.
+
+        `status` keeps the jobs in that status. `before` is a job id: the
+        page holds the jobs older than it, so the last id of one page asks
+        for the next. A page with fewer jobs than `limit` is the last. A job
+        in `needs_approval` comes with its question. The spec and the lease
+        are left out: `GET /jobs/{id}` has them.
+        """
+        async with engine().connect() as conn:
+            found = await list_jobs(conn, status=status, before=before, limit=limit)
+        return JobList(jobs=[JobSummaryView.model_validate(job) for job in found])
 
     @app.get("/jobs/{job_id}/events")
     async def follow_job(
