@@ -160,19 +160,25 @@ def test_no_secret_reaches_a_step_a_log_line_or_an_answer_of_the_api(
         ran = run_the_job(stack, settings, sent)
         answers = api_test(database_url, lambda api: every_answer(api, str(ran.job.id)))
 
-    # Each secret was in play: the leg that could leak it ran.
+    # Each secret was in play: the leg that could leak it ran. Plain values
+    # only in the assertions: pytest prints what an assertion compares, and
+    # `ran` holds the environment dump.
     results = [step.payload for step in ran.steps if step.kind is StepKind.TOOL_RESULT]
-    assert len(results) == 2
+    result_count, status, model_calls = len(results), ran.job.status.value, len(ran.requests)
+    error = ran.job.error or ""
+    assert result_count == 2
     environment, refused = results
     printed_an_environment = "PATH=" in environment["content"]
     assert printed_an_environment, "run_shell printed no environment"
-    assert refused["is_error"] is True
-    assert refused["content"].startswith("the tracker answered 403")
+    refused_with_403 = refused["is_error"] is True and refused["content"].startswith(
+        "the tracker answered 403"
+    )
+    assert refused_with_403, "create_issue did not end in the tracker's 403"
     assert sent == [f"token {TOKEN}"]
-    assert ran.job.status == "failed"
-    assert ran.job.error is not None
-    assert ran.job.error.startswith("model call failed: ")
-    assert len(ran.requests) == 3
+    assert status == "failed"
+    failed_on_the_model_call = error.startswith("model call failed: ")
+    assert failed_on_the_model_call, "the job did not end on the failed model call"
+    assert model_calls == 3
     assert written.getvalue().count("\n") > 0
 
     found: list[str] = []
