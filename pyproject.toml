@@ -7,7 +7,7 @@ requires-python = "==3.15.*"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 dependencies = [
-    # The Host and Origin check, shared with the two fakes. A workspace member.
+    # The Host and Origin check, shared with the fakes. A workspace member.
     "allowed-hosts",
     # Schema migrations, run by the one-shot migrate service.
     "alembic==1.20.1",
@@ -36,6 +36,7 @@ dev = [
     "asyncpg-stubs==0.32.0",
     # The workspace members, so tests can import them.
     "fake-provider",
+    "fake-receiver",
     "fake-tracker",
     # Property-based tests: generated inputs instead of hand-picked ones.
     "hypothesis==6.170.15",
@@ -53,11 +54,17 @@ requires = ["uv_build==0.13.8"]
 build-backend = "uv_build"
 
 [tool.uv.workspace]
-members = ["packages/allowed_hosts", "services/fake_provider", "services/fake_tracker"]
+members = [
+    "packages/allowed_hosts",
+    "services/fake_provider",
+    "services/fake_receiver",
+    "services/fake_tracker",
+]
 
 [tool.uv.sources]
 allowed-hosts = { workspace = true }
 fake-provider = { workspace = true }
+fake-receiver = { workspace = true }
 fake-tracker = { workspace = true }
 
 [tool.uv.build-backend]
@@ -75,6 +82,7 @@ src = [
     "tests",
     "packages/allowed_hosts/src",
     "services/fake_provider/src",
+    "services/fake_receiver/src",
     "services/fake_tracker/src",
 ]
 
@@ -96,6 +104,7 @@ files = [
     "scripts",
     "packages/allowed_hosts/src",
     "services/fake_provider/src",
+    "services/fake_receiver/src",
     "services/fake_tracker/src",
 ]
 

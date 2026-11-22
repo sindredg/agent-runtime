@@ -2,7 +2,8 @@
 
 A web page that points a name it controls at 127.0.0.1 could otherwise set
 the fake provider busy, read its request log, or clear and fill the fake
-tracker, whose list the `create_issue` check reads.
+tracker, whose list the `create_issue` check reads, or read and clear the
+fake receiver's log of notifications.
 """
 
 from typing import Any
@@ -12,6 +13,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from fake_provider.app import create_app as create_provider
+from fake_receiver.app import create_app as create_receiver
 from fake_tracker.app import create_app as create_tracker
 
 FOREIGN = "rebound.example:8001"
@@ -33,9 +35,18 @@ TRACKER_REQUESTS: list[tuple[str, str, Any]] = [
     ("POST", "/issues", ISSUE),
     ("GET", "/healthz", None),
 ]
-CASES = [("fake-provider", create_provider, *r) for r in PROVIDER_REQUESTS] + [
-    ("fake-tracker", create_tracker, *r) for r in TRACKER_REQUESTS
+RECEIVER_REQUESTS: list[tuple[str, str, Any]] = [
+    ("GET", "/notifications", None),
+    ("DELETE", "/notifications", None),
+    ("POST", "/notifications", {"id": "j:1"}),
+    ("POST", "/_fake/answers", {"answers": [{"status": 500}]}),
+    ("GET", "/healthz", None),
 ]
+CASES = (
+    [("fake-provider", create_provider, *r) for r in PROVIDER_REQUESTS]
+    + [("fake-tracker", create_tracker, *r) for r in TRACKER_REQUESTS]
+    + [("fake-receiver", create_receiver, *r) for r in RECEIVER_REQUESTS]
+)
 
 
 @pytest.mark.parametrize(("name", "create", "method", "path", "body"), CASES)
@@ -63,7 +74,12 @@ def test_a_refused_request_changes_nothing() -> None:
 
 
 @pytest.mark.parametrize(
-    ("create", "path"), [(create_provider, "/_fake/busy"), (create_tracker, "/issues")]
+    ("create", "path"),
+    [
+        (create_provider, "/_fake/busy"),
+        (create_tracker, "/issues"),
+        (create_receiver, "/notifications"),
+    ],
 )
 @pytest.mark.parametrize("origin", ["https://evil.example", "null", "http://localhost:3000"])
 def test_a_change_from_another_sites_page_is_refused(create: Any, path: str, origin: str) -> None:
@@ -77,6 +93,7 @@ def test_a_change_from_another_sites_page_is_refused(create: Any, path: str, ori
     [
         (create_provider(), "fake-provider", "fake-tracker"),
         (create_tracker(), "fake-tracker", "fake-provider"),
+        (create_receiver(), "fake-receiver", "fake-tracker"),
     ],
 )
 def test_each_fake_answers_its_own_name_and_localhost_only(

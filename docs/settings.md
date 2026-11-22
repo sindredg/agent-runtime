@@ -9,9 +9,9 @@ Every service reads its settings from environment variables
 ```mermaid
 flowchart LR
     E[.env] --> C[docker-compose.yml]
-    C -->|LEASE_SECONDS, HEARTBEAT_SECONDS, TRACKER_URL| W[worker]
+    C -->|LEASE_SECONDS, HEARTBEAT_SECONDS, TRACKER_URL, NOTIFY_URL| W[worker]
     C -->|SANDBOX_TIMEOUT_SECONDS, STOP_GRACE_SECONDS| W
-    C -->|API_PORT, POSTGRES_PORT, FAKE_PROVIDER_PORT, FAKE_TRACKER_PORT| H[host ports on 127.0.0.1]
+    C -->|API_PORT, POSTGRES_PORT, FAKE_*_PORT| H[host ports on 127.0.0.1]
     C -->|POSTGRES_PASSWORD, APP_DATABASE_PASSWORD| DB[(postgres)]
 ```
 
@@ -20,7 +20,8 @@ flowchart LR
 - In `.env`, `API_PORT` is the host port the stack publishes the API on.
   Inside the container the API listens on `0.0.0.0:8000`.
 - The stack publishes the API on 8000, Postgres on 5432, the fake provider
-  on 8001 and the fake tracker on 8002, all on `127.0.0.1` only.
+  on 8001, the fake tracker on 8002 and the fake receiver on 8003, all on
+  `127.0.0.1` only.
 
 ## The Claude API
 
@@ -68,10 +69,11 @@ flowchart LR
 | `WORKER_ID` | host name and process id | Stored as `lease_owner` |
 | `WORKER_ALIVE_FILE` | `/tmp/worker.alive` | Touched every 5 seconds. The compose health check reads its age. |
 
-## Worker: the issue tracker
+## Worker: the issue tracker and notifications
 
 | Variable | Default | Meaning |
 |---|---|---|
+| `NOTIFY_URL` | unset; the stack sets the fake receiver | Where a parked job's question is posted, exactly as given, never logged ([ADR 0029](adr/0029-notify-from-a-row-the-park-writes.md)). Unset, none is posted. |
 | `TRACKER_URL` | unset | The tracker `create_issue` talks to. Unset, the tool is not offered. |
 | `TRACKER_KIND` | `fake` | `fake` for the fake tracker, `gitea` for Gitea |
 | `TRACKER_REPO` | unset | Gitea only: the repository, as `owner/name` |

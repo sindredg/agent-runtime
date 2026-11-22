@@ -234,7 +234,10 @@ def test_a_call_nobody_can_vouch_for_waits_for_approval_and_then_runs_again(chao
     # Two issues: the first run's, and the rerun a person approved. No more.
     assert [len(ids) for ids in run.issues.values()] == [2]
     assert run.duplicates() == {}
-    kinds = [s["kind"] for s in run.steps]
+    # A delivered notification is logged whenever the receiver took it, while
+    # the job waits (ADR 0029). It is no part of the order checked here.
+    logged = [s for s in run.steps if s["kind"] != "notification_sent"]
+    kinds = [s["kind"] for s in logged]
     at = kinds.index("approval_requested")
     assert kinds[at:][:4] == [
         "approval_requested",
@@ -243,7 +246,7 @@ def test_a_call_nobody_can_vouch_for_waits_for_approval_and_then_runs_again(chao
         "tool_intent",
     ]
     # The park is in the log with the move it made (APTS AR-002).
-    assert run.steps[at + 1]["payload"] == {
+    assert logged[at + 1]["payload"] == {
         "from": "running",
         "to": "needs_approval",
         "cause": "approval_requested",

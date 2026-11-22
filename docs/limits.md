@@ -130,16 +130,16 @@ refused, but the tool ran. An idempotency key on the other side closes this.
 - A waiting job waits until a person answers or cancels, or until its
   deadline. Entering a call's result by hand is not built.
 - The log records that a call was approved or denied, not by whom.
-- A job that waits for a person tells nobody. Someone has to ask for the
-  job ([issue 75](https://github.com/sindredg/agent-runtime/issues/75)).
+- A question is posted at least once: a kill, a lost answer or a stall past
+  the claim's 12 s repeats it. No authentication; a token in an `http` URL
+  crosses the network in clear. Each park is one POST, not capped.
 
 ## API
 
 - No authentication. Anyone who can reach the API can submit, list, approve,
   deny and cancel. That includes every local user and process of the host.
-- The API and both fakes refuse a foreign `Host` and a change from another
-  site's page. A local program sends any header: it can park jobs on the fake
-  provider, read its request log, and fill or empty the fake tracker.
+- The API and the fakes refuse a foreign `Host` and a change from another
+  site's page. A local program sends any header and can use every fake.
 - Postgres is published on `127.0.0.1` with default passwords for both
   [roles](database-roles.md). A local process can write jobs and steps
   directly, past the fence and the gate. As the owner it can switch the
