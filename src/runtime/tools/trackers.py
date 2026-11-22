@@ -75,8 +75,8 @@ class Tracker(Protocol):
     async def create(
         self, http: httpx2.AsyncClient, title: str, body: str, operation_id: str
     ) -> Issue:
-        """Open the issue. Raises `Refused`, `httpx2.HTTPError`, or on a malformed answer
-        `httpx2.InvalidURL`, `ValueError`, `LookupError` or `TypeError`."""
+        """Open the issue. Raises `Refused`, `httpx2.HTTPError`, `OSError` (a TLS error), or
+        on a malformed answer `httpx2.InvalidURL`, `ValueError`, `LookupError` or `TypeError`."""
         ...
 
     def find(self, http: httpx2.Client, operation_id: str) -> Issue | None:
@@ -168,6 +168,8 @@ def _number(entry: Any) -> int:
     # bool is an int in Python, and JSON true is no issue number.
     if not isinstance(number, int) or isinstance(number, bool):
         raise Unclear("an entry has no issue number")
+    if not 0 < number <= MAX_ISSUE_NUMBER:
+        raise Unclear("an entry's issue number is out of range")
     return number
 
 

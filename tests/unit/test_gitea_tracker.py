@@ -15,7 +15,7 @@ import pytest
 
 from runtime.tools.base import CheckOutcome, ToolCall, ToolResult
 from runtime.tools.create_issue import create_issue_tool
-from runtime.tools.trackers import MARKER, MAX_PAGES, PAGE, GiteaTracker, marked, marks
+from runtime.tools.trackers import MARKER, MAX_PAGES, PAGE, GiteaTracker, Unclear, marked, marks
 
 URL, REPO, BOT, TOKEN = "http://gitea.test", "lab-admin/shop", "lab-bot", "token123"
 ISSUES = f"/api/v1/repos/{REPO}/issues"
@@ -368,3 +368,12 @@ def test_only_a_body_ending_in_the_marker_line_marks_a_call(body: str, expected:
 
 def test_the_token_is_not_in_the_tracker_s_repr() -> None:
     assert TOKEN not in repr(GiteaTracker(URL, REPO, TOKEN))
+
+
+@pytest.mark.parametrize("number", [0, -1, 2**63])
+def test_an_issue_number_out_of_range_is_an_unclear_answer(gitea: Gitea, number: int) -> None:
+    gitea.add(marked("b", "job-1:toolu_1"))
+    gitea.issues[-1]["number"] = number
+    tracker = GiteaTracker(URL, REPO, TOKEN)
+    with tracker.client(httpx2.MockTransport(gitea)) as http, pytest.raises(Unclear):
+        tracker.find(http, "job-1:toolu_1")
