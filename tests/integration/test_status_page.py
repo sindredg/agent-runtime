@@ -76,8 +76,11 @@ def test_the_page_lists_a_job_in_every_status_and_escapes_their_text(
     assert set(made) == set(JobStatus)
     assert response.status_code == 200
     assert response.headers["content-type"] == "text/html; charset=utf-8"
-    for name, value in page.HEADERS.items():
-        assert response.headers[name] == value
+    # Named here, not read from page.HEADERS: a header dropped there must fail.
+    assert response.headers["content-security-policy"] == page.CONTENT_SECURITY_POLICY
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["referrer-policy"] == "no-referrer"
+    assert response.headers["cache-control"] == "no-store"
     for job_id in made.values():
         assert f'href="/jobs/{job_id}/steps"' in response.text
     assert HOSTILE not in response.text
