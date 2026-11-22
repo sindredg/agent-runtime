@@ -21,7 +21,8 @@ flowchart LR
 |---|---|
 | `runtime submit <file> [--follow]` | Posts the job file. With `--follow`, prints each step until the job stops. |
 | `runtime status <job id>` | The job's status. `--json` prints the whole job. |
-| `runtime logs <job id> [--follow]` | The job's steps |
+| `runtime logs <job id> [--follow]` | The job's steps, one line each, cut to 100 characters |
+| `runtime answer <job id>` | A succeeded job's final answer, in full |
 | `runtime approve <job id> <question>` | Lets the call a question asks about run once |
 | `runtime deny <job id> <question>` | Refuses that call. The model gets an error result and the job goes on. |
 | `runtime cancel <job id>` | Cancels the job |
@@ -60,11 +61,13 @@ The job waits for a person to decide about a tool call.
   tool:     run_shell
   input:    {"command": "cat hello.txt && echo seen > note.txt && ls"}
   reason:   the job's spec asks for a person's approval before this tool runs
-To let the call run: runtime approve 01a1dc46-ae79-75d6-9dd9-070e7dc3e400 7
-To refuse it:        runtime deny 01a1dc46-ae79-75d6-9dd9-070e7dc3e400 7
+To let the call run: uv run runtime approve 01a1dc46-ae79-75d6-9dd9-070e7dc3e400 7
+To refuse it:        uv run runtime deny 01a1dc46-ae79-75d6-9dd9-070e7dc3e400 7
 ```
 
 - The question number is the `seq` of the question's step.
+- The printed commands start with `uv run` when the CLI ran through it, so
+  they work as copied.
 - An answer to a question the job no longer waits on is refused and changes
   nothing.
 - The `reason` says whether nothing has run yet, or a call was interrupted

@@ -130,6 +130,12 @@ def no_waiting(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cli, "FOLLOW_RETRY_DELAY", 0.0)
 
 
+@pytest.fixture(autouse=True)
+def not_from_uv(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The tests run under `uv run`, which sets UV. A test that wants it sets it."""
+    monkeypatch.delenv("UV", raising=False)
+
+
 def run(*argv: str, api: StubApi | None = None) -> tuple[int, str, str]:
     out, err = io.StringIO(), io.StringIO()
     transport = httpx2.MockTransport(api or StubApi())
@@ -303,14 +309,23 @@ ASKED = step(
 
 
 @pytest.mark.parametrize("command", ["submit", "logs"])
+@pytest.mark.parametrize(
+    ("uv", "runtime"), [(None, "runtime"), ("/home/u/.local/bin/uv", "uv run runtime")]
+)
 def test_following_a_job_that_stops_for_approval_shows_the_call_and_exits_with_3(
-    job_file: Path, command: str
+    job_file: Path,
+    command: str,
+    uv: str | None,
+    runtime: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The stream of such a job stays open. The command must not wait on it for ever.
 
     The person decides about the call, so it is shown in full, on one line
     and without what a terminal would act on.
     """
+    if uv is not None:
+        monkeypatch.setenv("UV", uv)
     api = StubApi(final=job("needs_approval", tokens_used=19), end=None)
     api.status = "needs_approval"
     api.steps = [*STEPS, ASKED]
@@ -328,8 +343,10 @@ def test_following_a_job_that_stops_for_approval_shows_the_call_and_exits_with_3
         # Exactly as given, two spaces included.
         '  input:    {"command": "rm -rf  build\\n\\u001b[2J\\u202e' + "x" * 200 + '"}',
         "  reason:   the job's spec asks for a person's approval before this tool runs",
-        f"To let the call run: runtime approve {JOB_ID} 5",
-        f"To refuse it:        runtime deny {JOB_ID} 5",
+        # Copied as printed, it runs in the shell this command ran in:
+        # after the quickstart that is through `uv run`.
+        f"To let the call run: {runtime} approve {JOB_ID} 5",
+        f"To refuse it:        {runtime} deny {JOB_ID} 5",
     ]
     # One look at the stream was enough.
     assert len([r for r in api.requests if r.url.path.endswith("/events")]) == 1
@@ -716,16 +733,19 @@ def test_a_denial_the_api_refuses_exits_with_2_and_shows_why() -> None:
     assert "only a job that needs approval" in err
 
 
-def test_a_job_that_waits_without_a_question_in_its_log_says_so() -> None:
+def test_a_job_that_waits_without_a_question_in_its_log_says_so(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The question is taken from the stream, then from the steps. Without one
     there is no number to answer with, and no command is printed."""
+    monkeypatch.setenv("UV", "/usr/bin/uv")
     api = StubApi(final=job("needs_approval"), end=None)
     api.status = "needs_approval"
     code, out, err = run("logs", JOB_ID, "--follow", api=api)
     assert (code, err) == (3, "")
     assert out.splitlines()[-2:] == [
         "The job waits for a person to decide about a tool call.",
-        "Its question is not in the log yet: run `runtime status` again.",
+        "Its question is not in the log yet: run `uv run runtime status` again.",
     ]
 
 
@@ -744,6 +764,93 @@ def test_a_tool_name_or_model_with_control_codes_is_not_printed_raw() -> None:
     for line in (format_step(intent), format_step(request)):
         assert "\x1b" not in line
         assert "\x07" not in line
+
+
+# The answer
+
+
+def answered(*blocks: dict[str, Any], stop_reason: str = "end_turn") -> dict[str, Any]:
+    return step(
+        9,
+        "model_response",
+        {
+            "id": "msg_2",
+            "content": list(blocks),
+            "stop_reason": stop_reason,
+            "usage": {"input_tokens": 30, "output_tokens": 400},
+        },
+    )
+
+
+def test_answer_prints_the_last_model_text_in_full() -> None:
+    """Longer than a step line shows, with its line breaks. Earlier model text is not the answer."""
+    text = "Summary:\n\n" + "word " * 100 + "\n\t- end of the answer"
+    assert len(text) > cli.PREVIEW
+    api = StubApi()
+    api.steps = [*STEPS, answered({"type": "text", "text": text})]
+    code, out, err = run("answer", JOB_ID, api=api)
+    assert (code, err) == (0, "")
+    assert out == text + "\n"
+
+
+def test_answer_joins_the_text_blocks_and_leaves_out_the_rest() -> None:
+    api = StubApi()
+    api.steps = [
+        *STEPS,
+        answered(
+            {"type": "thinking", "thinking": "hidden", "signature": "s"},
+            {"type": "text", "text": "first"},
+            {"type": "text", "text": "second"},
+        ),
+    ]
+    code, out, _ = run("answer", JOB_ID, api=api)
+    assert (code, out) == (0, "first\nsecond\n")
+
+
+def test_answer_does_not_print_terminal_control_codes() -> None:
+    """The model writes the answer, and it can quote a target. A carriage
+    return would let it write over a line already printed."""
+    api = StubApi()
+    api.steps = [*STEPS, answered({"type": "text", "text": f"ok\rfake {HOSTILE}"})]
+    code, out, _ = run("answer", JOB_ID, api=api)
+    assert code == 0
+    assert out == "ok?fake ?[2Kgone?]0;title??1A\nnext\n"
+
+
+@pytest.mark.parametrize(
+    "status", ["queued", "waiting", "running", "needs_approval", "failed", "cancelled"]
+)
+def test_a_job_that_has_not_succeeded_has_no_answer(status: str) -> None:
+    api = StubApi(final=job(status))
+    code, out, err = run("answer", JOB_ID, api=api)
+    assert (code, out) == (2, "")
+    assert err == f"runtime: the job is {status}: only a succeeded job has an answer\n"
+    # The steps are not read.
+    assert not [r for r in api.requests if r.url.path.endswith("/steps")]
+
+
+@pytest.mark.parametrize(
+    ("steps", "message"),
+    [
+        ([], "the job's log has no model response"),
+        ([answered()], "the job's last model response has no text"),
+        ([answered({"type": "text", "text": ""})], "the job's last model response has no text"),
+        (
+            [step(2, "model_response", {"content": "a string"})],
+            "the job's last model response has no text",
+        ),
+    ],
+)
+def test_a_log_without_answer_text_says_so(steps: list[dict[str, Any]], message: str) -> None:
+    api = StubApi()
+    api.steps = steps
+    code, out, err = run("answer", JOB_ID, api=api)
+    assert (code, out, err) == (2, "", f"runtime: {message}\n")
+
+
+def test_answer_of_an_unknown_job_exits_with_2() -> None:
+    code, out, err = run("answer", "01a1d655-88bd-7468-afc4-000000000000")
+    assert (code, out, err) == (2, "", "runtime: job not found\n")
 
 
 def test_cancel_posts_to_the_job_and_prints_its_new_status() -> None:
