@@ -1,7 +1,7 @@
 # Results: a parked job tells the operator
 
-The evidence for G12: a job that waits for a person posts its question to
-`NOTIFY_URL`, at least once. How the delivery works is in
+The evidence that a job which waits for a person tells the operator: it
+posts its question to `NOTIFY_URL`, at least once. How the delivery works is in
 [ADR 0029](../adr/0029-notify-from-a-row-the-park-writes.md).
 
 These results are not from the full run at `1f57ee4`: the mechanism came

@@ -41,10 +41,10 @@ clean` stops the stack and deletes its database.
 
 ## What is built
 
-Jobs can wait for approval and post the question to an operator's URL, run
-shell commands in a sandbox and enforce token budgets and deadlines. See [Architecture](docs/architecture.md) for
-how the pieces fit together and [Known limits](docs/limits.md) for the
-boundaries of each guarantee.
+Jobs can wait for approval and post the question to an operator's URL,
+run shell commands in a sandbox and enforce token budgets and deadlines.
+See [Architecture](docs/architecture.md) for how the pieces fit together
+and [Known limits](docs/limits.md) for the boundaries of each guarantee.
 
 ## Results
 
@@ -68,9 +68,9 @@ such a run did not reach is named with its result.
 | Throughput scales with workers | Not measured | |
 
 Every result except the notification's is from one run at commit `1f57ee4`,
-on one machine, against the fake provider. Seven switched-off runs are from `11b6792` and one on the
-Claude API from `5a5bfa6`, on GitHub with public logs; two are older. Each
-names its commit. The run, and what it does not show: [Results](docs/results/README.md).
+on one machine, against the fake provider. Seven switched-off runs are from
+`11b6792` and one on the Claude API from `5a5bfa6`, on GitHub with public
+logs; two are older. Each names its commit. The run, and what it does not show: [Results](docs/results/README.md).
 
 The notification came after that run. Its results are from runs on GitHub
 from `main` at `30108d4` and `7096a5c`, against the fake provider.

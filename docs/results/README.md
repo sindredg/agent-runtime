@@ -13,16 +13,16 @@ The table with one line per guarantee is in the
   spend and do.
 - [Switched-off runs from the list](switched-off.md): each mechanism
   removed, and how its tests ended.
-- [A parked job tells the operator](notify.md): G12, from runs on GitHub
-  after the run below.
+- [A parked job tells the operator](notify.md): the question posted to
+  `NOTIFY_URL`, from runs on GitHub after the run below.
 
 Jobs that ran with a real model, which are not the evidence for a guarantee:
 [Runs against the Claude API](api.md) and [Kill run results](kill-runs.md).
 
 ## The run
 
-Every result except G12's is from one run of every suite at one commit, on
-one machine with no other test run, in this order:
+Every result except the notification's is from one run of every suite at
+one commit, on one machine with no other test run, in this order:
 
 ```mermaid
 flowchart LR

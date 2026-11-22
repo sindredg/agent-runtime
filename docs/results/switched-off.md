@@ -90,7 +90,7 @@ test failed on its named assertion.
 | `notify-row-off` | The notification row the park writes with the job's move | Chaos | 3 | [45032324614](https://github.com/sindredg/agent-runtime/actions/runs/45032324614), `30108d4` |
 | `tool-env-passed-on` | The tool container's environment, which holds nothing of the worker's | Normal | 1 | [45047751328](https://github.com/sindredg/agent-runtime/actions/runs/45047751328), `7096a5c` |
 
-The first two are G12's ([results](notify.md#with-the-mechanism-off)). With
+The first two guard the notification ([results](notify.md#with-the-mechanism-off)). With
 the third, the secret test finds the provider key and the tracker token in
 a tool result and in two answers of the API.
 
