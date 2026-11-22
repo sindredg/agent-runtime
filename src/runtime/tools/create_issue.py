@@ -103,10 +103,12 @@ def create_issue_tool(
             # Any other answer, a server error above all, can come after
             # the issue was stored.
             return look_up(call, str(error))
-        except httpx2.HTTPError as error:
-            return look_up(call, f"the tracker could not be reached: {error!r}")
+        # The error's type only, in both: its text can hold what the tracker
+        # answered, which would enter the model's conversation and the log.
+        except (httpx2.HTTPError, httpx2.InvalidURL) as error:
+            return look_up(call, f"the tracker could not be reached: {type(error).__name__}")
         except (ValueError, LookupError, TypeError, ArithmeticError, RecursionError) as error:
-            return look_up(call, f"the tracker's answer was not an issue: {error!r}")
+            return look_up(call, f"the tracker's answer was not an issue: {type(error).__name__}")
 
     def look_up(call: ToolCall, failure: str) -> ToolResult:
         """After an answer that does not say whether the issue exists.

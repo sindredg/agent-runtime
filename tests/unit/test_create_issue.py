@@ -16,7 +16,7 @@ import pytest
 from runtime.tools import default_tools
 from runtime.tools.base import CheckOutcome, ToolCall, ToolResult
 from runtime.tools.create_issue import CREATE_WITHIN, MARGIN, create_issue_tool
-from runtime.tools.trackers import FakeTracker
+from runtime.tools.trackers import FakeTracker, GiteaTracker
 
 URL = "http://tracker.test"
 CALL = ToolCall(
@@ -304,6 +304,71 @@ def test_an_answer_that_is_neither_created_nor_refused_is_looked_up(
     built = create_issue_tool(FakeTracker(URL), transport=httpx2.MockTransport(store_then_answer))
     assert built.run(CALL) == ToolResult("created issue 1: CI is red")
     assert [request.method for request in tracker.requests] == ["POST", "GET"]
+
+
+# What the tracker wrote stays out of the result: it would enter the model's
+# conversation and the step log.
+
+WRITTEN = "TRACKER-WRITTEN-TEXT"
+LONG = f"{WRITTEN} " * 50
+HOSTILE: dict[str, Any] = {
+    "body-not-utf8": lambda: httpx2.Response(
+        201, content=LONG.encode() + b"\xff", headers={"content-type": "application/json"}
+    ),
+    "number-is-text": lambda: httpx2.Response(201, json={"id": LONG, "number": LONG}),
+    "protocol-error": lambda: httpx2.RemoteProtocolError(LONG),
+    "read-error": lambda: httpx2.ReadError(LONG),
+    "500-with-a-body": lambda: httpx2.Response(500, text=LONG),
+    "422-with-a-body": lambda: httpx2.Response(422, text=LONG),
+    "redirect-to-a-bad-url": lambda: httpx2.Response(
+        302, headers={"Location": f"http://[{WRITTEN}"}
+    ),
+    "redirect-too-long": lambda: httpx2.Response(
+        302, headers={"Location": f"?{WRITTEN}" + "x" * 65_500}
+    ),
+}
+TRACKERS: dict[str, Any] = {
+    "fake": FakeTracker(URL),
+    "gitea": GiteaTracker(URL, "owner/repo", "token123"),
+}
+
+
+@pytest.mark.parametrize("kind", TRACKERS)
+@pytest.mark.parametrize("name", HOSTILE)
+def test_a_failed_create_holds_nothing_the_tracker_wrote(kind: str, name: str) -> None:
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        if request.method == "POST":
+            made = HOSTILE[name]()
+            if isinstance(made, Exception):
+                raise made
+            return cast(httpx2.Response, made)
+        if request.url.path.endswith("/user"):
+            return httpx2.Response(200, json={"login": "bot"})
+        return httpx2.Response(200, json=[], headers={"X-Total-Count": "0"})
+
+    built = create_issue_tool(TRACKERS[kind], transport=httpx2.MockTransport(answer))
+    result = built.run(CALL)
+    # Plain values: on a failure pytest would print the whole text.
+    failed, holds_text, length = result.is_error, WRITTEN in result.content, len(result.content)
+    assert failed
+    assert not holds_text
+    assert length < 200
+
+
+def test_a_redirect_the_client_cannot_read_is_looked_up(tracker: Tracker) -> None:
+    """The issue may be stored. Told the call failed, the model may open a second one."""
+
+    # Short enough to parse, too long once joined to the request's URL: that is
+    # the case where the client raises InvalidURL, which is not an HTTPError.
+
+    def store_then_answer(request: httpx2.Request) -> httpx2.Response:
+        stored = tracker(request)
+        if request.method != "POST":
+            return stored
+        return httpx2.Response(302, headers={"Location": "?" + "x" * 65_520})
+
+    built = create_issue_tool(FakeTracker(URL), transport=httpx2.MockTransport(store_then_answer))
+    assert built.run(CALL) == ToolResult("created issue 1: CI is red")
 
 
 # One deadline for the request that opens the issue (ADR 0025)
