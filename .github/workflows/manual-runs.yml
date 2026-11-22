@@ -17,7 +17,8 @@ on:
     inputs:
       suite:
         description: >-
-          kills, kills-after-tool-ran (their must-fail run), contract, switched-off,
+          kills, kills-after-tool-ran (their must-fail run), contract, notify-timing
+          (G12's timed run, always on the fake provider), switched-off,
           switched-off-rehearsal (an entry of the Claude API on the fake provider),
           or switched-off-all (every entry of the fake provider, whatever provider is picked)
         type: choice
@@ -25,6 +26,7 @@ on:
           - kills
           - kills-after-tool-ran
           - contract
+          - notify-timing
           - switched-off
           - switched-off-rehearsal
           - switched-off-all
@@ -73,6 +75,8 @@ on:
           - takeover-wait-for-a-request-off
           - create-deadline-off
           - abortive-close-off
+          - notify-loop-off
+          - notify-row-off
       provider:
         description: fake costs nothing; claude waits for a reviewer and costs money
         type: choice
@@ -91,10 +95,12 @@ jobs:
       ${{ startsWith(inputs.suite, 'switched-off')
       && format('{0} {1}', inputs.suite, inputs.switched_off) || inputs.suite }}
       on the fake provider
-    # A rehearsal never reaches the job that holds the key, whatever provider was picked.
-    # Every entry of the fake provider runs in the jobs below instead.
+    # A rehearsal and the timed notification run never reach the job that holds
+    # the key, whatever provider was picked. Every entry of the fake provider
+    # runs in the jobs below instead.
     if: >-
-      (inputs.provider == 'fake' || inputs.suite == 'switched-off-rehearsal')
+      (inputs.provider == 'fake' || inputs.suite == 'switched-off-rehearsal'
+      || inputs.suite == 'notify-timing')
       && inputs.suite != 'switched-off-all'
     runs-on: ubuntu-26.04
     timeout-minutes: 40
@@ -140,6 +146,10 @@ jobs:
       - name: Switched-off run
         if: inputs.suite == 'switched-off'
         run: make switched-off
+      # G12 (b): 50 questions, each first delivery within 5 s of its park.
+      - name: Timed notification run
+        if: inputs.suite == 'notify-timing'
+        run: make notify-timing
       # Every step of an entry of the Claude API, on the fake provider. Not a result.
       - name: Rehearsal of a switched-off run
         if: inputs.suite == 'switched-off-rehearsal'
@@ -147,7 +157,7 @@ jobs:
       - name: Results
         if: always()
         run: |
-          for file in .kills/*/results.jsonl .chaos/results.jsonl; do
+          for file in .kills/*/results.jsonl .chaos/results.jsonl .notify-timing/results.jsonl; do
             if [ -f "$file" ]; then echo "== $file"; cat "$file"; fi
           done
       - name: Service logs
@@ -246,7 +256,7 @@ jobs:
       on ${{ inputs.model }}
     if: >-
       inputs.provider == 'claude' && inputs.suite != 'switched-off-rehearsal'
-      && inputs.suite != 'switched-off-all'
+      && inputs.suite != 'switched-off-all' && inputs.suite != 'notify-timing'
     runs-on: ubuntu-26.04
     environment: claude-api
     # One paid run at a time. A run in progress is never cancelled: that

@@ -132,6 +132,10 @@ class Chaos:
         self.tracker = httpx2.Client(
             base_url=os.environ.get("FAKE_TRACKER_URL", "http://127.0.0.1:8002"), timeout=10
         )
+        # Where the workers post a parked job's question (ADR 0029).
+        self.receiver = httpx2.Client(
+            base_url=os.environ.get("FAKE_RECEIVER_URL", "http://127.0.0.1:8003"), timeout=10
+        )
         self.lease = SHORT_LEASE
         self.failpoint = ""
 
@@ -432,7 +436,7 @@ def chaos() -> Iterator[Chaos]:
     try:
         yield stack
     finally:
-        for client in (stack.api, stack.provider, stack.tracker):
+        for client in (stack.api, stack.provider, stack.tracker, stack.receiver):
             client.close()
 
 

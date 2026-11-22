@@ -58,6 +58,7 @@ STALLED = "tests/integration/test_stalled_tool_call.py"
 CREATE_ISSUE_TESTS = "tests/unit/test_create_issue.py"
 WATCHER = "tests/unit/test_workspace_watcher.py"
 APPROVAL = "tests/integration/test_approval.py"
+CHAOS_NOTIFY = "tests/chaos/test_notify.py"
 CHAOS_APPROVAL = "tests/chaos/test_approval.py"
 BACKOFF_WORKER = "tests/integration/test_backoff_worker.py"
 BUSY = f"{BACKOFF_WORKER}::test_a_busy_provider_makes_the_job_wait_and_then_finish"
@@ -170,6 +171,16 @@ CHANGED_SIGNATURES = (
             if isinstance(signature, str) and signature:
                 block["signature"] = ("B" if signature[0] == "A" else "A") + signature[1:]
 """
+)
+
+# Every run of G12 ends on the question that never reached the receiver.
+NOTIFY_EXPECT = tuple(
+    Expect(f"{CHAOS_NOTIFY}::{test}", "assert missing == []")
+    for test in (
+        "test_every_question_reaches_the_receiver_exactly_once_when_nothing_fails",
+        "test_every_question_reaches_the_receiver_when_workers_are_killed",
+        "test_every_question_reaches_the_receiver_after_it_was_down",
+    )
 )
 
 ENTRIES: dict[str, SwitchedOff] = {
@@ -1000,6 +1011,35 @@ ENTRIES: dict[str, SwitchedOff] = {
                 'assert server.ended == ["reset"]',
             ),
         ),
+    ),
+    # G12: a parked job tells the operator (ADR 0029)
+    "notify-loop-off": SwitchedOff(
+        issue=75,
+        what="the loop in every worker that posts a parked job's question",
+        edits=(
+            Edit(
+                "src/runtime/worker/__main__.py",
+                "            if config.notify_url is not None:\n"
+                "                tasks.create_task("
+                "keep_notifying(engine, config.notify_url, stop))\n",
+                "            pass  # switched off\n",
+            ),
+        ),
+        stack="chaos",
+        expect=NOTIFY_EXPECT,
+    ),
+    "notify-row-off": SwitchedOff(
+        issue=75,
+        what="the notification row the park writes with the job's move",
+        edits=(
+            Edit(
+                "src/runtime/store/held.py",
+                "        statement = statement.add_cte(notice)\n",
+                "        del notice  # switched off\n",
+            ),
+        ),
+        stack="chaos",
+        expect=NOTIFY_EXPECT,
     ),
 }
 

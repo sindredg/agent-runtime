@@ -1,5 +1,5 @@
 .PHONY: all up up-claude down clean logs test integration escape chaos lab kills kills-claude
-.PHONY: switched-off switched-off-rehearsal
+.PHONY: switched-off switched-off-rehearsal notify-timing
 
 # The group that owns the Docker socket. The worker joins it to start a
 # container for each sandboxed tool call. Every compose command needs it.
@@ -64,6 +64,12 @@ chaos:
 	chmod 777 .chaos
 	docker compose -f docker-compose.yml -f docker-compose.chaos.yml up --build --wait
 	uv run --frozen pytest -v -s tests/chaos
+
+# G12's timed run: 50 questions on the stack of `make up`, no kill, each
+# first delivery within 5 s of its park. Records in .notify-timing/.
+# Recorded runs start from the Manual runs workflow (ADR 0020).
+notify-timing: up
+	uv run --frozen pytest -v -s tests/notify_timing
 
 # One switched-off run from scripts/switched_off.py, named by SWITCHED_OFF:
 # switches one mechanism off in the checkout, starts the stack, runs the tests
