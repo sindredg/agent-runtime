@@ -81,6 +81,19 @@ of 5 tests failed on their named assertion.
 With the bound off, the test with two workers and a stalled tracker ends
 with two issues for one call.
 
+Three more came later, each run once from `main` on the fake provider. Each
+test failed on its named assertion.
+
+| Entry | Mechanism switched off | Stack | Tests | Run |
+|---|---|---|---|---|
+| `notify-loop-off` | The loop in every worker that posts a parked job's question | Chaos | 3 | [45032321971](https://github.com/sindredg/agent-runtime/actions/runs/45032321971), `30108d4` |
+| `notify-row-off` | The notification row the park writes with the job's move | Chaos | 3 | [45032324614](https://github.com/sindredg/agent-runtime/actions/runs/45032324614), `30108d4` |
+| `tool-env-passed-on` | The tool container's environment, which holds nothing of the worker's | Normal | 1 | [45047751328](https://github.com/sindredg/agent-runtime/actions/runs/45047751328), `7096a5c` |
+
+The first two guard the notification ([results](notify.md#with-the-mechanism-off)). With
+the third, the secret test finds the provider key and the tracker token in
+a tool result and in two answers of the API.
+
 The one entry on the Claude API, `thinking-signature-changed`, has
 [its own run](kill-runs.md#with-the-stored-signature-changed).
 

@@ -19,7 +19,8 @@ Sources, read on 2026-11-21:
 - [12-Factor Agents](https://github.com/humanlayer/12-factor-agents/tree/d20c728368bf9c189d6d7aab704744decb6ec0cc) at commit `d20c728` (2025-09-21). It has no release.
 - [AWS Well-Architected Framework](https://docs.aws.amazon.com/wellarchitected/latest/framework/reliability.html), reliability section, last updated 2026-11-16. The separate pillar paper is marked historical.
 
-Code lines are read at commit `878cb3a`.
+Code lines are read at commit `878cb3a`, factor 7 at `7096a5c`. Many have
+moved since ([issue 201](https://github.com/sindredg/agent-runtime/issues/201)).
 
 | Status | Meaning |
 |---|---|
@@ -54,7 +55,7 @@ Code lines are read at commit `878cb3a`.
 | 4 Tools are just structured outputs | tested. The registry maps a name to code; an unknown name is an error result. | [base.py:123](../src/runtime/tools/base.py#L123), [agent.py:244](../src/runtime/worker/agent.py#L244) | [test_worker.py:133](../tests/integration/test_worker.py#L133) |
 | 5 Unify execution state and business state | tested. The step log is the source of truth; a takeover replays it. | [steps.py:82](../src/runtime/store/steps.py#L82), [replay.py:168](../src/runtime/worker/replay.py#L168) | [test_kills.py:66](../tests/chaos/test_kills.py#L66) |
 | 6 Launch/Pause/Resume with simple APIs | tested for submit, list, cancel and approve. No pause command. | [app.py:136](../src/runtime/api/app.py#L136), [app.py:204](../src/runtime/api/app.py#L204), [app.py:240](../src/runtime/api/app.py#L240) | [test_api.py:154](../tests/integration/test_api.py#L154), [test_api.py:898](../tests/integration/test_api.py#L898), [test_approval.py:140](../tests/integration/test_approval.py#L140), [test_api_list.py:54](../tests/integration/test_api_list.py#L54) |
-| 7 Contact humans with tool calls | tested without failures: a gated call's question is posted to `NOTIFY_URL`, not yet across a kill. The model has no tool to ask a person. | [agent.py:411](../src/runtime/worker/agent.py#L411), [notify.py:88](../src/runtime/worker/notify.py#L88) | [test_end_to_end.py:229](../tests/integration/test_end_to_end.py#L229), [issue 75](https://github.com/sindredg/agent-runtime/issues/75) |
+| 7 Contact humans with tool calls | tested: a parked job's question is posted to `NOTIFY_URL` at least once, also across kills and a receiver that was down. The model has no tool to ask a person. | [agent.py:422](../src/runtime/worker/agent.py#L422), [notify.py:128](../src/runtime/worker/notify.py#L128) | [test_notify.py:214](../tests/chaos/test_notify.py#L214), [Notification results](results/notify.md) |
 | 8 Own your control flow | tested. The worker breaks before a gated call and writes the intent before a tool runs. | [agent.py:411](../src/runtime/worker/agent.py#L411), [agent.py:560](../src/runtime/worker/agent.py#L560) | [test_approval.py:145](../tests/chaos/test_approval.py#L145), [test_kills.py:173](../tests/chaos/test_kills.py#L173) |
 | 9 Compact Errors into Context Window | tested for an error as a result. Repeated errors are not capped. | [agent.py:244](../src/runtime/worker/agent.py#L244) | [Bad tool output](results/controls.md#bad-tool-output), [issue 168](https://github.com/sindredg/agent-runtime/issues/168) |
 | 10 Small, Focused Agents | n/a: agent design. The runtime bounds a job by tokens and time, not by steps. | [budget.py:62](../src/runtime/worker/budget.py#L62) | |
@@ -105,5 +106,4 @@ runtime are listed. Posts: [Scaling Managed Agents](https://www.anthropic.com/re
 
 1. Injected instructions in tool output are not detected or tested (ASI01, [issue 160](https://github.com/sindredg/agent-runtime/issues/160)).
 2. No check of a job's outcome before it counts as `succeeded` ([issue 159](https://github.com/sindredg/agent-runtime/issues/159)).
-3. Nobody is told when a job waits for a person (factor 7, factor 11, [issue 75](https://github.com/sindredg/agent-runtime/issues/75)).
-4. No backup, no recovery objective, and no metrics or alarms (REL 6 [issue 177](https://github.com/sindredg/agent-runtime/issues/177), REL 9 [issue 178](https://github.com/sindredg/agent-runtime/issues/178), REL 13 [issue 179](https://github.com/sindredg/agent-runtime/issues/179)).
+3. No backup, no recovery objective, and no metrics or alarms (REL 6 [issue 177](https://github.com/sindredg/agent-runtime/issues/177), REL 9 [issue 178](https://github.com/sindredg/agent-runtime/issues/178), REL 13 [issue 179](https://github.com/sindredg/agent-runtime/issues/179)).
