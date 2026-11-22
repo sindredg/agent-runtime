@@ -12,6 +12,10 @@ The CLI shows the tool, its input and the reason for the question. To answer,
 send the question number with `runtime approve` or `runtime deny`.
 See [a job that asks](usage.md#a-job-that-asks) for an example.
 
+With [`NOTIFY_URL`](settings.md) set, a worker also posts the question
+there, at least once ([ADR 0029](adr/0029-notify-from-a-row-the-park-writes.md),
+[results](results/notify.md)).
+
 ## Which calls are asked about
 
 Every call needs approval if the tool sets `needs_approval` or the job

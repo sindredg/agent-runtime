@@ -41,8 +41,8 @@ clean` stops the stack and deletes its database.
 
 ## What is built
 
-Jobs can wait for approval, run shell commands in a sandbox and enforce
-token budgets and deadlines. See [Architecture](docs/architecture.md) for
+Jobs can wait for approval and post the question to an operator's URL, run
+shell commands in a sandbox and enforce token budgets and deadlines. See [Architecture](docs/architecture.md) for
 how the pieces fit together and [Known limits](docs/limits.md) for the
 boundaries of each guarantee.
 
@@ -64,12 +64,16 @@ such a run did not reach is named with its result.
 | Bad tool output does not break a job | Tested | [100 MB cut to 64 KiB, the job goes on](docs/results/controls.md#bad-tool-output) |
 | Provider rate limits slow jobs, they do not fail them | Tested for one job. No limit shared by workers. | [One job waits out 60 s of 429s](docs/results/controls.md#a-busy-provider-slows-a-job) |
 | The step log cannot be changed without detection | Tested, with [stated limits](docs/step-log-chain.md#what-it-does-not-catch) | [Changes refused or found; 421 jobs verified](docs/results/durability.md#the-step-log-cannot-be-changed-without-detection) |
+| A job that waits for a person tells the operator, at least once | Tested. In the kill run the receiver holds each POST 1.5 s. | [Every question arrived, in three runs of 20 jobs](docs/results/notify.md) |
 | Throughput scales with workers | Not measured | |
 
-Every result is from one run at commit `1f57ee4`, on one machine, against
-the fake provider. Seven switched-off runs are from `11b6792` and one on the
+Every result except the notification's is from one run at commit `1f57ee4`,
+on one machine, against the fake provider. Seven switched-off runs are from `11b6792` and one on the
 Claude API from `5a5bfa6`, on GitHub with public logs; two are older. Each
 names its commit. The run, and what it does not show: [Results](docs/results/README.md).
+
+The notification came after that run. Its results are from runs on GitHub
+from `main` at `30108d4` and `7096a5c`, against the fake provider.
 
 The fake provider is compared with the Claude API by a contract test that is
 started by hand: [The contract test](docs/contract-test.md). Eight single

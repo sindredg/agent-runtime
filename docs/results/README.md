@@ -4,7 +4,7 @@ Each guarantee has a test with a pass line that was fixed before the run, and
 a run with the mechanism switched off to show that the test can fail.
 
 The table with one line per guarantee is in the
-[README](../../README.md#results). The evidence is on four pages:
+[README](../../README.md#results). The evidence is on five pages:
 
 - [Durability](durability.md): surviving a lost worker, unsafe tool
   calls, stale workers, crash loops, the step log.
@@ -13,17 +13,16 @@ The table with one line per guarantee is in the
   spend and do.
 - [Switched-off runs from the list](switched-off.md): each mechanism
   removed, and how its tests ended.
+- [A parked job tells the operator](notify.md): G12, from runs on GitHub
+  after the run below.
 
 Jobs that ran with a real model, which are not the evidence for a guarantee:
 [Runs against the Claude API](api.md) and [Kill run results](kill-runs.md).
 
-This page has what the runs share: the run, how a kill run works, and what
-the results do not show.
-
 ## The run
 
-Every result is from one run of every suite at one commit, on one machine
-with no other test run, in this order:
+Every result except G12's is from one run of every suite at one commit, on
+one machine with no other test run, in this order:
 
 ```mermaid
 flowchart LR
