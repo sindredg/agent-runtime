@@ -164,10 +164,10 @@ def test_the_style_on_the_page_is_the_one_the_policy_allows() -> None:
     (style,) = parsed.style
     digest = base64.b64encode(hashlib.sha256(style.encode()).digest()).decode()
     # The whole policy, written out: a source added to it must fail here.
-    assert page.CONTENT_SECURITY_POLICY == (
+    assert (
         f"default-src 'none'; style-src 'sha256-{digest}';"
         " base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
-    )
+    ) == page.CONTENT_SECURITY_POLICY
 
 
 def test_no_jobs_says_so() -> None:
