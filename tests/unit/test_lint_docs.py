@@ -127,3 +127,9 @@ def test_a_line_link_names_a_commit(tmp_path: Path, target: str, expected: int) 
     assert result.returncode == expected, result.stderr
     if expected:
         assert "a line link moves with the code" in result.stderr
+
+
+def test_a_line_link_in_a_code_span_is_an_example(tmp_path: Path) -> None:
+    page(tmp_path, "one\n", "code.py")
+    result = lint(page(tmp_path, GOOD + "\nWritten as `[code.py:1](code.py#L1)`.\n"))
+    assert result.returncode == 0, result.stderr

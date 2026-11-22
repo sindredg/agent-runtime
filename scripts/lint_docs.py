@@ -90,7 +90,8 @@ def anchors(text: str) -> set[str]:
 
 
 def _broken_links(path: Path, lines: list[str]) -> Iterator[str]:
-    prose = "\n".join(line for _, line in _prose(lines))
+    # Code spans are examples, not links.
+    prose = _CODE.sub("", "\n".join(line for _, line in _prose(lines)))
     for target in _LINK.findall(prose):
         if _LINE.search(target) and not _PERMALINK.match(target):
             yield f"link to {target}: a line link moves with the code; link the file at a commit"

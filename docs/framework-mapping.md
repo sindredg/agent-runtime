@@ -19,8 +19,8 @@ Sources, read on 2026-11-21:
 - [12-Factor Agents](https://github.com/humanlayer/12-factor-agents/tree/d20c728368bf9c189d6d7aab704744decb6ec0cc) at commit `d20c728` (2025-09-21). It has no release.
 - [AWS Well-Architected Framework](https://docs.aws.amazon.com/wellarchitected/latest/framework/reliability.html), reliability section, last updated 2026-11-16. The separate pillar paper is marked historical.
 
-Code links point at commit `5d7c43b`, the same code each row was written
-against, so they stay on their line.
+Code links point at commit `5d7c43b`, so they stay on their line. Each
+linked line holds the same text as when its row was written.
 
 | Status | Meaning |
 |---|---|

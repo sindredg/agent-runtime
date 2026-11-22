@@ -26,8 +26,8 @@ The requirements were read at commit
 of the APTS repository, which states version 0.1.0. The repository has no
 tag for the version, so the commit is the reference.
 
-Code links point at commit `5d7c43b`, the same code each row was written
-against, so they stay on their line. Other frameworks:
+Code links point at commit `5d7c43b`, so they stay on their line. Each
+linked line holds the same text as when its row was written. Other frameworks:
 [Framework mapping](framework-mapping.md).
 
 ## Status
