@@ -1049,7 +1049,7 @@ def test_an_edit_outside_the_code_and_its_migrations_is_refused(
 
 
 def test_every_entry_edits_the_code_or_its_migrations_only() -> None:
-    assert len(switched_off.ENTRIES) == 40
+    assert len(switched_off.ENTRIES) == 41
     for entry in switched_off.ENTRIES.values():
         assert switched_off.edit_path_problems(entry) == []
     paths = {edit.path for e in switched_off.ENTRIES.values() for edit in e.edits}

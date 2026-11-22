@@ -1041,6 +1041,33 @@ ENTRIES: dict[str, SwitchedOff] = {
         stack="chaos",
         expect=NOTIFY_EXPECT,
     ),
+    "tool-env-passed-on": SwitchedOff(
+        issue=169,
+        what="the tool container's environment, which holds nothing of the worker's",
+        edits=(
+            Edit(
+                "src/runtime/sandbox/runner.py",
+                "import logging\n",
+                "import logging\nimport os  # switched off\n",
+            ),
+            Edit(
+                "src/runtime/sandbox/runner.py",
+                '        "User": settings.user,\n        "WorkingDir": WORKDIR,\n',
+                '        "User": settings.user,\n'
+                '        "Env": [f"{name}={os.environ.get(name, \'\')}"'
+                ' for name in ("ANTHROPIC_API_KEY", "TRACKER_TOKEN")],  # switched off\n'
+                '        "WorkingDir": WORKDIR,\n',
+            ),
+        ),
+        stack="up",
+        expect=(
+            Expect(
+                "tests/integration/test_secret_canary.py"
+                "::test_no_secret_reaches_a_step_a_log_line_or_an_answer_of_the_api",
+                "a secret was found in:",
+            ),
+        ),
+    ),
 }
 
 
