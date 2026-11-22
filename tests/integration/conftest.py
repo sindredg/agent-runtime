@@ -355,15 +355,27 @@ class Stack:
         )
 
     def run[T](
-        self, body: Callable[[AsyncEngine, AnthropicProvider], Awaitable[T]], api_key: str = "test"
+        self,
+        body: Callable[[AsyncEngine, AnthropicProvider], Awaitable[T]],
+        api_key: str = "test",
+        on_request: Callable[[httpx2.Request], Awaitable[None]] | None = None,
     ) -> T:
+        """Run `body` with an engine and a provider. `on_request` sees each request to it."""
+
         async def go() -> T:
             engine = create_engine(self.database_url)
-            provider = AnthropicProvider(api_key=api_key, base_url=self.fake_provider_url)
+            http = None
+            if on_request is not None:
+                http = httpx2.AsyncClient(timeout=60, event_hooks={"request": [on_request]})
+            provider = AnthropicProvider(
+                api_key=api_key, base_url=self.fake_provider_url, http_client=http
+            )
             try:
                 return await body(engine, provider)
             finally:
                 await provider.aclose()
+                if http is not None:
+                    await http.aclose()
                 await engine.dispose()
 
         return asyncio.run(go())
@@ -388,6 +400,7 @@ class Stack:
         tools: ToolRegistry = FIXED,
         default_model: str = "hello",
         api_key: str = "test",
+        on_request: Callable[[httpx2.Request], Awaitable[None]] | None = None,
     ) -> Ran:
         """Create one job, claim it, run it, and read back everything about it."""
 
@@ -402,7 +415,7 @@ class Stack:
                 assert job is not None
                 return job, await read_steps(conn, job.id)
 
-        job, steps = self.run(body, api_key)
+        job, steps = self.run(body, api_key, on_request)
         return Ran(job, steps, self.requests_for(job))
 
 
