@@ -240,17 +240,38 @@ def logging_as_the_worker() -> Iterator[None]:
     logging.getLogger("httpx2").setLevel(quieted)
 
 
+class Kept(logging.Handler):
+    """Keeps every record the root logger hands it."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+
 @pytest.mark.usefixtures("logging_as_the_worker")
-def test_a_delivered_posts_address_is_not_logged(capfd: pytest.CaptureFixture[str]) -> None:
-    """httpx2 logs each answered request with its URL, which can hold a token."""
+def test_a_delivered_posts_address_is_not_logged() -> None:
+    """httpx2 logs each answered request with its URL, which can hold a token.
+
+    The records are read as the root logger gets them, under the worker's
+    logging setup: a record held back by a logger's level never gets there.
+    """
+    kept = Kept()
+    logging.getLogger().addHandler(kept)
 
     async def run() -> int:
         async with serving(create_app()) as url:
-            return await post(f"{url}/notifications?key=tokenInQuery", DUE)
+            status = await post(f"{url}/notifications?key=tokenInQuery", DUE)
+        logging.getLogger("runtime.worker").info("posted")
+        return status
 
     assert asyncio.run(run()) == 200
-    captured = capfd.readouterr()
-    assert "tokenInQuery" not in captured.err + captured.out
+    # The handler sees what the worker logs at INFO.
+    assert "posted" in [record.getMessage() for record in kept.records]
+    for record in kept.records:
+        assert "tokenInQuery" not in record.getMessage(), record.name
 
 
 def test_a_cancelled_wait_cancels_the_post_too() -> None:
