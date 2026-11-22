@@ -105,7 +105,8 @@ def create_issue_tool(
             return look_up(call, str(error))
         # The error's type only, in both: its text can hold what the tracker
         # answered, which would enter the model's conversation and the log.
-        except httpx2.HTTPError as error:
+        # OSError: the client lets a TLS error through as it is.
+        except (httpx2.HTTPError, OSError) as error:
             return look_up(call, f"the tracker could not be reached: {type(error).__name__}")
         except (
             httpx2.InvalidURL,  # A redirect in the answer that the client cannot read.

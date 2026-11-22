@@ -3,6 +3,7 @@
 import asyncio
 import dataclasses
 import json
+import ssl
 import threading
 import time
 from collections.abc import Iterator
@@ -122,8 +123,15 @@ def test_a_tracker_that_fails_gives_an_error_result(tracker: Tracker, answer: An
 
 # A request that got no answer: the tracker may have stored the issue all the same
 
-LOST = [httpx2.ReadTimeout("slow"), httpx2.RemoteProtocolError("the connection broke")]
-lost_answers = pytest.mark.parametrize("lost", LOST, ids=["timeout", "broken-connection"])
+LOST = [
+    httpx2.ReadTimeout("slow"),
+    httpx2.RemoteProtocolError("the connection broke"),
+    # The client does not map this one to an HTTPError.
+    ssl.SSLError("a bad record"),
+]
+lost_answers = pytest.mark.parametrize(
+    "lost", LOST, ids=["timeout", "broken-connection", "tls-error"]
+)
 
 
 @lost_answers
@@ -316,7 +324,16 @@ HOSTILE: dict[str, Any] = {
         201, content=LONG.encode() + b"\xff", headers={"content-type": "application/json"}
     ),
     "number-is-text": lambda: httpx2.Response(201, json={"id": LONG, "number": LONG}),
+    "number-of-4000-digits": lambda: httpx2.Response(
+        201, content=b'{"id": ' + b"9" * 4000 + b', "number": ' + b"9" * 4000 + b"}"
+    ),
+    "number-as-digits": lambda: httpx2.Response(201, json={"id": "9" * 4000, "number": "9" * 4000}),
+    "number-is-true": lambda: httpx2.Response(201, json={"id": True, "number": True}),
+    "number-is-a-fraction": lambda: httpx2.Response(201, json={"id": 1.9, "number": 1.9}),
+    "number-with-spaces": lambda: httpx2.Response(201, json={"id": " 7 ", "number": " 7 "}),
+    "number-is-zero": lambda: httpx2.Response(201, json={"id": 0, "number": 0}),
     "protocol-error": lambda: httpx2.RemoteProtocolError(LONG),
+    "tls-error": lambda: ssl.SSLError(LONG),
     "read-error": lambda: httpx2.ReadError(LONG),
     "500-with-a-body": lambda: httpx2.Response(500, text=LONG),
     "422-with-a-body": lambda: httpx2.Response(422, text=LONG),

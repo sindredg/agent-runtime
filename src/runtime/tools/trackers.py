@@ -59,6 +59,10 @@ class Unclear(Exception):
     """The tracker's answer does not say whether the issue exists."""
 
 
+# The largest issue number taken from a tracker: Gitea's is a 64-bit integer.
+MAX_ISSUE_NUMBER = 2**63 - 1
+
+
 class Tracker(Protocol):
     def client(self, transport: Network | None) -> httpx2.Client:
         """A client for reading from the tracker. `transport` replaces the network in tests."""
@@ -82,8 +86,17 @@ class Tracker(Protocol):
 
 
 def _issue(entry: Any, number_key: str) -> Issue:
-    """An issue from a tracker's JSON: its number. Raises if the entry is not one."""
-    return Issue(int(entry[number_key]))
+    """An issue from a tracker's JSON: its number. Raises if the entry is not one.
+
+    A whole number in range, as JSON sent it. `int()` would also take `true`,
+    1.9 and a string of thousands of digits, which would reach the tool result.
+    """
+    number = entry[number_key]
+    if not isinstance(number, int) or isinstance(number, bool):
+        raise TypeError("an issue number is a whole number")
+    if not 0 < number <= MAX_ISSUE_NUMBER:
+        raise ValueError("an issue number is out of range")
+    return Issue(number)
 
 
 @dataclass(frozen=True, slots=True)
