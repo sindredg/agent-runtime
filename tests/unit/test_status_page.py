@@ -50,6 +50,8 @@ TAGS = {
     "tr": set(),
     "th": set(),
     "td": {"class"},
+    "div": {"class"},
+    "span": set(),
 }
 _ID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 _STATUS = "|".join(s.value for s in JobStatus)

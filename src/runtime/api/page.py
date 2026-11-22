@@ -29,10 +29,13 @@ REFRESH_SECONDS = 5
 
 _STYLE = (
     "body{font-family:system-ui,sans-serif;margin:1rem}"
-    "table{border-collapse:collapse;display:block;overflow-x:auto}"
+    "div.jobs{overflow-x:auto}"
+    "table{border-collapse:collapse;width:100%}"
     "th,td{text-align:left;vertical-align:top;padding:.25rem .5rem;"
     "border-bottom:1px solid GrayText;white-space:nowrap}"
-    "td.text{white-space:normal;min-width:15rem;max-width:40rem;overflow-wrap:anywhere}"
+    "td.text{white-space:normal;min-width:12rem;overflow-wrap:anywhere}"
+    "td.time{white-space:normal;min-width:6rem}"
+    "td span{white-space:nowrap}"
     "nav a{margin-right:.5rem}"
     "a[aria-current]{font-weight:bold}"
 )
@@ -57,7 +60,9 @@ def _text(value: str) -> str:
 
 
 def _time(value: datetime) -> str:
-    return escape(value.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S UTC"), quote=True)
+    # Date and time each stay whole; the cell may put them on two lines.
+    day, clock = value.astimezone(UTC).strftime("%Y-%m-%d|%H:%M:%S UTC").split("|")
+    return f"<span>{escape(day, quote=True)}</span> <span>{escape(clock, quote=True)}</span>"
 
 
 def _href(status: JobStatus | None, before: UUID | None = None, limit: int | None = None) -> str:
@@ -86,19 +91,15 @@ def _question(job: JobSummary) -> str:
 def _row(job: JobSummary) -> str:
     job_id = UUID(str(job.id))
     cells = [
-        f'<a href="/jobs/{job_id}/steps">{job_id}</a>',
-        escape(JobStatus(job.status).value, quote=True),
-        _time(job.created_at),
-        f"{int(job.tokens_used)} / {int(job.token_budget)}",
-        _time(job.deadline),
+        f'<td><a href="/jobs/{job_id}/steps">{job_id}</a></td>',
+        f"<td>{escape(JobStatus(job.status).value, quote=True)}</td>",
+        f'<td class="time">{_time(job.created_at)}</td>',
+        f"<td>{int(job.tokens_used)} / {int(job.token_budget)}</td>",
+        f'<td class="time">{_time(job.deadline)}</td>',
+        f'<td class="text">{_question(job)}</td>',
+        f'<td class="text">{_text(job.error) if job.error is not None else ""}</td>',
     ]
-    text = [_question(job), _text(job.error) if job.error is not None else ""]
-    return (
-        "<tr>"
-        + "".join(f"<td>{cell}</td>" for cell in cells)
-        + "".join(f'<td class="text">{cell}</td>' for cell in text)
-        + "</tr>"
-    )
+    return "<tr>" + "".join(cells) + "</tr>"
 
 
 def render(
@@ -114,9 +115,10 @@ def render(
     )
     if jobs:
         body = (
-            "<table><thead><tr><th>Job (its steps)</th><th>Status</th><th>Created</th>"
+            '<div class="jobs"><table><thead><tr>'
+            "<th>Job (its steps)</th><th>Status</th><th>Created</th>"
             "<th>Tokens used / budget</th><th>Deadline</th><th>Question</th><th>Error</th>"
-            "</tr></thead><tbody>" + "".join(_row(job) for job in jobs) + "</tbody></table>"
+            "</tr></thead><tbody>" + "".join(_row(job) for job in jobs) + "</tbody></table></div>"
         )
     else:
         body = "<p>No jobs.</p>"
