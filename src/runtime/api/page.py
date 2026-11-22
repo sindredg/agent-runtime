@@ -14,7 +14,7 @@ built from a job id, a status and a number only, never from text.
 import base64
 import hashlib
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import UTC, datetime
 from html import escape
 from urllib.parse import urlencode
 from uuid import UUID
@@ -29,10 +29,10 @@ REFRESH_SECONDS = 5
 
 _STYLE = (
     "body{font-family:system-ui,sans-serif;margin:1rem}"
-    "table{border-collapse:collapse}"
+    "table{border-collapse:collapse;display:block;overflow-x:auto}"
     "th,td{text-align:left;vertical-align:top;padding:.25rem .5rem;"
-    "border-bottom:1px solid GrayText}"
-    "td.text{max-width:40rem;overflow-wrap:anywhere}"
+    "border-bottom:1px solid GrayText;white-space:nowrap}"
+    "td.text{white-space:normal;min-width:15rem;max-width:40rem;overflow-wrap:anywhere}"
     "nav a{margin-right:.5rem}"
     "a[aria-current]{font-weight:bold}"
 )
@@ -57,7 +57,7 @@ def _text(value: str) -> str:
 
 
 def _time(value: datetime) -> str:
-    return escape(value.isoformat(timespec="seconds"), quote=True)
+    return escape(value.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S UTC"), quote=True)
 
 
 def _href(status: JobStatus | None, before: UUID | None = None, limit: int | None = None) -> str:
