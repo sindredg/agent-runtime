@@ -76,3 +76,34 @@ class StepView(BaseModel):
 
 class StepList(BaseModel):
     steps: list[StepView]
+
+
+class QuestionView(BaseModel):
+    """What a job in `needs_approval` waits on. The call's input is in the job's steps."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    # The number an answer names (ADR 0012).
+    seq: int
+    tool: str | None
+    reason: str | None
+
+
+class JobSummaryView(BaseModel):
+    """A job in the list: no spec and no lease, which `GET /jobs/{id}` returns."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    status: JobStatus
+    token_budget: int
+    tokens_used: int
+    deadline: datetime
+    error: str | None
+    created_at: datetime
+    # Set only while the job waits in `needs_approval`.
+    question: QuestionView | None
+
+
+class JobList(BaseModel):
+    jobs: list[JobSummaryView]
