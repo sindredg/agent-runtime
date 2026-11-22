@@ -59,6 +59,10 @@ class Unclear(Exception):
     """The tracker's answer does not say whether the issue exists."""
 
 
+# The largest issue number taken from a tracker: Gitea's is a 64-bit integer.
+MAX_ISSUE_NUMBER = 2**63 - 1
+
+
 class Tracker(Protocol):
     def client(self, transport: Network | None) -> httpx2.Client:
         """A client for reading from the tracker. `transport` replaces the network in tests."""
@@ -71,8 +75,8 @@ class Tracker(Protocol):
     async def create(
         self, http: httpx2.AsyncClient, title: str, body: str, operation_id: str
     ) -> Issue:
-        """Open the issue. Raises `Refused`, `httpx2.HTTPError`, or on a malformed answer
-        `ValueError`, `LookupError` or `TypeError`."""
+        """Open the issue. Raises `Refused`, `httpx2.HTTPError`, `OSError` (a TLS error), or
+        on a malformed answer `httpx2.InvalidURL`, `ValueError`, `LookupError` or `TypeError`."""
         ...
 
     def find(self, http: httpx2.Client, operation_id: str) -> Issue | None:
@@ -82,8 +86,17 @@ class Tracker(Protocol):
 
 
 def _issue(entry: Any, number_key: str) -> Issue:
-    """An issue from a tracker's JSON: its number. Raises if the entry is not one."""
-    return Issue(int(entry[number_key]))
+    """An issue from a tracker's JSON: its number. Raises if the entry is not one.
+
+    A whole number in range, as JSON sent it. `int()` would also take `true`,
+    1.9 and a string of thousands of digits, which would reach the tool result.
+    """
+    number = entry[number_key]
+    if not isinstance(number, int) or isinstance(number, bool):
+        raise TypeError("an issue number is a whole number")
+    if not 0 < number <= MAX_ISSUE_NUMBER:
+        raise ValueError("an issue number is out of range")
+    return Issue(number)
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,6 +168,8 @@ def _number(entry: Any) -> int:
     # bool is an int in Python, and JSON true is no issue number.
     if not isinstance(number, int) or isinstance(number, bool):
         raise Unclear("an entry has no issue number")
+    if not 0 < number <= MAX_ISSUE_NUMBER:
+        raise Unclear("an entry's issue number is out of range")
     return number
 
 
