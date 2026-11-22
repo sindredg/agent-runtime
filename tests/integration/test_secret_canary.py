@@ -183,7 +183,7 @@ def test_no_secret_reaches_a_step_a_log_line_or_an_answer_of_the_api(
         found += leaks(f"log line {number}", line)
     for route, text in answers.items():
         found += leaks(route, text)
-    assert found == []
+    assert found == [], "a secret was found in:\n" + "\n".join(found)
 
 
 def test_the_markers_are_found_where_they_are() -> None:
