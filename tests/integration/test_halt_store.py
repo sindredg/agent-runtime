@@ -36,7 +36,7 @@ from runtime.store.status import JobStatus
 from runtime.store.steps import StepKind, read_steps
 from runtime.worker.loop import keep_failing_overdue
 
-from .conftest import database_now, expire_lease, with_engine
+from .conftest import ask, database_now, expire_lease, with_engine
 
 S = JobStatus
 LATER = timedelta(hours=1)
@@ -284,11 +284,13 @@ def test_a_job_parked_while_its_cancel_is_requested_is_cancelled(database_url: s
         assert held_job is not None
         async with engine.begin() as conn:
             await cancel_job(conn, held_job.id)
+        question = await ask(engine, held_job.id, held_job.lease_epoch)
         return await held.leave_running(
             engine,
             job_id=held_job.id,
             lease_epoch=held_job.lease_epoch,
             new_status=S.NEEDS_APPROVAL,
+            question=question,
         )
 
     assert with_engine(database_url, body).status is S.CANCELLED

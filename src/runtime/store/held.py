@@ -17,6 +17,7 @@ cannot wrap them in a transaction of its own.
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
@@ -30,17 +31,19 @@ from sqlalchemy import (
     func,
     insert,
     literal,
+    null,
     select,
     update,
 )
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import insert as upsert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlalchemy.sql.elements import ColumnElement
 
 from runtime.store.jobs import Job, job_from_row
 from runtime.store.payload import check_json
-from runtime.store.schema import job_columns, jobs, step_columns, steps
+from runtime.store.schema import job_columns, jobs, notifications, step_columns, steps
 from runtime.store.status import JobStatus, can_move
 from runtime.store.steps import (
     StatusCause,
@@ -180,6 +183,27 @@ class Wait:
     error: str
 
 
+class QuestionReason(StrEnum):
+    """Why a person is asked, as the notification says it: a fixed word.
+
+    The question's own reason text is not sent. For an interrupted call it
+    can hold a tool check's error, which the system behind the tool writes.
+    """
+
+    # The tool needs approval before each run. Nothing of the call has run.
+    BEFORE_RUN = "before_run"
+    # A worker went away during the call. It may have run.
+    INTERRUPTED = "interrupted"
+
+
+@dataclass(frozen=True, slots=True)
+class Question:
+    """The question a job is parked on: the `seq` of its `approval_requested` step."""
+
+    seq: int
+    reason: QuestionReason
+
+
 async def leave_running(
     engine: AsyncEngine,
     *,
@@ -187,6 +211,7 @@ async def leave_running(
     lease_epoch: int,
     new_status: JobStatus,
     wait: Wait | None = None,
+    question: Question | None = None,
 ) -> Job:
     """Move the held job from `running` to `new_status` and give up the lease.
 
@@ -199,6 +224,11 @@ async def leave_running(
 
     A move to `waiting` takes `wait`. It sets `not_before` to the database
     clock plus `wait.seconds`, never from the worker's clock.
+
+    A park takes `question`, the question the job waits on, and writes its
+    row in `notifications` in the same statement (ADR 0029). A park that
+    turns into a cancel writes none. A row for that question that is
+    already there stays as it is.
 
     A park, a wait and a cancel also write a `status_changed` step, in the
     same statement: from `running`, to the status the job got, and the
@@ -213,6 +243,12 @@ async def leave_running(
         raise ValueError(f"a running job cannot move to {new_status!r}")
     if (wait is not None) != (new_status is JobStatus.WAITING):
         raise ValueError("a move to waiting takes a wait, and only that move does")
+    if (question is not None) != (new_status is JobStatus.NEEDS_APPROVAL):
+        raise ValueError("a park takes the question, and only a park does")
+    if question is not None and (
+        question.seq < 1 or not isinstance(question.reason, QuestionReason)
+    ):
+        raise ValueError(f"not a question: {question!r}")
     waiting: dict[str, Any] = {}
     if wait is not None:
         if not 0 <= wait.seconds < float("inf") or wait.attempt < 1:
@@ -291,6 +327,45 @@ async def leave_running(
     # The step is in a CTE that the main query does not read. Postgres runs
     # it all the same, and in the same statement as the move.
     statement = select(*held.c).add_cte(step)
+    if question is not None:
+        # Only for a job that was parked: one whose cancel was requested is
+        # cancelled by this statement, and nobody needs to be asked.
+        # Nothing on a conflict: the row there already tells the person,
+        # and an update would reset its tries.
+        #
+        # The key to `steps` alone would take any step with that seq, the
+        # `status_changed` step of this very statement too: a key is checked
+        # at its end. So the seq must also be the job's last question, as
+        # the log was before this statement. If it is not, the reason is
+        # NULL, the column refuses it, and the whole park is undone.
+        asked = (
+            select(func.max(steps.c.seq))
+            .where(
+                steps.c.job_id == job_id,
+                steps.c.kind == StepKind.APPROVAL_REQUESTED.value,
+            )
+            .scalar_subquery()
+        )
+        notice = (
+            upsert(notifications)
+            .from_select(
+                ["job_id", "question", "reason"],
+                select(
+                    held.c.id,
+                    literal(question.seq, Integer),
+                    case(
+                        (asked == question.seq, literal(question.reason.value, Text)),
+                        else_=null(),
+                    ),
+                ).where(held.c.status == JobStatus.NEEDS_APPROVAL.value),
+            )
+            .on_conflict_do_nothing(
+                index_elements=[notifications.c.job_id, notifications.c.question]
+            )
+            .returning(notifications.c.question)
+            .cte("notice")
+        )
+        statement = statement.add_cte(notice)
     return job_from_row(await _send(engine, statement, job_id, lease_epoch))
 
 
@@ -333,4 +408,12 @@ async def fail(engine: AsyncEngine, *, job_id: UUID, lease_epoch: int, error: st
     return step_from_row(await _send(engine, statement, job_id, lease_epoch))
 
 
-__all__ = ["LeaseLost", "append_step", "fail", "leave_running", "renew_lease"]
+__all__ = [
+    "LeaseLost",
+    "Question",
+    "QuestionReason",
+    "append_step",
+    "fail",
+    "leave_running",
+    "renew_lease",
+]

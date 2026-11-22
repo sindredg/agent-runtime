@@ -29,6 +29,8 @@ class StepKind(StrEnum):
     APPROVAL_GIVEN = "approval_given"
     APPROVAL_DENIED = "approval_denied"
     STATUS_CHANGED = "status_changed"
+    # A receiver took the notification of a question (ADR 0029).
+    NOTIFICATION_SENT = "notification_sent"
 
 
 class StatusCause(StrEnum):

@@ -268,7 +268,7 @@ ENTRIES: dict[str, SwitchedOff] = {
         edits=(
             Edit(
                 AGENT,
-                "            return JobStatus.QUEUED\n",
+                "            return JobStatus.QUEUED, None\n",
                 "            raise LeaseLost(job.id, lease.epoch)  # switched off\n",
             ),
         ),

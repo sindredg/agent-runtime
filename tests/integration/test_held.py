@@ -26,7 +26,7 @@ from runtime.store.schema import job_columns, jobs
 from runtime.store.status import JobStatus
 from runtime.store.steps import Step, StepConflict, StepKind, read_steps
 
-from .conftest import add_step, expire_lease, new_job, with_engine
+from .conftest import add_step, ask, expire_lease, new_job, with_engine
 
 S = JobStatus
 
@@ -64,12 +64,18 @@ def leave(new_status: JobStatus) -> Write:
         return fail
 
     async def write(engine: AsyncEngine, job_id: UUID, epoch: int) -> Job:
+        question = None
+        if new_status is S.NEEDS_APPROVAL:
+            # In the log whether or not this writer holds the job, so that
+            # the park, not the question, is what a stale writer is refused.
+            question = await ask(engine, job_id, epoch)
         return await held.leave_running(
             engine,
             job_id=job_id,
             lease_epoch=epoch,
             new_status=new_status,
             wait=WAIT if new_status is S.WAITING else None,
+            question=question,
         )
 
     return write

@@ -47,7 +47,7 @@ from runtime.store.listing import list_jobs
 from runtime.store.payload import InvalidPayload
 from runtime.store.roles import check_app_role
 from runtime.store.status import FINAL_STATUSES, JobStatus
-from runtime.store.steps import read_progress
+from runtime.store.steps import StepKind, read_progress
 
 # Most steps one request or one poll of the event stream reads.
 MAX_PAGE = 1000
@@ -284,12 +284,17 @@ def create_app(
             quiet_since = time.monotonic()
             # True while the client has been told that the job waits for approval.
             told_waiting = False
+            # Whether a step other than a delivered notification came since the
+            # last look at the status: the job may have stopped again. Kept
+            # across full pages, which are read without a look.
+            moved = False
             while not await request.is_disconnected():
                 async with engine().connect() as conn:
                     progress = await read_progress(conn, job_id, after_seq=last, limit=page_size)
                 if progress is None:
                     return
                 status, steps = progress
+                moved = moved or any(s.kind is not StepKind.NOTIFICATION_SENT for s in steps)
                 for step in steps:
                     view = StepView.model_validate(step).model_dump(mode="json")
                     # json.dumps escapes everything outside ASCII. A raw
@@ -305,12 +310,13 @@ def create_app(
                     return
                 # Said once each time the job stops there, after its steps. A
                 # job can stop there again between two polls, when it was
-                # answered and its next call asks too. New steps show that:
-                # a job that waits gets none.
+                # answered and its next call asks too. New steps show that.
+                # A job that waits gets only one kind: the step that says its
+                # question was delivered (ADR 0029), which is no new stop.
                 waiting = status is JobStatus.NEEDS_APPROVAL
-                if waiting and (steps or not told_waiting):
+                if waiting and (moved or not told_waiting):
                     yield _event("status", json.dumps({"status": status.value}))
-                told_waiting = waiting
+                told_waiting, moved = waiting, False
                 if steps:
                     quiet_since = time.monotonic()
                 elif time.monotonic() - quiet_since >= keep_alive:

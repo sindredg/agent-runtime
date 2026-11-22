@@ -83,6 +83,17 @@ REFUSED = [
     "SELECT step_hash('\\x', gen_random_uuid(), 1, 1, now(), 'error', '{}')",
     # A new id would move a job's steps under another job's row.
     "UPDATE jobs SET id = gen_random_uuid()",
+    # A notification's row is closed, never removed, and keeps what it is about.
+    "DELETE FROM notifications",
+    "UPDATE notifications SET question = 1",
+    "UPDATE notifications SET reason = 'interrupted'",
+    "UPDATE notifications SET job_id = gen_random_uuid()",
+    # Only the park inserts, and a new row is not yet tried or sent.
+    "INSERT INTO notifications (job_id, question, reason, delivered_at, closed_at)"
+    " SELECT job_id, seq, 'before_run', now(), now() FROM steps",
+    "INSERT INTO notifications (job_id, question, reason, attempts)"
+    " SELECT job_id, seq, 'before_run', 5 FROM steps",
+    "TRUNCATE notifications",
 ]
 
 

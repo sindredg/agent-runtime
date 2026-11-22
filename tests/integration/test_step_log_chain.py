@@ -264,7 +264,9 @@ def test_the_holders_writes_land_with_the_head(database_url: str) -> None:
 REFUSED = [
     "UPDATE steps SET payload = '{\"changed\": true}' WHERE job_id = $1",
     "DELETE FROM steps WHERE job_id = $1 AND seq = 3",
-    "TRUNCATE steps",
+    # CASCADE: `notifications` refers to steps, and a plain TRUNCATE is
+    # refused for that before the trigger is asked.
+    "TRUNCATE steps CASCADE",
 ]
 
 

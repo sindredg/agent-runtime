@@ -11,8 +11,9 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 from uuid import UUID
 
+import asyncpg
 import pytest
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from runtime.provider.messages import AnthropicProvider
@@ -29,13 +30,14 @@ from runtime.store.jobs import (
     get_job,
     open_question,
 )
+from runtime.store.schema import notifications
 from runtime.store.status import JobStatus
 from runtime.store.steps import Step, StepKind, read_steps
 from runtime.tools.base import CheckOutcome
 from runtime.worker.agent import run_job
 from runtime.worker.approval import DENIED, DENIED_RERUN
 
-from .conftest import Stack, expire_lease
+from .conftest import Stack, as_owner, expire_lease
 from .test_resume import PARKED, SPEC, TURNS, Acts, Script, op
 
 K = StepKind
@@ -106,6 +108,16 @@ class Person:
         async with self.engine.begin() as conn:
             await deny_job(conn, self.job_id, question)
 
+    async def notices(self) -> list[tuple[int, str]]:
+        """The job's rows in `notifications`: the question and the reason word."""
+        async with self.engine.connect() as conn:
+            found = await conn.execute(
+                select(notifications.c.question, notifications.c.reason)
+                .where(notifications.c.job_id == self.job_id)
+                .order_by(notifications.c.question)
+            )
+            return [(row.question, row.reason) for row in found]
+
     async def read(self) -> tuple[Job, list[Step]]:
         async with self.engine.begin() as conn:
             job = await get_job(conn, self.job_id)
@@ -146,6 +158,8 @@ def test_a_call_that_needs_approval_does_not_run_before_a_person_approved_it(
         await person.submit()
         assert await person.work() is S.NEEDS_APPROVAL
         parked = await person.read()
+        # The park wrote the row its notification is sent from (ADR 0029).
+        assert await person.notices() == [(3, "before_run")]
         # Asked, and nothing of the call has happened: no run, and no intent.
         assert acts.runs == []
         # Nobody may claim a job that waits for a person.
@@ -158,6 +172,8 @@ def test_a_call_that_needs_approval_does_not_run_before_a_person_approved_it(
         assert acts.runs == [(op(parked[0], "toolu_a"), "a")]
         await person.approve()
         assert await person.work() is S.SUCCEEDED
+        # One row per question, each written by its park.
+        assert await person.notices() == [(3, "before_run"), (8, "before_run")]
         return *parked, *(await person.read())
 
     parked_job, parked_steps, job, steps = with_person(stack, acts, body)
@@ -352,6 +368,8 @@ def test_an_approved_call_that_is_interrupted_is_asked_about_again(
         assert len(acts.runs) == 1
         assert await person.work(takeover=True) is S.NEEDS_APPROVAL
         assert len(acts.runs) == 1
+        # Asked again because the call was interrupted, and the row says so.
+        assert await person.notices() == [(3, "before_run"), (7, "interrupted")]
         # The second approval lets it run again, under an intent of its own.
         await person.approve()
         assert await person.work() is S.NEEDS_APPROVAL
@@ -599,6 +617,72 @@ def test_a_question_asked_before_the_worker_stopped_is_not_asked_twice(stack: St
     ]
     assert [steps[i].payload for i in (3, 4)] == [PARKED, PARKED]
     assert acts.runs == []
+
+
+def test_a_job_parked_by_the_next_worker_on_a_question_asked_before_gets_its_row(
+    stack: Stack,
+) -> None:
+    """A worker stopped between writing the question and the park. The next
+    worker parks the job on that question, and its park writes the row."""
+    acts = Acts(gated=True)
+
+    async def body(person: Person) -> tuple[JobStatus | None, list[tuple[int, str]]]:
+        await person.submit()
+        assert await person.work() is S.NEEDS_APPROVAL
+        # The park never happened: no move, no row. Only the owner may remove one.
+        owner = await asyncpg.connect(as_owner(stack.database_url), timeout=5)
+        try:
+            await owner.execute("DELETE FROM notifications WHERE job_id = $1", person.job_id)
+            await owner.execute(
+                "UPDATE jobs SET status = 'running', lease_owner = 'gone',"
+                " lease_expires_at = now() WHERE id = $1",
+                person.job_id,
+            )
+        finally:
+            await owner.close()
+        status = await person.work(takeover=True)
+        return status, await person.notices()
+
+    status, found = with_person(stack, acts, body)
+    assert status is S.NEEDS_APPROVAL
+    # The question of the first worker, seq 3. Not asked again.
+    assert found == [(3, "before_run")]
+    assert acts.runs == []
+
+
+def test_an_interrupted_call_asked_about_before_the_worker_stopped_keeps_its_reason(
+    stack: Stack,
+) -> None:
+    """The question about an interrupted call is in the log, the park is not.
+    The next worker parks on it, and its row says why it was asked."""
+    acts = Acts(gated=True)
+
+    async def body(person: Person) -> tuple[JobStatus | None, list[tuple[int, str]]]:
+        await person.submit()
+        assert await person.work() is S.NEEDS_APPROVAL
+        await person.approve()
+        await person.abandon_in_the_tool()
+        assert await person.work(takeover=True) is S.NEEDS_APPROVAL
+        owner = await asyncpg.connect(as_owner(stack.database_url), timeout=5)
+        try:
+            await owner.execute(
+                "DELETE FROM notifications WHERE job_id = $1 AND question = 7", person.job_id
+            )
+            await owner.execute(
+                "UPDATE jobs SET status = 'running', lease_owner = 'gone',"
+                " lease_expires_at = now() WHERE id = $1",
+                person.job_id,
+            )
+        finally:
+            await owner.close()
+        status = await person.work(takeover=True)
+        return status, await person.notices()
+
+    status, found = with_person(stack, acts, body)
+    assert status is S.NEEDS_APPROVAL
+    assert found == [(3, "before_run"), (7, "interrupted")]
+    # One run: the interrupted one. Nothing ran again without an answer.
+    assert len(acts.runs) == 1
 
 
 def test_an_answer_about_another_call_does_not_let_this_one_run(stack: Stack) -> None:

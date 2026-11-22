@@ -26,6 +26,7 @@ from sqlalchemy import make_url, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
 from runtime.provider.messages import AnthropicProvider
+from runtime.store import held
 from runtime.store.engine import create_engine, sqlalchemy_url
 from runtime.store.jobs import Job, claim_job, create_job, get_job
 from runtime.store.steps import Step, StepKind, append_step, read_steps
@@ -83,6 +84,37 @@ async def add_step(
         payload=payload or {},
         lease_epoch=1,
     )
+
+
+async def ask(
+    engine: AsyncEngine,
+    job_id: UUID,
+    lease_epoch: int,
+    reason: held.QuestionReason = held.QuestionReason.BEFORE_RUN,
+) -> held.Question:
+    """Write a question at the end of the job's log, as a worker does before
+    it parks the job. Returns what a park takes.
+
+    Not fenced: a test of a stale park needs the question in the log too.
+    """
+    async with engine.begin() as conn:
+        last = await read_steps(conn, job_id)
+        seq = (last[-1].seq if last else 0) + 1
+        step = await append_step(
+            conn,
+            job_id=job_id,
+            seq=seq,
+            kind=StepKind.APPROVAL_REQUESTED,
+            payload={
+                "tool_use_id": f"toolu_{seq}",
+                "name": "run_shell",
+                "input": {"command": "ls"},
+                "operation_id": f"{job_id}:toolu_{seq}",
+                "reason": "the job's spec asks for a person's approval before this tool runs",
+            },
+            lease_epoch=lease_epoch,
+        )
+    return held.Question(step.seq, reason)
 
 
 async def move_to_the_heap_end(conn: AsyncConnection, job_id: UUID, seq: int) -> None:

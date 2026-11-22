@@ -1,8 +1,8 @@
 # Jobs and steps
 
 Two tables hold a job's record: its row in `jobs` and its steps in `steps`.
-Its files are in the workspace. The migrations in `migrations/` define the
-tables.
+A third, `notifications`, holds the questions to send to a person. Its files
+are in the workspace. The migrations in `migrations/` define the tables.
 
 ## Job statuses
 
@@ -35,6 +35,7 @@ See [Approval](approval.md) and [Backoff](backoff.md) for the two ways a run can
 ```mermaid
 erDiagram
     jobs ||--o{ steps : has
+    steps ||--o| notifications : "question of"
     jobs {
         uuid id PK "uuidv7"
         text status
@@ -62,6 +63,15 @@ erDiagram
         timestamptz created_at
         bytea hash "by trigger"
     }
+    notifications {
+        uuid job_id PK
+        int question PK "seq of the question"
+        text reason "before_run or interrupted"
+        int attempts
+        timestamptz next_try
+        timestamptz delivered_at "a 2xx"
+        timestamptz closed_at "sent or no longer needed"
+    }
 ```
 
 - Lease owner and expiry are set together or not at all. Counters are not
@@ -78,6 +88,10 @@ erDiagram
   The deadline check reads it.
 - Index `jobs_status_id` on (`status`, `id`) serves the job list with a
   status filter. Without a filter the list reads the primary key.
+- The statement that parks a job writes its `notifications` row, for the
+  job's last question. A park that turns into a cancel writes none
+  ([ADR 0029](adr/0029-notify-from-a-row-the-park-writes.md)). Nothing
+  sends the rows yet.
 
 `src/runtime/store/schema.py` mirrors the tables for building statements. A
 test fails when the two differ. It does not compare the CHECK constraints or
@@ -96,6 +110,7 @@ the WHERE clauses of the partial indexes.
 | `approval_denied` | By `POST /jobs/{id}/deny` | `tool_use_id`, `operation_id`, `question` |
 | `error` | When the job fails, whoever fails it | `message` |
 | `status_changed` | With a cancel, a park for approval and a wait for a busy provider, in the same statement or transaction | `from`, `to`, `cause` (`cancel_requested`, `approval_requested` or `provider_busy`). A wait adds [its details](backoff.md#the-step). |
+| `notification_sent` | Allowed by the schema. Nothing writes it yet. | |
 
 A new kind needs a migration: the kinds are a CHECK constraint.
 
