@@ -717,6 +717,59 @@ def test_event_stream_does_not_take_a_delivered_notification_for_a_new_stop(
     assert events[4][2]["kind"] == "notification_sent"
 
 
+def test_event_stream_says_a_new_stop_that_ends_a_full_page(database_url: str) -> None:
+    """The second stop's `status_changed` step ends a full page, and the next
+    page holds only a delivered notification. The stop is still said: what
+    came on the full page counts."""
+
+    async def body(api: Api) -> list[tuple[int | None, str, Any]]:
+        job = await parked_for_approval(api)
+        events = []
+        async with asyncio.timeout(20):
+            async for event in api.follow(job.id):
+                events.append(event)
+                statuses = [e for e in events if e[1] == "status"]
+                if event[1] == "status" and len(statuses) == 1:
+                    # All inside one wait of the stream: steps 4 to 6 fill a
+                    # page of three, step 7 is the notification.
+                    answer = await api.client.post(f"/jobs/{job.id}/deny", json=QUESTION_2)
+                    assert answer.status_code == 200
+                    async with api.engine.begin() as conn:
+                        claimed = await claim_job(conn, worker_id="w2")
+                    assert claimed is not None
+                    question = await ask(api.engine, job.id, claimed.lease_epoch)
+                    await api.finish(claimed, JobStatus.NEEDS_APPROVAL, question)
+                    async with api.engine.begin() as conn:
+                        await append_step(
+                            conn,
+                            job_id=job.id,
+                            seq=7,
+                            kind=StepKind.NOTIFICATION_SENT,
+                            payload={"question": 5},
+                            lease_epoch=claimed.lease_epoch,
+                        )
+                elif event[1] == "status":
+                    async with api.engine.begin() as conn:
+                        await cancel_job(conn, job.id)
+        return events
+
+    events = api_test(database_url, body, poll_interval=1.0, page_size=3)
+    assert [(event_id, name) for event_id, name, _ in events] == [
+        (1, "step"),
+        (2, "step"),
+        (3, "step"),
+        (None, "status"),
+        (4, "step"),
+        (5, "step"),
+        (6, "step"),
+        (7, "step"),
+        (None, "status"),
+        (8, "step"),
+        (None, "end"),
+    ]
+    assert events[7][2]["kind"] == "notification_sent"
+
+
 ANSWERS = [("approve", StepKind.APPROVAL_GIVEN), ("deny", StepKind.APPROVAL_DENIED)]
 
 

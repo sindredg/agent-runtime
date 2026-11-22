@@ -650,6 +650,41 @@ def test_a_job_parked_by_the_next_worker_on_a_question_asked_before_gets_its_row
     assert acts.runs == []
 
 
+def test_an_interrupted_call_asked_about_before_the_worker_stopped_keeps_its_reason(
+    stack: Stack,
+) -> None:
+    """The question about an interrupted call is in the log, the park is not.
+    The next worker parks on it, and its row says why it was asked."""
+    acts = Acts(gated=True)
+
+    async def body(person: Person) -> tuple[JobStatus | None, list[tuple[int, str]]]:
+        await person.submit()
+        assert await person.work() is S.NEEDS_APPROVAL
+        await person.approve()
+        await person.abandon_in_the_tool()
+        assert await person.work(takeover=True) is S.NEEDS_APPROVAL
+        owner = await asyncpg.connect(as_owner(stack.database_url), timeout=5)
+        try:
+            await owner.execute(
+                "DELETE FROM notifications WHERE job_id = $1 AND question = 7", person.job_id
+            )
+            await owner.execute(
+                "UPDATE jobs SET status = 'running', lease_owner = 'gone',"
+                " lease_expires_at = now() WHERE id = $1",
+                person.job_id,
+            )
+        finally:
+            await owner.close()
+        status = await person.work(takeover=True)
+        return status, await person.notices()
+
+    status, found = with_person(stack, acts, body)
+    assert status is S.NEEDS_APPROVAL
+    assert found == [(3, "before_run"), (7, "interrupted")]
+    # One run: the interrupted one. Nothing ran again without an answer.
+    assert len(acts.runs) == 1
+
+
 def test_an_answer_about_another_call_does_not_let_this_one_run(stack: Stack) -> None:
     """The log is written by hand: an approval that names the second call while
     the first is the one that is open. The worker asks about the first."""

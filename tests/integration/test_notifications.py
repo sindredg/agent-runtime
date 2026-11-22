@@ -322,6 +322,72 @@ def test_the_table_and_the_kind_arrive_with_their_migration(empty_database_url: 
     assert on(url, lambda c: c.fetchval("SELECT count(*) FROM notifications")) == 1
 
 
+def test_the_migration_writes_the_row_of_every_job_that_waits(empty_database_url: str) -> None:
+    """A job parked before 0011 is notified like one parked after it."""
+    url = empty_database_url
+
+    async def jobs_at_0010(conn: Connection) -> dict[str, UUID]:
+        made = {}
+        logs: dict[str, tuple[str, list[str | tuple[str, str]]]] = {
+            # The gate: no intent before the question.
+            "gate": ("needs_approval", ["model_request", ("approval_requested", "t1")]),
+            # Approved, interrupted in the run, asked again.
+            "interrupted": (
+                "needs_approval",
+                [
+                    ("approval_requested", "t1"),
+                    "status_changed",
+                    "approval_given",
+                    ("tool_intent", "t1"),
+                    ("approval_requested", "t1"),
+                ],
+            ),
+            # Its next call is asked about: the intent of another call does not count.
+            "next call": (
+                "needs_approval",
+                [("tool_intent", "t1"), "tool_result", ("approval_requested", "t2")],
+            ),
+            "answered": ("queued", [("approval_requested", "t1"), "approval_given"]),
+            "no question": ("needs_approval", ["model_request"]),
+        }
+        for name, (status, log) in logs.items():
+            job_id = await conn.fetchval(
+                "INSERT INTO jobs (spec, token_budget, deadline, status)"
+                " VALUES ('{}', 1000, now() + interval '1 hour', $1) RETURNING id",
+                status,
+            )
+            for seq, entry in enumerate(log, start=1):
+                kind, call = entry if isinstance(entry, tuple) else (entry, None)
+                await conn.execute(
+                    "INSERT INTO steps (job_id, seq, kind, payload, lease_epoch)"
+                    " VALUES ($1, $2, $3, $4::jsonb, 1)",
+                    job_id,
+                    seq,
+                    kind,
+                    "{}" if call is None else f'{{"tool_use_id": "{call}"}}',
+                )
+            made[name] = job_id
+        return made
+
+    async def found(conn: Connection) -> list[tuple[UUID, int, str, int]]:
+        rows = await conn.fetch(
+            "SELECT job_id, question, reason, attempts FROM notifications"
+            " WHERE delivered_at IS NULL AND closed_at IS NULL"
+        )
+        return [(r["job_id"], r["question"], r["reason"], r["attempts"]) for r in rows]
+
+    alembic(url, "upgrade", "0010")
+    made = on(url, jobs_at_0010)
+    alembic(url, "upgrade", "0011")
+    assert sorted(on(url, found)) == sorted(
+        [
+            (made["gate"], 2, "before_run", 0),
+            (made["interrupted"], 5, "interrupted", 0),
+            (made["next call"], 3, "before_run", 0),
+        ]
+    )
+
+
 def test_a_notification_sent_step_is_stored_like_any_other(database_url: str) -> None:
     """The kind is in the schema and the chain covers it. Task of the sender:
     write it only while the job waits on that question."""

@@ -7,6 +7,9 @@ The statement that parks a job for approval also writes a row here: the job,
 the question (the `seq` of its `approval_requested` step) and the reason in
 one fixed word. The workers deliver the rows to a receiver. A delivery adds a
 `notification_sent` step to the job's log.
+
+A job that waits when this migration runs gets its row here, so that it is
+notified like a job parked later.
 """
 
 import sqlalchemy as sa
@@ -81,6 +84,27 @@ def upgrade() -> None:
         "notifications",
         ["next_try"],
         postgresql_where=sa.text("closed_at IS NULL"),
+    )
+    # The jobs that wait now, on their last question. A question about a call
+    # that already had an intent was asked after an interruption: the gate
+    # asks before any intent (ADR 0011).
+    op.execute(
+        """
+        INSERT INTO notifications (job_id, question, reason)
+        SELECT j.id, q.seq,
+               CASE WHEN EXISTS (
+                   SELECT FROM steps i
+                    WHERE i.job_id = j.id AND i.kind = 'tool_intent' AND i.seq < q.seq
+                      AND i.payload->>'tool_use_id' = q.payload->>'tool_use_id'
+               ) THEN 'interrupted' ELSE 'before_run' END
+          FROM jobs j
+          CROSS JOIN LATERAL (
+              SELECT s.seq, s.payload FROM steps s
+               WHERE s.job_id = j.id AND s.kind = 'approval_requested'
+               ORDER BY s.seq DESC LIMIT 1
+          ) q
+         WHERE j.status = 'needs_approval'
+        """
     )
     # By column, as in 0006: a column a later migration adds is not writable
     # by the app until that migration grants it. No DELETE: a row is closed,

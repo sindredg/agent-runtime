@@ -423,7 +423,9 @@ async def _next_tool_call(
         # A worker may have stopped between asking and parking the job. The
         # question is then already in the log, and the job is parked on it.
         if answer == "requested":
-            assert state.approval_question is not None  # noqa: S101 - set with "requested"
+            if state.approval_question is None:
+                # Replay sets both together. Not an assert: those go with -O.
+                raise RuntimeError("the log has a question without its seq")
             return held.Question(state.approval_question, why)
         step = await writer.append(
             StepKind.APPROVAL_REQUESTED,

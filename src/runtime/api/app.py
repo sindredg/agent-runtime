@@ -284,12 +284,17 @@ def create_app(
             quiet_since = time.monotonic()
             # True while the client has been told that the job waits for approval.
             told_waiting = False
+            # Whether a step other than a delivered notification came since the
+            # last look at the status: the job may have stopped again. Kept
+            # across full pages, which are read without a look.
+            moved = False
             while not await request.is_disconnected():
                 async with engine().connect() as conn:
                     progress = await read_progress(conn, job_id, after_seq=last, limit=page_size)
                 if progress is None:
                     return
                 status, steps = progress
+                moved = moved or any(s.kind is not StepKind.NOTIFICATION_SENT for s in steps)
                 for step in steps:
                     view = StepView.model_validate(step).model_dump(mode="json")
                     # json.dumps escapes everything outside ASCII. A raw
@@ -309,10 +314,9 @@ def create_app(
                 # A job that waits gets only one kind: the step that says its
                 # question was delivered (ADR 0029), which is no new stop.
                 waiting = status is JobStatus.NEEDS_APPROVAL
-                moved = any(step.kind is not StepKind.NOTIFICATION_SENT for step in steps)
                 if waiting and (moved or not told_waiting):
                     yield _event("status", json.dumps({"status": status.value}))
-                told_waiting = waiting
+                told_waiting, moved = waiting, False
                 if steps:
                     quiet_since = time.monotonic()
                 elif time.monotonic() - quiet_since >= keep_alive:
