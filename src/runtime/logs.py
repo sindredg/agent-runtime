@@ -34,3 +34,6 @@ def configure_logging(level: int = logging.INFO) -> None:
     root = logging.getLogger()
     root.handlers[:] = [handler]
     root.setLevel(level)
+    # httpx2 logs each answered request with its full URL at INFO. The URL of
+    # a notification can hold a token in its path or query (ADR 0029).
+    logging.getLogger("httpx2").setLevel(max(level, logging.WARNING))

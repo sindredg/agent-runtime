@@ -6,6 +6,7 @@ the test's own.
 """
 
 import asyncio
+import time
 from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID
@@ -126,11 +127,14 @@ def test_a_question_is_posted_once_and_logged_on_the_job(database_url: str) -> N
     assert [s.kind for s in steps].count(StepKind.NOTIFICATION_SENT) == 1
 
 
-def test_a_failed_post_is_tried_again_later_and_not_logged(database_url: str) -> None:
+@pytest.mark.parametrize("status", [503, 404, 307])
+def test_a_failed_post_is_tried_again_later_and_not_logged(database_url: str, status: int) -> None:
+    """Anything but a 2xx is a failure, a redirect too: the address called is the configured one."""
+
     async def body(engine: AsyncEngine) -> tuple[dict[str, Any], datetime, list[str], Any, Any]:
         job, _ = await parked_job(engine)
         async with serving(create_app()) as url:
-            await queue(url, {"status": 503})
+            await queue(url, {"status": status})
             before = await now(engine)
             assert await deliver_due(engine, f"{url}{PATH}", asyncio.Event()) == 0
             failed = await row(engine, job.id)
@@ -149,7 +153,7 @@ def test_a_failed_post_is_tried_again_later_and_not_logged(database_url: str) ->
     wait = (failed["next_try"] - before).total_seconds()
     assert 1.5 < wait < 4
     assert StepKind.NOTIFICATION_SENT.value not in failed_kinds
-    assert sent == [503, 200]
+    assert sent == [status, 200]
     assert delivered["attempts"] == 2
     assert delivered["delivered_at"] is not None
 
@@ -228,6 +232,28 @@ def test_a_row_for_an_earlier_question_is_closed(database_url: str) -> None:
     assert closed == 1
     assert earlier["closed_at"] is not None
     assert current["closed_at"] is None
+
+
+@pytest.mark.parametrize("answer", [approve_job, cancel_job])
+def test_a_claim_passes_over_a_row_whose_job_no_longer_waits(
+    database_url: str, answer: Any
+) -> None:
+    """An answer can commit between a round's close and its claim: the claim checks again."""
+
+    async def body(engine: AsyncEngine) -> tuple[Due | None, dict[str, Any]]:
+        job, question = await parked_job(engine)
+        async with engine.begin() as conn:
+            if answer is cancel_job:
+                await cancel_job(conn, job.id)
+            else:
+                await answer(conn, job.id, question.seq)
+        async with engine.begin() as conn:
+            due = await claim_due(conn)
+        return due, await row(engine, job.id)
+
+    due, found = with_engine(database_url, body)
+    assert due is None
+    assert found["attempts"] == 0
 
 
 def test_a_claim_takes_one_row(database_url: str) -> None:
@@ -348,30 +374,44 @@ def test_a_delivery_waits_for_an_answer_in_flight_and_then_writes_no_step(
     assert StepKind.NOTIFICATION_SENT.value not in found
 
 
-def test_an_unreachable_receiver_is_a_failure_not_an_error(database_url: str) -> None:
+def test_an_unreachable_receiver_is_a_failure_and_its_address_is_not_logged(
+    database_url: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A webhook's address can hold a token. No log record carries it."""
+
     async def body(engine: AsyncEngine) -> tuple[int, dict[str, Any]]:
         job, _ = await parked_job(engine)
         # Port 9 of 127.0.0.1 answers nothing.
-        delivered = await deliver_due(engine, "http://127.0.0.1:9/notifications", asyncio.Event())
+        url = "http://127.0.0.1:9/hooks/tokenInPath?key=tokenInQuery"
+        delivered = await deliver_due(engine, url, asyncio.Event())
         return delivered, await row(engine, job.id)
 
-    delivered, found = with_engine(database_url, body)
+    with caplog.at_level("DEBUG"):
+        delivered, found = with_engine(database_url, body)
     assert delivered == 0
     assert found["attempts"] == 1 and found["closed_at"] is None
+    failures = [r for r in caplog.records if r.getMessage() == "notification not delivered"]
+    assert len(failures) == 1
+    for record in caplog.records:
+        assert "tokenIn" not in str(record.__dict__), record.getMessage()
 
 
 def test_a_stop_during_a_post_leaves_the_row_to_come_due_again(database_url: str) -> None:
-    async def body(engine: AsyncEngine) -> tuple[int, dict[str, Any], datetime]:
+    async def body(engine: AsyncEngine) -> tuple[int, dict[str, Any], datetime, float]:
         job, _ = await parked_job(engine)
         stop = asyncio.Event()
         async with serving(create_app()) as url:
             await queue(url, {"hang": 30})
             asyncio.get_running_loop().call_later(0.5, stop.set)
             before = await now(engine)
+            started = time.monotonic()
             delivered = await deliver_due(engine, f"{url}{PATH}", stop)
-        return delivered, await row(engine, job.id), before
+            took = time.monotonic() - started
+        return delivered, await row(engine, job.id), before, took
 
-    delivered, found, before = with_engine(database_url, body)
+    delivered, found, before, took = with_engine(database_url, body)
+    # Given up at the stop, not at the POST's 10 s deadline.
+    assert took < 5
     assert delivered == 0
     assert found["attempts"] == 1 and found["closed_at"] is None
     # Due again once the claim's push has run out.

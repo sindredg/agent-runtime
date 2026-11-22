@@ -6,8 +6,8 @@ log as the record of what reached the operator, independent of the
 runtime's step log.
 
 By default every POST is answered 200. A test can queue the next answers:
-an error status, a redirect, or a wait before answering. A queued answer
-is used up by one POST.
+an error status, a redirect, a wait before answering, or a body that never
+ends. A queued answer is used up by one POST.
 
 Everything is kept in memory and is gone when the service stops.
 """
@@ -15,20 +15,21 @@ Everything is kept in memory and is gone when the service stops.
 import asyncio
 import json
 from collections import deque
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from allowed_hosts import AllowedHosts
 
-# Bytes of a POST body kept, POSTs kept, and answers that can be queued.
-# They only bound the memory a test run can use up.
+# Bytes of a POST body read, POSTs kept, and answers that can be queued.
+# They bound the memory a test run can use up: about 640 MiB at most.
 MAX_BODY_BYTES = 64 * 1024
-MAX_ARRIVALS = 100_000
+MAX_ARRIVALS = 10_000
 MAX_QUEUED = 1000
 # Seconds a queued answer can wait: past the sender's 10 s deadline.
 MAX_HANG_SECONDS = 120.0
@@ -48,6 +49,8 @@ class Answer(BaseModel):
     status: int = Field(default=200, ge=200, le=599)
     # Seconds to wait after the arrival is logged, before answering.
     hang: float = Field(default=0.0, ge=0.0, le=MAX_HANG_SECONDS)
+    # Send a body that never ends, until the sender closes the connection.
+    endless_body: bool = False
 
 
 class Answers(BaseModel):
@@ -62,8 +65,27 @@ def _json(content: Any, status: int = 200) -> Response:
     return Response(content=json.dumps(content), status_code=status, media_type="application/json")
 
 
-def _body(raw: bytes) -> Any:
+async def _endless() -> AsyncIterator[bytes]:
+    chunk = b"x" * 65536
+    while True:
+        yield chunk
+        await asyncio.sleep(0.001)
+
+
+async def _read(request: Request) -> bytes | None:
+    """The POST's body, or None when it is longer than MAX_BODY_BYTES. Never reads past that."""
+    raw = b""
+    async for chunk in request.stream():
+        raw += chunk
+        if len(raw) > MAX_BODY_BYTES:
+            return None
+    return raw
+
+
+def _body(raw: bytes | None) -> Any:
     """The POST's JSON, or None when it is not JSON. Kept as it came, not checked."""
+    if raw is None:
+        return None
     try:
         return json.loads(raw)
     except ValueError:
@@ -98,12 +120,12 @@ def create_app() -> FastAPI:
         """Log the POST, then answer it as the next queued answer says, else 200."""
         if len(arrivals) >= MAX_ARRIVALS:
             return _json({"detail": "the log is full; clear it with DELETE /notifications"}, 507)
-        raw = await request.body()
+        raw = await _read(request)
         answer = queued.popleft() if queued else Answer()
         arrivals.append(
             {
                 "received_at": datetime.now(UTC).isoformat(),
-                "body": _body(raw) if len(raw) <= MAX_BODY_BYTES else None,
+                "body": _body(raw),
                 "content_type": request.headers.get("content-type"),
                 "status": answer.status,
                 "hang": answer.hang,
@@ -111,6 +133,8 @@ def create_app() -> FastAPI:
         )
         if answer.hang:
             await asyncio.sleep(answer.hang)
+        if answer.endless_body:
+            return StreamingResponse(_endless(), status_code=answer.status)
         if 300 <= answer.status < 400:
             return Response(status_code=answer.status, headers={"location": PATH})
         return Response(status_code=answer.status)

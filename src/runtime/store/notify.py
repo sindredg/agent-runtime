@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, and_, exists, func, not_, select, tuple_, update
+from sqlalchemy import ColumnElement, and_, exists, func, not_, select, update
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from runtime.store.held import QuestionReason
@@ -81,6 +81,10 @@ async def claim_due(conn: AsyncConnection) -> Due | None:
     could pass its 12 s push while those before it were sent. Rows another
     worker is claiming are skipped. Run it in a transaction of its own and
     commit before the POST: `now()` is that transaction's start.
+
+    The row is picked in a MATERIALIZED query that runs once. Inside an `IN`
+    the planner could run a `LIMIT 1 ... SKIP LOCKED` again for each row it
+    compares, and update more than one.
     """
     due = (
         select(notifications.c.job_id, notifications.c.question)
@@ -92,6 +96,8 @@ async def claim_due(conn: AsyncConnection) -> Due | None:
         .order_by(notifications.c.next_try)
         .limit(1)
         .with_for_update(skip_locked=True)
+        .cte("due")
+        .prefix_with("MATERIALIZED")
     )
     tool = (
         select(steps.c.payload["name"].astext)
@@ -101,7 +107,10 @@ async def claim_due(conn: AsyncConnection) -> Due | None:
     row = (
         await conn.execute(
             update(notifications)
-            .where(tuple_(notifications.c.job_id, notifications.c.question).in_(due))
+            .where(
+                notifications.c.job_id == due.c.job_id,
+                notifications.c.question == due.c.question,
+            )
             .values(
                 attempts=notifications.c.attempts + 1,
                 next_try=func.now() + CLAIM_AHEAD,

@@ -7,13 +7,13 @@ POST. A failed POST, or a worker that stops during one, costs a repeat
 later, never a question that is not sent: the promise is at least once.
 
 The POST has one 10 s deadline, uses no proxy from the environment, and
-follows no redirect. Any 2xx is a delivery; anything else is a failure. The
-receiver's body is not read. The URL is never logged: a webhook's path or
-query can hold a token.
+follows no redirect. Any 2xx is a delivery; anything else is a failure. Only
+the status line and the headers of the answer are read, never its body: a
+receiver could send more than the worker can hold. The URL is never logged:
+a webhook's path or query can hold a token.
 """
 
 import asyncio
-import contextlib
 import logging
 from typing import Any
 
@@ -42,29 +42,45 @@ def body(due: Due) -> dict[str, Any]:
     }
 
 
-async def post(url: str, due: Due, transport: Network | None = None) -> int:
-    """POST the question and return the status. Raises TimeoutError or httpx2.HTTPError."""
+async def post(
+    url: str, due: Due, transport: Network | None = None, *, deadline: float | None = None
+) -> int:
+    """POST the question and return the status. Raises TimeoutError or httpx2.HTTPError.
+
+    `deadline` is a time of the event loop's clock, POST_WITHIN from now by
+    default. The answer's body is left unread: the response is closed after
+    its headers.
+    """
+    if deadline is None:
+        deadline = asyncio.get_running_loop().time() + POST_WITHIN
     async with (
-        asyncio.timeout(POST_WITHIN),
+        asyncio.timeout_at(deadline),
         httpx2.AsyncClient(
             timeout=None, follow_redirects=False, transport=given_up_at_once(transport)
         ) as http,
+        http.stream(
+            "POST", url, json=body(due), headers={"accept-encoding": "identity"}
+        ) as response,
     ):
-        response = await http.post(url, json=body(due))
         return response.status_code
 
 
 async def _unless_stopped(stop: asyncio.Event, work: asyncio.Task[int]) -> int | None:
-    """The result of `work`, or None when `stop` was set first. `work` is then cancelled."""
+    """The result of `work`, or None when `stop` was set first. `work` is then cancelled.
+
+    `work` is also cancelled, and waited for, when this task is cancelled.
+    """
     stopped = asyncio.create_task(stop.wait())
     try:
         await asyncio.wait({work, stopped}, return_when=asyncio.FIRST_COMPLETED)
     finally:
         stopped.cancel()
-    if not work.done():
-        work.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await work
+        if not work.done():
+            work.cancel()
+            # Does not raise work's CancelledError, and a cancel of this task
+            # still ends the wait.
+            await asyncio.wait({work})
+    if work.cancelled():
         return None
     return work.result()
 
@@ -77,6 +93,9 @@ async def deliver_due(
         await close_settled(conn)
     delivered = 0
     while not stop.is_set():
+        # Counted from before the claim, so the POST ends well inside the
+        # claim's 12 s push, also when the commit or the loop is slow.
+        deadline = asyncio.get_running_loop().time() + POST_WITHIN
         async with engine.begin() as conn:
             due = await claim_due(conn)
         if due is None:
@@ -84,7 +103,8 @@ async def deliver_due(
         where = {"job_id": due.job_id, "question": due.question, "attempts": due.attempts}
         failure: str | None
         try:
-            status = await _unless_stopped(stop, asyncio.create_task(post(url, due, transport)))
+            sending = asyncio.create_task(post(url, due, transport, deadline=deadline))
+            status = await _unless_stopped(stop, sending)
         except (TimeoutError, httpx2.HTTPError) as error:
             # The type only: an error's text can hold the URL.
             failure = type(error).__name__

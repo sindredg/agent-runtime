@@ -90,3 +90,16 @@ def test_the_queue_is_bounded(client: TestClient) -> None:
     full = {"answers": [{"status": 500}] * MAX_QUEUED}
     assert client.post("/_fake/answers", json=full).status_code == 204
     assert client.post("/_fake/answers", json={"answers": [{}]}).status_code == 507
+
+
+def test_a_queued_endless_body_keeps_coming() -> None:
+    client = TestClient(create_app(), base_url=LOCAL)
+    client.post("/_fake/answers", json={"answers": [{"endless_body": True}]})
+    with client.stream("POST", "/notifications", json=NOTE) as response:
+        assert response.status_code == 200
+        read = 0
+        for chunk in response.iter_bytes():
+            read += len(chunk)
+            if read > 1024 * 1024:
+                break
+    assert read > 1024 * 1024

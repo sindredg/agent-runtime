@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import httpx2
+
 from runtime.failpoints import NAMES as FAILPOINT_NAMES
 from runtime.sandbox.runner import (
     DEFAULT_WORKSPACE_ENTRIES,
@@ -103,6 +105,12 @@ def _notify_url(env: Mapping[str, str]) -> str | None:
         raise ConfigError("NOTIFY_URL must not hold a user name, a password or a fragment")
     if any(ord(char) <= 32 or ord(char) == 127 for char in value):
         raise ConfigError("NOTIFY_URL must not hold spaces or control characters")
+    try:
+        # The client parses it again for each POST. A URL it refuses would
+        # otherwise fail every round, never as a failed delivery.
+        httpx2.URL(value)
+    except httpx2.InvalidURL:
+        raise ConfigError("NOTIFY_URL is not a URL the HTTP client takes") from None
     return value
 
 
