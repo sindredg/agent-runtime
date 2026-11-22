@@ -42,7 +42,7 @@ flowchart LR
   listed them, each with its own count.
 - `nft flush ruleset` as root in the namespace, without capabilities, was
   refused, and the outside target stayed blocked.
-- In the stack, at `185c89b`: the worker refused a job whose scope named
+- In the stack: the worker refused a job whose scope named
   `postgres:5432` before any call, and the job went on
   (`tests/integration/test_scope_in_stack.py`).
 
@@ -62,7 +62,8 @@ Which attempts have a failing run:
 | A write to the root file system, capabilities, gaining privileges, running as root | Yes |
 | 200 forks, 512 MiB of memory | Yes |
 | A mount | No. Docker's default capabilities and seccomp profile refuse it, also to root. |
-| The Docker socket, the metadata address, both file searches | No. The switch mounts nothing but the workspace. |
+| The Docker socket, both file searches | No. The switch mounts nothing but the workspace. |
+| The metadata address | No. The network was open, and nothing on this machine answered. |
 
 ## Workspace size
 

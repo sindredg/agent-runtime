@@ -57,10 +57,11 @@ workers killed at random times and at two failpoints:
 
 ## What these eight runs do not show
 
-- No run with a mechanism switched off. Two such runs on the API are in
-  [Kill run results](kill-runs.md#with-the-stored-signature-changed).
+- No run with a mechanism switched off. Two such runs on the API:
+  [stored signature changed](kill-runs.md#with-the-stored-signature-changed),
+  [intent write off](kill-runs.md#with-the-intent-write-switched-off).
 - One model, and each job once. A real model does not give the same answer
   twice.
 - No refusal by the model and no rate limit was met.
 - The kill was at one point, in a model call.
-- The job files are kept on that machine, not in the repository.
+- Their output was not kept, and the job files are not in the repository.

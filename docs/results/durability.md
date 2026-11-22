@@ -28,8 +28,8 @@ Tested. `tests/chaos/test_kills.py`, 200 runs.
   6, each resumed with one takeover and one issue.
 
 With the mechanism off: with resume switched off, so that the log is not
-replayed, 13 of 20 short runs failed. The provider was asked turns 0, 1, 0,
-1, 2.
+replayed, 13 of 20 short runs failed. In 7 the provider was asked turns 0, 1, 0,
+1, 2. In 6 it was asked 0, 1, 2, 0, 1, 2, and one operation id opened two issues.
 
 The failpoint runs with resume off, at `11b6792` ([run](https://github.com/sindredg/agent-runtime/actions/runs/44808424822)):
 
