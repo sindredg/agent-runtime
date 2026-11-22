@@ -77,6 +77,7 @@ on:
           - abortive-close-off
           - notify-loop-off
           - notify-row-off
+          - tool-env-passed-on
       provider:
         description: fake costs nothing; claude waits for a reviewer and costs money
         type: choice
