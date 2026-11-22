@@ -1,28 +1,25 @@
 # Results
 
-Each guarantee has a test with a pass line that was fixed before the run, and
+Each tested guarantee has a test with a pass line fixed before the run, and
 a run with the mechanism switched off to show that the test can fail.
 
 The table with one line per guarantee is in the
 [README](../../README.md#results). The evidence is on five pages:
 
-- [Durability](durability.md): surviving a lost worker, unsafe tool
-  calls, stale workers, crash loops, the step log.
+- [Durability](durability.md): lost workers, unsafe calls, the step log.
 - [Scope and sandbox](sandbox.md): what a tool can reach.
-- [Budget, approval, backoff and tool output](controls.md): what a job may
-  spend and do.
-- [Switched-off runs from the list](switched-off.md): each mechanism
-  removed, and how its tests ended.
-- [A parked job tells the operator](notify.md): the question posted to
-  `NOTIFY_URL`, from runs on GitHub after the run below.
+- [Budget, approval, backoff, tool output](controls.md): what a job may do.
+- [Switched-off runs](switched-off.md): each mechanism removed, and the result.
+- [A parked job tells the operator](notify.md): the question to `NOTIFY_URL`.
 
 Jobs that ran with a real model, which are not the evidence for a guarantee:
 [Runs against the Claude API](api.md) and [Kill run results](kill-runs.md).
 
 ## The run
 
-Every result except the notification's is from one run of every suite at
-one commit, on one machine with no other test run, in this order:
+The results in the README's table, except the notification's, are from one
+run of every suite at one commit, on one machine with no other test run, in
+this order:
 
 ```mermaid
 flowchart LR
@@ -66,20 +63,24 @@ Each switch is a change to the source, made for one run and then restored.
 of each is on the guarantee's page. The output is kept on the machine that
 ran them, not in the repository.
 
-Each switch was built into the stack its tests use, so the stack's worker
-ran the changed code too. The chaos switches used the short run: 20 random kills. A property test
-seldom reaches the cut of a tool result
-([issue 61](https://github.com/sindredg/agent-runtime/issues/61)); a
-sandbox test covers it.
+Each switch was built into the stack its tests use, so its worker ran the
+changed code. The two chaos switches with a random-kill test ran 20 kills. A
+property test seldom reaches the cut of a tool result
+([issue 61](https://github.com/sindredg/agent-runtime/issues/61)); a sandbox test covers it.
 
 The switches are now entries of `scripts/switched_off.py`, run from the
-Manual runs workflow. At `e1656b5`, 2026-11-21, all 34 entries of the fake
-provider ran: [96 of 96 tests ended as the list says](switched-off.md). Seven
-of them had run before, at `11b6792`. Four switches have no entry yet
-([issue 163](https://github.com/sindredg/agent-runtime/issues/163)).
+Manual runs workflow. Four have no entry yet
+([issue 163](https://github.com/sindredg/agent-runtime/issues/163)). Runs at other commits:
 
-One entry on the Claude API ran at `5a5bfa6`, 2026-11-21: [PASS, 5 of 5 jobs
-refused](kill-runs.md#with-the-stored-signature-changed).
+| Commit | What ran | Page |
+|---|---|---|
+| `185c89b`, `81750b6` | Two switches, on branch commits before that run | [Sandbox](sandbox.md), [Controls](controls.md) |
+| `49b9c6e` | Intent write off, fake provider and Claude API | [Kill runs](kill-runs.md#with-the-intent-write-switched-off) |
+| `11b6792` | Seven switched-off runs | [Durability](durability.md), [Controls](controls.md) |
+| `5a5bfa6` | Stored signature changed, Claude API: 5 of 5 jobs refused | [Kill runs](kill-runs.md#with-the-stored-signature-changed) |
+| `e1656b5` | All 34 entries of the fake provider: 96 of 96 tests as listed | [Switched-off runs](switched-off.md) |
+| `fbb293f` | Three entries, 5 tests | [Switched-off runs](switched-off.md#entries-added-after-that-run) |
+| `30108d4`, `7096a5c` | The notification, and the entry for the secret test | [Notification](notify.md), [Switched-off runs](switched-off.md#entries-added-after-that-run) |
 
 ## How a kill run works
 
@@ -102,10 +103,11 @@ log. See [Testing](../testing.md#records-a-test-trusts).
 
 ## What these results do not show
 
-- Nothing ran against a real model provider. The one real issue tracker is
-  Gitea in a container, in the lab. The contract test against the Claude API
-  was not part of this run ([The contract test](../contract-test.md)), and
-  eight jobs ran against the API separately ([Runs against the Claude API](api.md)).
+- The code has changed since `1f57ee4`, and the run was not repeated
+  ([issue 205](https://github.com/sindredg/agent-runtime/issues/205)). CI runs the suites on each pull request, with 20 kills.
+- Nothing in this run reached a real model provider. The one real issue
+  tracker is Gitea in a container, in the lab. API runs have their own pages:
+  [contract test](../contract-test.md), [eight jobs](api.md), [kill runs](kill-runs.md).
 - The chaos run's worker logs, 10,484 lines, hold no error-level line and
   no failed lease renewal. An earlier run's lease renewals that timed out are
   not explained

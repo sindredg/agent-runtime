@@ -84,7 +84,7 @@ flowchart LR
     subgraph stack[agent-runtime_default]
         PG[(postgres)]
         API[api]
-        FK[fake-provider,<br/>fake-tracker]
+        FK[fake-provider,<br/>fake-tracker,<br/>fake-receiver]
     end
     subgraph labnet[agent-runtime_lab]
         G[Gitea]

@@ -129,8 +129,9 @@ refused, but the tool ran. An idempotency key on the other side closes this.
   deadline. Entering a call's result by hand is not built.
 - The log records that a call was approved or denied, not by whom.
 - A question is posted at least once: a kill, a lost answer or a stall past
-  the claim's 12 s repeats it. No authentication; a token in an `http` URL
-  crosses the network in clear. Each park is one POST, not capped.
+  the claim's 12 s repeats it. A worker posts one at a time, so a hanging
+  receiver delays the rest by up to 10 s each. No authentication; a token in
+  an `http` URL crosses the network in clear. Each park is one POST, not capped.
 
 ## API
 

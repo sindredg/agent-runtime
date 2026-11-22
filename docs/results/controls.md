@@ -112,8 +112,7 @@ Tested. Integration suite, `test_sandbox.py`.
 - `list_dir`, added at `81750b6`: a listing of 2,000 files and a name that is
   not UTF-8 is cut to 64 KiB and flagged `truncated`. The bad name comes back
   as U+FFFD, and the job succeeds.
-- `read_file` and `create_issue` run in the worker and have no general
-  timeout.
+- Tools in the worker and their timeouts: [Known limits](../limits.md#tool-calls).
 
 With the mechanism off:
 

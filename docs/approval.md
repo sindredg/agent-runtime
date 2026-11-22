@@ -14,7 +14,8 @@ See [a job that asks](usage.md#a-job-that-asks) for an example.
 
 With [`NOTIFY_URL`](settings.md) set, a worker also posts the question
 there, at least once ([ADR 0029](adr/0029-notify-from-a-row-the-park-writes.md),
-[results](results/notify.md)).
+[results](results/notify.md)). The post names the tool, not its input:
+`runtime logs <job id> --follow` prints the input.
 
 ## Which calls are asked about
 

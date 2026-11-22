@@ -38,8 +38,8 @@ flowchart LR
 - They stop before the first test unless every worker is on the fake
   provider ([The Claude API](settings.md#the-claude-api)). The kill runs
   stop unless every worker is on the provider they were started for.
-- `make chaos`, `make lab` and `make kills` replace the normal stack. Run
-  `make up` afterwards.
+- `make chaos` and `make kills` replace the normal stack: run `make up`
+  afterwards. `make lab` puts it back itself.
 - `CHAOS_RUNS` and `CHAOS_SEED` set the number and times of random kills.
   `CHAOS_NOTIFY_JOBS` sets the jobs of each G12 run (default 20).
 - `NOTIFY_TIMING_JOBS` sets the jobs of the timed run (default 50).

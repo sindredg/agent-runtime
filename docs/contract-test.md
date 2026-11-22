@@ -74,7 +74,7 @@ stop reason, `input_tokens` and `output_tokens`
 | 2026-11-19 | `672103b` | `claude-haiku-5-5` | 5 of 5, both ways. Nine entries only the API returned, all declared. |
 | 2026-11-21 | `5a5bfa6` | `claude-haiku-5-5` | 5 of 5, both ways. The same nine entries, all declared. |
 
-The two runs of 2026-11-19 are GitHub Actions runs
+No log of the first two runs is kept. The two runs of 2026-11-19 are GitHub Actions runs
 [44603223641](https://github.com/sindredg/agent-runtime/actions/runs/44603223641)
 and [44614433826](https://github.com/sindredg/agent-runtime/actions/runs/44614433826).
 Between them the eight fields were declared and nothing else changed. The
