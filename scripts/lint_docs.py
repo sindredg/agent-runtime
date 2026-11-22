@@ -2,7 +2,8 @@
 
 A page fails when it is too long, when a paragraph, list item or table cell
 is too long, when it has no diagram, when a link inside the repository leads
-nowhere, or when it has an em dash. The limits are the constants below.
+nowhere, when a link to a line does not name a commit, or when it has an em
+dash. The limits are the constants below.
 
 Decision records that were accepted before the limits keep their text, so
 only their length, links and diagram are checked.
@@ -32,6 +33,10 @@ _LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
 _SVG_IMAGE = re.compile(r"^!\[[^\]]*\]\(([^)\s]+\.svg)\)$")
 _SENTENCE_END = re.compile(r"[.!?](?=\s|$)")
 _HEADING = re.compile(r"^#{1,6}\s+(.*)$")
+# A line anchor, and the permalink form that keeps it on its line: a file at
+# a full commit id. Any other line link points elsewhere after the next change.
+_LINE = re.compile(r"#L\d+(-L\d+)?$")
+_PERMALINK = re.compile(r"https://github\.com/[^/]+/[^/]+/blob/[0-9a-f]{40}/")
 
 
 def _shown(text: str) -> str:
@@ -87,6 +92,9 @@ def anchors(text: str) -> set[str]:
 def _broken_links(path: Path, lines: list[str]) -> Iterator[str]:
     prose = "\n".join(line for _, line in _prose(lines))
     for target in _LINK.findall(prose):
+        if _LINE.search(target) and not _PERMALINK.match(target):
+            yield f"link to {target}: a line link moves with the code; link the file at a commit"
+            continue
         if re.match(r"[a-z][a-z0-9+.-]*:", target):
             continue
         name, _, anchor = target.partition("#")
