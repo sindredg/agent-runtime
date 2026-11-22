@@ -101,7 +101,8 @@ sequenceDiagram
 - Status and steps are read in one statement. When the status is final,
   every step has been seen.
 - A job that stops in `needs_approval` is not over. The stream says so once
-  each time the job stops there, and stays open.
+  each time the job stops there, and stays open. A `notification_sent` step
+  is sent as a step and is not a new stop.
 - `Last-Event-ID` or `?after=` continues a broken stream. `Last-Event-ID`
   wins when both are given.
 - The API polls the database for new steps. Nothing is pushed.
