@@ -90,8 +90,8 @@ erDiagram
   status filter. Without a filter the list reads the primary key.
 - The statement that parks a job writes its `notifications` row, for the
   job's last question. A park that turns into a cancel writes none
-  ([ADR 0029](adr/0029-notify-from-a-row-the-park-writes.md)). Nothing
-  sends the rows yet.
+  ([ADR 0029](adr/0029-notify-from-a-row-the-park-writes.md)). Every
+  worker with `NOTIFY_URL` set sends them, one row per claim.
 
 `src/runtime/store/schema.py` mirrors the tables for building statements. A
 test fails when the two differ. It does not compare the CHECK constraints or
@@ -110,7 +110,7 @@ the WHERE clauses of the partial indexes.
 | `approval_denied` | By `POST /jobs/{id}/deny` | `tool_use_id`, `operation_id`, `question` |
 | `error` | When the job fails, whoever fails it | `message` |
 | `status_changed` | With a cancel, a park for approval and a wait for a busy provider, in the same statement or transaction | `from`, `to`, `cause` (`cancel_requested`, `approval_requested` or `provider_busy`). A wait adds [its details](backoff.md#the-step). |
-| `notification_sent` | Allowed by the schema. Nothing writes it yet. | |
+| `notification_sent` | When the receiver answered 2xx and the job still waits on that question. Once per question. | `question` |
 
 A new kind needs a migration: the kinds are a CHECK constraint.
 

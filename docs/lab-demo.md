@@ -99,7 +99,7 @@ flowchart LR
   or a page that reaches loopback, meets Gitea's own login and the public
   repository. A `LAB_GITEA_PASSWORD`, when set, must not be a public value.
 - The worker reads the token from `TRACKER_TOKEN`
-  ([Settings](settings.md#worker-the-issue-tracker)).
+  ([Settings](settings.md#worker-the-issue-tracker-and-notifications)).
 
 ## How the check finds the issue
 

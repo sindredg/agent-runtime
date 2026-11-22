@@ -11,10 +11,14 @@ import json
 import os
 import subprocess
 import sys
+import time
+from collections.abc import Callable
+from functools import partial
 from typing import Any
 
 import asyncpg
 import httpx2
+import pytest
 
 from .conftest import REPO_ROOT
 
@@ -204,3 +208,96 @@ def test_shell_job_runs_its_commands_in_the_sandbox(
     ).json()
     sent = log[2]["body"]["messages"][4]["content"][0]
     assert sent["content"] == shell["content"]
+
+
+APPROVAL = REPO_ROOT / "examples" / "approval.json"
+FINAL = ("succeeded", "failed", "cancelled")
+
+
+def wait_for[T](read: Callable[[], T | None], what: str) -> T:
+    """`read()` once it is not None, within TIMEOUT_SECONDS."""
+    deadline = time.monotonic() + TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        found = read()
+        if found is not None:
+            return found
+        time.sleep(0.2)
+    raise AssertionError(f"no {what} within {TIMEOUT_SECONDS} s")
+
+
+@pytest.mark.parametrize("answer", ["approve", "deny"])
+def test_each_question_reaches_the_receiver_once_before_it_is_answered(
+    api_url: str, fake_receiver_url: str, stack_database_url: str, answer: str
+) -> None:
+    """ADR 0029 in the stack: the worker parks, a worker posts, the person answers.
+
+    The fake receiver's log is the evidence that the question left the
+    runtime. A run with no failure posts each question once.
+    """
+    submitted = runtime(api_url, "submit", str(APPROVAL))
+    assert submitted.returncode == 0, submitted.stderr
+    job_id = submitted.stdout.split()[0]
+
+    def parked_or_final() -> tuple[str, int | None] | None:
+        job, steps = database_rows(stack_database_url, job_id)
+        if job["status"] in FINAL:
+            return job["status"], None
+        if job["status"] != "needs_approval":
+            return None
+        asked = [row["seq"] for row in steps if row["kind"] == "approval_requested"]
+        return job["status"], asked[-1]
+
+    def arrived(question: int) -> list[Any] | None:
+        log = httpx2.get(f"{fake_receiver_url}/notifications", timeout=10).json()
+        ours = [a for a in log if a["body"] and a["body"]["id"] == f"{job_id}:{question}"]
+        return ours or None
+
+    def logged(question: int) -> bool | None:
+        _, steps = database_rows(stack_database_url, job_id)
+        sent = [
+            row
+            for row in steps
+            if row["kind"] == "notification_sent"
+            and json.loads(row["payload"]) == {"question": question}
+        ]
+        return True if sent else None
+
+    def moved_on(question: int) -> bool | None:
+        return None if parked_or_final() == ("needs_approval", question) else True
+
+    questions = []
+    while True:
+        status, question = wait_for(parked_or_final, "park or end")
+        if question is None:
+            break
+        questions.append(question)
+        [arrival] = wait_for(partial(arrived, question), "notification")
+        assert arrival["status"] == 200
+        assert arrival["body"] == {
+            "id": f"{job_id}:{question}",
+            "job_id": job_id,
+            "question": question,
+            "tool": "run_shell",
+            "reason": "before_run",
+        }
+        wait_for(partial(logged, question), "notification_sent step")
+        answered = runtime(api_url, answer, job_id, str(question))
+        assert answered.returncode == 0, answered.stderr
+        wait_for(partial(moved_on, question), "move on from the answered question")
+
+    assert status == "succeeded"
+    assert questions
+    # Still once each, after the job ended: no late repeat.
+    log = httpx2.get(f"{fake_receiver_url}/notifications", timeout=10).json()
+    ids = [a["body"]["id"] for a in log if a["body"] and a["body"]["job_id"] == job_id]
+    assert ids == [f"{job_id}:{question}" for question in questions]
+    # Each `notification_sent` comes after its question and before its answer.
+    _, steps = database_rows(stack_database_url, job_id)
+    kinds = [row["kind"] for row in steps]
+    for question in questions:
+        at = next(i for i, row in enumerate(steps) if row["seq"] == question)
+        assert kinds[at + 1 : at + 4] == [
+            "status_changed",
+            "notification_sent",
+            f"approval_{'given' if answer == 'approve' else 'denied'}",
+        ]

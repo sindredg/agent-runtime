@@ -233,6 +233,8 @@ jobs:
           worker=$(docker compose ps --quiet worker)
           test "$(printf '%s' "$worker" | grep -c .)" -eq 1
           docker exec "$worker" printenv TRACKER_URL | grep -qx 'http://fake-tracker:8000'
+          docker exec "$worker" printenv NOTIFY_URL \
+            | grep -qx 'http://fake-receiver:8000/notifications'
       - name: Service logs
         if: failure()
         run: docker compose -f docker-compose.yml -f docker-compose.lab.yml logs --no-color

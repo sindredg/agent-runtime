@@ -7,6 +7,7 @@ members = [
     "agent-runtime",
     "allowed-hosts",
     "fake-provider",
+    "fake-receiver",
     "fake-tracker",
 ]
 
@@ -30,6 +31,7 @@ dependencies = [
 dev = [
     { name = "asyncpg-stubs" },
     { name = "fake-provider" },
+    { name = "fake-receiver" },
     { name = "fake-tracker" },
     { name = "hypothesis" },
     { name = "mypy" },
@@ -56,6 +58,7 @@ requires-dist = [
 dev = [
     { name = "asyncpg-stubs", specifier = "==0.32.0" },
     { name = "fake-provider", editable = "services/fake_provider" },
+    { name = "fake-receiver", editable = "services/fake_receiver" },
     { name = "fake-tracker", editable = "services/fake_tracker" },
     { name = "hypothesis", specifier = "==6.170.15" },
     { name = "mypy", specifier = "==2.4.1" },
@@ -266,6 +269,25 @@ wheels = [
 name = "fake-provider"
 version = "0.0.0"
 source = { editable = "services/fake_provider" }
+dependencies = [
+    { name = "allowed-hosts" },
+    { name = "fastapi" },
+    { name = "pydantic" },
+    { name = "uvicorn" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "allowed-hosts", editable = "packages/allowed_hosts" },
+    { name = "fastapi", specifier = "==0.162.6" },
+    { name = "pydantic", specifier = "==2.14.3" },
+    { name = "uvicorn", specifier = "==0.54.0" },
+]
+
+[[package]]
+name = "fake-receiver"
+version = "0.0.0"
+source = { editable = "services/fake_receiver" }
 dependencies = [
     { name = "allowed-hosts" },
     { name = "fastapi" },

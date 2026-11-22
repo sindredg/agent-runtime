@@ -18,6 +18,7 @@ from runtime.tools import default_tools
 from runtime.tools.trackers import tracker_for
 from runtime.worker.agent import AgentSettings
 from runtime.worker.loop import keep_alive, keep_failing_overdue, work
+from runtime.worker.notify import keep_notifying
 from runtime.worker.sweep import keep_sweeping
 
 ALIVE_INTERVAL_SECONDS = 5.0
@@ -34,7 +35,12 @@ async def run(config: WorkerConfig) -> None:
 
     log.info(
         "worker started",
-        extra={"worker_id": config.worker_id, "default_model": config.provider.model},
+        extra={
+            "worker_id": config.worker_id,
+            "default_model": config.provider.model,
+            # Whether NOTIFY_URL is set. The address itself is not logged.
+            "notifies": config.notify_url is not None,
+        },
     )
     if config.sandbox is not None:
         # Before anything starts: on a host where a command could stop its
@@ -88,6 +94,8 @@ async def run(config: WorkerConfig) -> None:
                 keep_sweeping(engine, config.workspace_root, stop, config.sweep_interval)
             )
             tasks.create_task(keep_failing_overdue(engine, stop))
+            if config.notify_url is not None:
+                tasks.create_task(keep_notifying(engine, config.notify_url, stop))
             tasks.create_task(
                 work(
                     engine,

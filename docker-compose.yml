@@ -122,6 +122,9 @@ services:
       WORKSPACE_ROOT: /workspaces
       # The issue tracker the create_issue tool talks to.
       TRACKER_URL: ${TRACKER_URL:-http://fake-tracker:8000}
+      # Where a parked job's question is posted (ADR 0029). Set to empty to
+      # post none.
+      NOTIFY_URL: ${NOTIFY_URL-http://fake-receiver:8000/notifications}
       # Seconds a claim holds a job. A job whose lease ran out is taken over.
       LEASE_SECONDS: ${LEASE_SECONDS:-30}
       # Seconds between two renewals of the lease. Shorter than the lease.
@@ -161,6 +164,8 @@ services:
       fake-provider:
         condition: service_healthy
       fake-tracker:
+        condition: service_healthy
+      fake-receiver:
         condition: service_healthy
       sandbox-image:
         condition: service_completed_successfully
@@ -213,6 +218,16 @@ services:
     ports:
       # Published on localhost only, so tests can read its list of issues.
       - "127.0.0.1:${FAKE_TRACKER_PORT:-8002}:8000"
+    healthcheck: *http-healthcheck
+
+  # A stand-in for the operator's notification receiver. It logs every POST
+  # and can be told to answer with an error or to hang. Kept in memory.
+  fake-receiver:
+    <<: *runtime
+    command: [uvicorn, fake_receiver.app:app, --host, 0.0.0.0, --port, "8000"]
+    ports:
+      # Published on localhost only, so tests can read its log.
+      - "127.0.0.1:${FAKE_RECEIVER_PORT:-8003}:8000"
     healthcheck: *http-healthcheck
 
 networks:

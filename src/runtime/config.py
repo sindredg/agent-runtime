@@ -82,6 +82,30 @@ def _http_url(env: Mapping[str, str], name: str) -> str | None:
     return value.rstrip("/")
 
 
+def _notify_url(env: Mapping[str, str]) -> str | None:
+    """NOTIFY_URL: where a parked job's question is posted (ADR 0029). None when unset.
+
+    Kept exactly as given: the POST goes to that address, query included.
+    A login part or a fragment is refused. The value is never repeated: a
+    webhook's path or query can hold a token.
+    """
+    value = env.get("NOTIFY_URL", "")
+    if not value:
+        return None
+    try:
+        parts = urlsplit(value)
+        parts.port  # noqa: B018 - raises on a port that is not a number
+    except ValueError:
+        raise ConfigError("NOTIFY_URL is not a URL") from None
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        raise ConfigError("NOTIFY_URL must be an http or https URL with a host")
+    if "@" in parts.netloc or "#" in value:
+        raise ConfigError("NOTIFY_URL must not hold a user name, a password or a fragment")
+    if any(ord(char) <= 32 or ord(char) == 127 for char in value):
+        raise ConfigError("NOTIFY_URL must not hold spaces or control characters")
+    return value
+
+
 TRACKER_KINDS = ("fake", "gitea")
 # Gitea's names for a repository's owner and name.
 # A name of dots only would make a path like `/repos/../..` of the URL.
@@ -250,6 +274,9 @@ class WorkerConfig:
     # Seconds the worker gets after SIGTERM before it is killed: compose's
     # `stop_grace_period`, which sets this too. A sandboxed call has to fit.
     stop_grace_seconds: float
+    # Where parked jobs' questions are posted. Unset, this worker posts none.
+    # Left out of repr(): a webhook's address can hold a token.
+    notify_url: str | None = field(default=None, repr=False)
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> WorkerConfig:
@@ -300,6 +327,7 @@ class WorkerConfig:
             sandbox=sandbox,
             sweep_interval=_positive_float(env, "SWEEP_INTERVAL_SECONDS", 300.0),
             stop_grace_seconds=stop_grace_seconds,
+            notify_url=_notify_url(env),
         )
 
 

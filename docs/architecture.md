@@ -9,12 +9,13 @@
 | Component | Code | What it does |
 |---|---|---|
 | `api` | `src/runtime/api/` | Accepts jobs, serves jobs and steps, takes cancels and approval answers. Holds no state. |
-| `worker` | `src/runtime/worker/` | Claims one job at a time and runs the agent loop under a lease. Any worker can continue any job. |
+| `worker` | `src/runtime/worker/` | Runs one job at a time under a lease; any worker can continue any job. Posts parked jobs' questions to `NOTIFY_URL`. |
 | `postgres` | `migrations/`, `src/runtime/store/` | Jobs, the step log and the queue. Runs under an init process. |
 | `migrate` | `migrations/`, `src/runtime/store/migrate.py` | Runs the migrations as the owner, sets the login of the [app role](database-roles.md), and exits. `api` and `worker` start after it. |
 | `fake-provider` | `services/fake_provider/` | Answers `POST /v1/messages` from scenario files and logs each request. |
 | `fake-tracker` | `services/fake_tracker/` | A stand-in issue tracker. Keeps each issue with its operation id. |
-| Host check | `packages/allowed_hosts/` | Shared by `api` and both fakes: a request must name the service in `Host` ([API](api.md)). |
+| `fake-receiver` | `services/fake_receiver/` | A stand-in for the operator's receiver of questions. Logs each POST; can answer an error or hang. |
+| Host check | `packages/allowed_hosts/` | Shared by `api` and the fakes: a request must name the service in `Host` ([API](api.md)). |
 | `gitea` | `docker-compose.lab.yml` | A real issue tracker for the [lab demo](lab-demo.md). Not in `make up`. |
 | Provider client | `src/runtime/provider/` | The worker's one way to call a model: the official SDK behind a `Provider` interface. |
 | Tools | `src/runtime/tools/` | `run_shell` and `list_dir` run in a container per call. `read_file` and `create_issue` run in the worker; `trackers.py` holds the two trackers. |
