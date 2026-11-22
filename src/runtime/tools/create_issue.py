@@ -105,9 +105,16 @@ def create_issue_tool(
             return look_up(call, str(error))
         # The error's type only, in both: its text can hold what the tracker
         # answered, which would enter the model's conversation and the log.
-        except (httpx2.HTTPError, httpx2.InvalidURL) as error:
+        except httpx2.HTTPError as error:
             return look_up(call, f"the tracker could not be reached: {type(error).__name__}")
-        except (ValueError, LookupError, TypeError, ArithmeticError, RecursionError) as error:
+        except (
+            httpx2.InvalidURL,  # A redirect in the answer that the client cannot read.
+            ValueError,
+            LookupError,
+            TypeError,
+            ArithmeticError,
+            RecursionError,
+        ) as error:
             return look_up(call, f"the tracker's answer was not an issue: {type(error).__name__}")
 
     def look_up(call: ToolCall, failure: str) -> ToolResult:

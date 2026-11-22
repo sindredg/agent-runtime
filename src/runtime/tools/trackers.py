@@ -72,7 +72,7 @@ class Tracker(Protocol):
         self, http: httpx2.AsyncClient, title: str, body: str, operation_id: str
     ) -> Issue:
         """Open the issue. Raises `Refused`, `httpx2.HTTPError`, or on a malformed answer
-        `ValueError`, `LookupError` or `TypeError`."""
+        `httpx2.InvalidURL`, `ValueError`, `LookupError` or `TypeError`."""
         ...
 
     def find(self, http: httpx2.Client, operation_id: str) -> Issue | None:

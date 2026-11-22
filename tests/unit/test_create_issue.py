@@ -360,12 +360,16 @@ def test_a_redirect_the_client_cannot_read_is_looked_up(tracker: Tracker) -> Non
 
     # Short enough to parse, too long once joined to the request's URL: that is
     # the case where the client raises InvalidURL, which is not an HTTPError.
+    location = "?" + "x" * 65_520
+    httpx2.URL(location)
+    with pytest.raises(httpx2.InvalidURL):
+        httpx2.URL(f"{URL}/issues").join(location)
 
     def store_then_answer(request: httpx2.Request) -> httpx2.Response:
         stored = tracker(request)
         if request.method != "POST":
             return stored
-        return httpx2.Response(302, headers={"Location": "?" + "x" * 65_520})
+        return httpx2.Response(302, headers={"Location": location})
 
     built = create_issue_tool(FakeTracker(URL), transport=httpx2.MockTransport(store_then_answer))
     assert built.run(CALL) == ToolResult("created issue 1: CI is red")
