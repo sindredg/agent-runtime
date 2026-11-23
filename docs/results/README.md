@@ -17,9 +17,8 @@ Jobs that ran with a real model, which are not the evidence for a guarantee:
 
 ## The run
 
-The results in the README's table, except the notification's, are from one
-run of every suite at one commit, on one machine with no other test run, in
-this order:
+The results in the README's table are from one run of every suite at one
+commit, on one machine with no other test run, in this order:
 
 ```mermaid
 flowchart LR
@@ -32,7 +31,7 @@ flowchart LR
 
 | | |
 |---|---|
-| Commit | `1f57ee4`, 2026-11-18, 21:38 to 23:17 UTC. The clock was steady for 120 s before the start. |
+| Commit | `4ed43c0`, 2026-11-23, 15:24 to 16:24 UTC. The clock was steady for 120 s before the start. |
 | Runs and seed | 200 random kill times for the lost-worker test, 200 for the approval test, seed `20261113`. Every other test: 1 run. |
 | Workers | 3 in the chaos stack, 2 in the lab, 1 in the normal stack |
 | Provider | The fake provider. The issue tracker is a fake, except Gitea in the lab. |
@@ -49,28 +48,30 @@ flowchart LR
 | Suite | Command | Result |
 |---|---|---|
 | Lint, format, types, docs limits | `uv run --frozen pre-commit run --all-files` | Passed |
-| Unit | `make test` | 1012 passed |
-| Integration | `make integration` | 536 passed |
+| Unit | `make test` | 1506 passed |
+| Integration | `make integration` | 699 passed |
 | Escape | `make escape` | 23 passed |
-| Chaos | `CHAOS_RUNS=200 make chaos` | 16 passed in 35 min |
-| Step log | `uv run runtime verify --all`, after the chaos run | 421 jobs, 0 mismatches |
-| Lab | `make lab` | 2 passed |
+| Chaos | `CHAOS_RUNS=200 make chaos` | 19 passed in 37 min |
+| Step log | `uv run runtime verify --all`, after the chaos run | 483 jobs, 0 mismatches |
+| Lab | `make lab` | 5 passed |
 
 ## Runs with a mechanism switched off
 
 Each switch is a change to the source, made for one run and then restored.
-30 switches, 33 runs, all at `1f57ee4`: each made its tests fail. The outcome
-of each is on the guarantee's page. The output is kept on the machine that
-ran them, not in the repository.
+At `4ed43c0`, all 40 entries of the fake provider in `scripts/switched_off.py`
+ended as listed, 108 of 108 tests ([run](https://github.com/sindredg/agent-runtime/actions/runs/45204873674)). The four switches with no
+entry ([issue 163](https://github.com/sindredg/agent-runtime/issues/163)) each failed their tests, on the machine above.
+
+The outcomes on the guarantee pages are from 30 switches at `1f57ee4`, unless
+a line names another commit. Their output is kept on the machine that ran
+them, not in the repository.
 
 Each switch was built into the stack its tests use, so its worker ran the
 changed code. The two chaos switches with a random-kill test ran 20 kills. A
 property test seldom reaches the cut of a tool result
 ([issue 61](https://github.com/sindredg/agent-runtime/issues/61)); a sandbox test covers it.
 
-The switches are now entries of `scripts/switched_off.py`, run from the
-Manual runs workflow. Four have no entry yet
-([issue 163](https://github.com/sindredg/agent-runtime/issues/163)). Runs at other commits:
+Runs at other commits:
 
 | Commit | What ran | Page |
 |---|---|---|
@@ -78,9 +79,7 @@ Manual runs workflow. Four have no entry yet
 | `49b9c6e` | Intent write off, fake provider and Claude API | [Kill runs](kill-runs.md#with-the-intent-write-switched-off) |
 | `11b6792` | Seven switched-off runs | [Durability](durability.md), [Controls](controls.md) |
 | `5a5bfa6` | Stored signature changed, Claude API: 5 of 5 jobs refused | [Kill runs](kill-runs.md#with-the-stored-signature-changed) |
-| `e1656b5` | All 34 entries of the fake provider: 96 of 96 tests as listed | [Switched-off runs](switched-off.md) |
-| `fbb293f` | Three entries, 5 tests | [Switched-off runs](switched-off.md#entries-added-after-that-run) |
-| `30108d4`, `7096a5c` | The notification, and the entry for the secret test | [Notification](notify.md), [Switched-off runs](switched-off.md#entries-added-after-that-run) |
+| `30108d4` | The notification's 5 s timing run | [Notification](notify.md#the-first-delivery-comes-within-5-s) |
 
 ## How a kill run works
 
@@ -103,14 +102,13 @@ log. See [Testing](../testing.md#records-a-test-trusts).
 
 ## What these results do not show
 
-- The code has changed since `1f57ee4`, and the run was not repeated
-  ([issue 205](https://github.com/sindredg/agent-runtime/issues/205)). CI runs the suites on each pull request, with 20 kills.
+- One run at one commit. Later commits get CI, which runs 20 kills, not 200.
 - Nothing in this run reached a real model provider. The one real issue
   tracker is Gitea in a container, in the lab. API runs have their own pages:
   [contract test](../contract-test.md), [eight jobs](api.md), [kill runs](kill-runs.md).
-- The chaos run's worker logs, 10,484 lines, hold no error-level line and
-  no failed lease renewal. An earlier run's lease renewals that timed out are
-  not explained
+- The chaos run's worker logs, 8,720 lines, hold one error-level line: a
+  lease renewal that timed out. Its job lost no lease and succeeded. The cause
+  is not established, nor is that of an earlier run's timeouts
   ([issue 69](https://github.com/sindredg/agent-runtime/issues/69)).
 - Everything ran on one host with one clock. A lost network between a worker
   and the database is covered by an integration test that cuts the database
@@ -119,6 +117,9 @@ log. See [Testing](../testing.md#records-a-test-trusts).
 
 ## Runs that do not count
 
+- `e993b32`: every suite passed, but 39 of the 40 switched-off entries ended
+  as listed. `refusal-triggers-off` named a test id that no longer existed and
+  ran no test ([issue 216](https://github.com/sindredg/agent-runtime/issues/216)).
 - `8c22e4e`: a takeover waited up to 39 ms less than its bound, in integration
   and in the sandbox-kill test
   ([issue 49](https://github.com/sindredg/agent-runtime/issues/49)). The

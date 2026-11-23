@@ -1,9 +1,9 @@
 # Results: budget, approval and tool output
 
 The evidence for the guarantees about what a job may spend and do. Every
-result here is from the run at `1f57ee4`, unless a line names another
-commit. Its conditions, and the runs with a mechanism switched off, are on
-the [Results](README.md) page. What a job may reach is on
+result here is from the run at `4ed43c0`, and each outcome with a mechanism
+off from `1f57ee4`, unless a line names another commit. The run's conditions
+are on the [Results](README.md) page. What a job may reach is on
 [Scope and sandbox](sandbox.md).
 
 The checks this page has evidence for, around one round of a job:
@@ -24,7 +24,7 @@ flowchart LR
 
 ## Budget, deadline and cancel
 
-Tested. Integration suite, 536 of 536 tests.
+Tested. Integration suite, 699 of 699 tests.
 
 - `test_budget.py`: a job that loops, set to read a 2 KB file thirty times,
   with a budget of 20,000 tokens.
@@ -66,7 +66,7 @@ Tested. `tests/chaos/test_approval.py`, 200 runs in the chaos run.
 
 - 200 jobs that ask before `create_issue`. The worker holding the job was
   killed at a random time before the question, and again after the answer.
-- 250 kills sent, 138 takeovers. 134 jobs were approved and 66 denied. No
+- 244 kills sent, 146 takeovers. 134 jobs were approved and 66 denied. No
   run failed.
 - The tracker holds 134 issues for 134 approvals, each created after its
   approval by the tracker's own time, and none for a denied call.
@@ -74,7 +74,7 @@ Tested. `tests/chaos/test_approval.py`, 200 runs in the chaos run.
   again. Two approvals, one issue.
 - Worker stopped after the approved call ran: the check finds the issue. One
   approval, one issue.
-- A job nobody answered, with an 8 s timeout: `failed` 0.10 s after its
+- A job nobody answered, with an 8 s timeout: `failed` 0.02 s after its
   deadline, no issue.
 
 `tests/integration/test_approval.py` covers the same with a tool that

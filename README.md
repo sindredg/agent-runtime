@@ -55,7 +55,7 @@ that such a run did not reach is named with its result.
 
 | Guarantee | Status | Evidence |
 |---|---|---|
-| A job survives a worker stopping | Tested | [200 of 200 jobs, 171 kills](docs/results/durability.md#a-job-survives-a-worker-stopping) |
+| A job survives a worker stopping | Tested | [200 of 200 jobs, 169 kills](docs/results/durability.md#a-job-survives-a-worker-stopping) |
 | An unsafe tool call does not run twice without approval | Tested, with [accepted exceptions](docs/limits.md#tool-calls) | [No operation id with two issues, also in Gitea](docs/results/durability.md#an-unsafe-tool-call-does-not-run-twice-without-approval) |
 | A stale worker cannot corrupt a job | Tested | [No write after the takeover](docs/results/durability.md#a-stale-worker-cannot-corrupt-a-job) |
 | A job that crashes its worker every time does not loop forever | Tested | [Failed after 5 takeovers](docs/results/durability.md#a-job-that-crashes-its-worker-does-not-loop-forever) |
@@ -64,17 +64,13 @@ that such a run did not reach is named with its result.
 | A tool call that needs approval does not run before a person approved it | Tested | [134 issues for 134 approvals](docs/results/controls.md#approval-before-a-tool-call) |
 | Bad tool output does not break a job | Tested | [100 MB cut to 64 KiB, the job goes on](docs/results/controls.md#bad-tool-output) |
 | Provider rate limits slow jobs, they do not fail them | Tested for one job. No limit shared by workers. | [One job waits out 60 s of 429s](docs/results/controls.md#a-busy-provider-slows-a-job) |
-| The step log cannot be changed without detection | Tested, with [stated limits](docs/step-log-chain.md#what-it-does-not-catch) | [Changes refused or found; 421 jobs verified](docs/results/durability.md#the-step-log-cannot-be-changed-without-detection) |
+| The step log cannot be changed without detection | Tested, with [stated limits](docs/step-log-chain.md#what-it-does-not-catch) | [Changes refused or found; 483 jobs verified](docs/results/durability.md#the-step-log-cannot-be-changed-without-detection) |
 | A job that waits for a person tells the operator, at least once | Tested. In the kill run the receiver holds each POST 1.5 s. | [Every question arrived, in three runs of 20 jobs](docs/results/notify.md) |
 | Throughput scales with workers | Not measured | |
 
-The table's results, except the notification's, are from one run at
-`1f57ee4`, on one machine, against the fake provider. The code has changed
-since and that run was not repeated ([issue 205](https://github.com/sindredg/agent-runtime/issues/205)). CI runs the suites
-on each pull request, with 20 kills. Later runs name their commit: [Results](docs/results/README.md).
-
-The notification came after that run. Its results are from runs on GitHub
-from `main` at `30108d4` and `7096a5c`, against the fake provider.
+The table's results are from one run of every suite at `4ed43c0`, on one
+machine, against the fake provider. CI runs the suites on each pull request,
+with 20 kills. Runs at other commits are named on [Results](docs/results/README.md).
 
 The fake provider is compared with the Claude API by a contract test that is
 started by hand: [The contract test](docs/contract-test.md). Eight single
