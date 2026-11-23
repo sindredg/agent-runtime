@@ -1,5 +1,6 @@
 """The fake provider in process: messages, event streams, errors, request log."""
 
+import hashlib
 import json
 from typing import Any
 
@@ -9,6 +10,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from fake_provider.app import create_app
+from fake_provider.faults import Fault, stream_parts
 from fake_provider.messages import build_message, estimate_tokens, stream_events
 from fake_provider.scenario import Scenario, parse_scenario
 
@@ -533,3 +535,172 @@ def test_the_request_log_has_the_usage_of_each_answer() -> None:
         "input_tokens": message["usage"]["input_tokens"],
         "output_tokens": message["usage"]["output_tokens"],
     }
+
+
+def fault_client() -> TestClient:
+    # A broken stream raises inside the app on purpose, to drop the connection.
+    return TestClient(
+        create_app({"two": TWO_TURNS, "other": TWO_TURNS}),
+        base_url=LOCAL,
+        raise_server_exceptions=False,
+    )
+
+
+def test_a_fault_answers_exactly_the_next_requests_for_its_model() -> None:
+    api = fault_client()
+    set_fault = api.put(
+        "/_fake/fault", json={"model": "two", "count": 2, "kind": "status", "status": 500}
+    )
+    assert set_fault.status_code == 204
+
+    other = api.post("/v1/messages", json=request(model="other"), headers=HEADERS)
+    assert other.status_code == 200
+    statuses = [
+        api.post("/v1/messages", json=request(), headers=HEADERS).status_code for _ in range(3)
+    ]
+    assert statuses == [500, 500, 200]
+
+    log = api.get("/_fake/requests").json()
+    assert [entry.get("fault") for entry in log] == [None, "status", "status", None]
+    assert log[1]["status"] == 500
+    assert log[1]["error"] == "api_error"
+
+
+@pytest.mark.parametrize(
+    ("status", "kind"),
+    [
+        (400, "invalid_request_error"),
+        (408, "timeout_error"),
+        (409, "conflict_error"),
+        (500, "api_error"),
+        (502, "api_error"),
+        (503, "api_error"),
+        (504, "timeout_error"),
+    ],
+)
+def test_a_status_fault_answers_with_the_apis_error_type(status: int, kind: str) -> None:
+    api = fault_client()
+    api.put(
+        "/_fake/fault",
+        json={"model": "two", "count": 1, "kind": "status", "status": status, "retry_after": 7},
+    )
+    answered = api.post("/v1/messages", json=request(stream=True), headers=HEADERS)
+    assert answered.status_code == status
+    assert answered.json()["error"]["type"] == kind
+    assert answered.headers["retry-after"] == "7"
+    assert answered.headers["request-id"] == answered.json()["request_id"]
+    [entry] = api.get("/_fake/requests").json()
+    assert (entry["status"], entry["error"], entry["retry_after"]) == (status, kind, 7)
+
+
+@pytest.mark.parametrize("kind", ["api_error", "timeout_error"])
+def test_a_stream_error_comes_after_some_output(kind: str) -> None:
+    api = fault_client()
+    api.put(
+        "/_fake/fault", json={"model": "two", "count": 1, "kind": "stream_error", "error": kind}
+    )
+    answered = api.post("/v1/messages", json=request(stream=True), headers=HEADERS)
+    assert answered.status_code == 200
+    assert "event: content_block_delta" in answered.text
+    assert "event: error" in answered.text
+    assert f'"type": "{kind}"' in answered.text
+    assert "event: message_delta" not in answered.text
+    [entry] = api.get("/_fake/requests").json()
+    assert (entry["fault"], entry["status"], entry["error"]) == ("stream_error", 200, kind)
+
+
+def test_a_stream_without_its_stop_reason_ends_before_message_delta() -> None:
+    api = fault_client()
+    api.put("/_fake/fault", json={"model": "two", "count": 1, "kind": "no_stop_reason"})
+    answered = api.post("/v1/messages", json=request(stream=True), headers=HEADERS)
+    assert answered.status_code == 200
+    assert "event: content_block_stop" in answered.text
+    assert "event: message_delta" not in answered.text
+    assert "event: message_stop" not in answered.text
+
+
+def test_a_broken_stream_stays_in_the_log_and_sends_no_end() -> None:
+    fault = Fault(model="two", count=1, kind="broken_stream")
+    parts = b"".join(stream_parts(fault, "two", 1))
+    assert b"event: content_block_delta" in parts
+    assert b"event: message_delta" not in parts
+
+    api = fault_client()
+    api.put("/_fake/fault", json={"model": "two", "count": 1, "kind": "broken_stream"})
+    api.post("/v1/messages", json=request(stream=True), headers=HEADERS)
+    [entry] = api.get("/_fake/requests").json()
+    assert (entry["fault"], entry["status"]) == ("broken_stream", 200)
+
+
+def test_a_200_that_is_not_a_message_stream() -> None:
+    api = fault_client()
+    api.put("/_fake/fault", json={"model": "two", "count": 1, "kind": "not_a_stream"})
+    answered = api.post("/v1/messages", json=request(stream=True), headers=HEADERS)
+    assert answered.status_code == 200
+    assert answered.headers["content-type"].startswith("text/html")
+    assert "event:" not in answered.text
+
+
+def test_a_held_request_is_answered_504_after_the_hold() -> None:
+    api = fault_client()
+    api.put("/_fake/fault", json={"model": "two", "count": 1, "kind": "hold", "seconds": 0.01})
+    answered = api.post("/v1/messages", json=request(stream=True), headers=HEADERS)
+    assert answered.status_code == 504
+    [entry] = api.get("/_fake/requests").json()
+    assert (entry["fault"], entry["status"], entry["error"]) == ("hold", 504, "timeout_error")
+
+
+@pytest.mark.parametrize(("kind", "status"), [("spend_cap", 429), ("stream_spend_cap", 200)])
+def test_a_spend_cap_carries_its_error_code(kind: str, status: int) -> None:
+    api = fault_client()
+    api.put("/_fake/fault", json={"model": "two", "count": 1, "kind": kind})
+    answered = api.post("/v1/messages", json=request(stream=True), headers=HEADERS)
+    assert answered.status_code == status
+    assert "enforced_spend_limit_reached" in answered.text
+
+
+def test_a_fault_can_be_cleared_and_replaced() -> None:
+    api = fault_client()
+    five = {"model": "two", "count": 5, "kind": "status", "status": 500}
+    api.put("/_fake/fault", json=five)
+    assert api.delete("/_fake/fault").status_code == 204
+    assert api.post("/v1/messages", json=request(), headers=HEADERS).status_code == 200
+
+    api.put("/_fake/fault", json=five)
+    api.put("/_fake/fault", json={**five, "count": 1, "status": 503})
+    first = api.post("/v1/messages", json=request(), headers=HEADERS)
+    second = api.post("/v1/messages", json=request(), headers=HEADERS)
+    assert (first.status_code, second.status_code) == (503, 200)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"count": 1, "kind": "status", "status": 500},
+        {"model": "two", "kind": "status", "status": 500},
+        {"model": "two", "count": 0, "kind": "status", "status": 500},
+        {"model": "two", "count": 1, "kind": "status"},
+        {"model": "two", "count": 1, "kind": "status", "status": 418},
+        {"model": "two", "count": 1, "kind": "status", "status": 529},
+        {"model": "two", "count": 1, "kind": "stream_error"},
+        {"model": "two", "count": 1, "kind": "stream_error", "error": "overloaded_error"},
+        {"model": "two", "count": 1, "kind": "hold"},
+        {"model": "two", "count": 1, "kind": "hold", "seconds": 61},
+        {"model": "two", "count": 1, "kind": "broken_stream", "status": 500},
+        {"model": "two", "count": 1, "kind": "not_a_stream", "retry_after": 5},
+        {"model": "two", "count": 1, "kind": "unknown"},
+        {"model": "two", "count": 1, "kind": "not_a_stream", "extra": 1},
+    ],
+)
+def test_a_fault_that_makes_no_sense_is_refused(body: dict[str, Any]) -> None:
+    assert fault_client().put("/_fake/fault", json=body).status_code == 422
+
+
+def test_the_log_keeps_a_hash_of_the_bytes_received() -> None:
+    api = fault_client()
+    raw = json.dumps(request()).encode()
+    for content in (raw, raw, raw + b" "):
+        api.post("/v1/messages", content=content, headers=HEADERS)
+    first, second, third = (entry["body_sha256"] for entry in api.get("/_fake/requests").json())
+    assert first == second == hashlib.sha256(raw).hexdigest()
+    assert third != first
