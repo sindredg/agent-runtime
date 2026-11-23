@@ -1,7 +1,8 @@
 # Backoff
 
-A rate limit or overload from the provider slows a job; it does not fail it.
-An error that may pass does the same, up to a cap. The job waits in `waiting`
+A 429 or 529 from the provider slows a job; it does not fail it. An error
+that may pass, an overload inside a stream included, does the same up to a
+cap. The job waits in `waiting`
 and goes on from its step log
 ([ADR 0018](adr/0018-wait-out-a-busy-provider-in-the-waiting-status.md),
 [ADR 0030](adr/0030-wait-out-a-provider-error-up-to-a-cap.md)).

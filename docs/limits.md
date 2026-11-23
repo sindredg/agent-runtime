@@ -32,7 +32,7 @@ refused, but the tool ran. An idempotency key on the other side closes this.
   lets one check pass on a lease that is over. The write is still refused.
 - A job is failed at its sixth takeover, also when the workers were lost for
   reasons that have nothing to do with the job. The limit is a constant.
-- Rate limits, overload and, up to a cap, errors that may pass are waited out.
+- A 429 or 529 and, up to a cap, an error that may pass are waited out.
   Other failed calls fail the job. Workers share no limit ([Backoff](backoff.md#limits)).
 - A response cut off at `max_tokens`, or a refusal, fails the job. It is not
   continued.

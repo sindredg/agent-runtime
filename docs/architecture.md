@@ -68,7 +68,7 @@ Rules of one turn:
 - A response that fails the check fails the job.
 - The calls of one response run one after another.
 - A failed tool call is an error result for the model, and the job goes on.
-- A rate limit, an overload or, up to a cap, an error that may pass makes
+- A 429, a 529 or, up to a cap, an error that may pass makes
   the job wait in `waiting` ([Backoff](backoff.md)). Any other failed model
   call fails the job with an `error` step.
 
@@ -115,7 +115,7 @@ Only a tool call with an intent and no result needs more: see
 | [Sandbox](sandbox.md) | The container of a tool call and its time bounds |
 | [Scope](scope.md) | What a tool can reach on the network |
 | [Cancel, deadline and budget](halt.md) | How a job is stopped and kept inside its limits |
-| [Backoff](backoff.md) | How a job waits out a rate limit, an overload or an error that may pass |
+| [Backoff](backoff.md) | How a job waits out a 429, a 529 or an error that may pass |
 | [Approval](approval.md) | Asking a person before a tool call runs |
 | [Settings](settings.md) | Environment variables |
 | [Testing](testing.md) | Suites, failure switches, commands |
