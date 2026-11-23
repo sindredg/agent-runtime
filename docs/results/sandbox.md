@@ -4,7 +4,7 @@ The evidence that a tool reaches only its job's scope, and nothing else of
 the host. The conditions of the runs are on the [Results](README.md) page.
 The mechanisms are in [Sandbox](../sandbox.md) and [Scope](../scope.md).
 
-Tested. `make escape`, 23 of 23 tests, in the run at `1f57ee4`, unless a
+Tested. `make escape`, 23 of 23 tests, in the run at `4ed43c0`, unless a
 line names another commit. Docker 29.1.3, `kernel.yama.ptrace_scope` 1,
 both read from the host and not recorded by the run.
 
@@ -75,7 +75,8 @@ Integration suite, `test_sandbox.py`:
   workspace held between 8 and 16 MiB, and the container was gone.
 - With a 1 MiB limit, a workspace already over it ran no command.
 
-With the mechanism off, each of 10 switches failed its tests. Among them:
+With the mechanism off, at `1f57ee4`, each of 10 switches failed its tests.
+Among them:
 no measurement during a call, none before it, no cap on files, no deadline
 on the walk, and a watcher that leaves the run going on a cancel (a
 container was left).

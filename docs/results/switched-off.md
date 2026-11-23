@@ -13,17 +13,17 @@ Status: tested. Every entry of the fake provider ran once, from `main`.
 
 ```mermaid
 flowchart LR
-    S[one start,<br/>suite switched-off-all] --> N[34 entries of the<br/>fake provider, from main]
+    S[one start,<br/>suite switched-off-all] --> N[40 entries of the<br/>fake provider, from main]
     N --> J[one job each:<br/>edit, stack, tests]
-    J --> V[96 tests judged:<br/>93 failed on their assertion,<br/>3 passed as listed]
+    J --> V[108 tests judged:<br/>105 failed on their assertion,<br/>3 passed as listed]
 ```
 
 | | |
 |---|---|
-| Run | [44913490395](https://github.com/sindredg/agent-runtime/actions/runs/44913490395), 2026-11-21 |
-| Commit | `e1656b5` |
-| Entries | 34 of 34 ended as the list says. 1 run each. |
-| Tests | 96 of 96 ended as the list says: 93 failed on their named assertion, 3 passed as listed. |
+| Run | [45204873674](https://github.com/sindredg/agent-runtime/actions/runs/45204873674), 2026-11-23 |
+| Commit | `4ed43c0` |
+| Entries | 40 of 40 ended as the list says. 1 run each. |
+| Tests | 108 of 108 ended as the list says: 105 failed on their named assertion, 3 passed as listed. |
 | Provider | The fake provider. No job of the run holds a secret. |
 | Where | GitHub-hosted `ubuntu-26.04` runners, one job per entry. The logs are public and kept 90 days. |
 
@@ -65,45 +65,29 @@ flowchart LR
 | `workspace-timeout-off` | The time box of one measurement of the workspace | None | 1 |
 | `workspace-stop-signal-off` | The signal that tells a walk to stop past its time box or on a cancel | None | 2 |
 | `workspace-walk-stop-off` | A walk's check of the signal to stop | None | 1 |
+| `takeover-wait-for-a-request-off` | The bound `create_issue` names for its request, which a takeover waits out | Normal | 2 |
+| `create-deadline-off` | The one deadline of the request that opens an issue | None | 2 |
+| `abortive-close-off` | The reset of a given-up request's connection | None | 1 |
+| `notify-loop-off` | The loop in every worker that posts a parked job's question | Chaos | 3 |
+| `notify-row-off` | The notification row the park writes with the job's move | Chaos | 3 |
+| `tool-env-passed-on` | The tool container's environment, which holds nothing of the worker's | Normal | 1 |
 
-## Entries added after that run
+Two outcomes read at earlier commits. With the bound off, at `fbb293f`, two
+workers and a stalled tracker ended with two issues for one call. With the
+environment passed on, at `7096a5c`, the secret test found the provider key
+and the tracker token in a tool result and in two answers of the API.
 
-Three entries came with [ADR 0025](../adr/0025-a-tool-in-the-worker-names-how-long-its-request-can-arrive.md).
-Each ran once from `main` at `fbb293f`, 2026-11-21, on the fake provider: 5
-of 5 tests failed on their named assertion.
-
-| Entry | Mechanism switched off | Stack | Tests | Run |
-|---|---|---|---|---|
-| `takeover-wait-for-a-request-off` | The bound `create_issue` names for its request, which a takeover waits out | Normal | 2 | [44919781490](https://github.com/sindredg/agent-runtime/actions/runs/44919781490) |
-| `create-deadline-off` | The one deadline of the request that opens an issue | None | 2 | [44919789084](https://github.com/sindredg/agent-runtime/actions/runs/44919789084) |
-| `abortive-close-off` | The reset of a given-up request's connection | None | 1 | [44919796574](https://github.com/sindredg/agent-runtime/actions/runs/44919796574) |
-
-With the bound off, the test with two workers and a stalled tracker ends
-with two issues for one call.
-
-Three more came later, each run once from `main` on the fake provider. Each
-test failed on its named assertion.
-
-| Entry | Mechanism switched off | Stack | Tests | Run |
-|---|---|---|---|---|
-| `notify-loop-off` | The loop in every worker that posts a parked job's question | Chaos | 3 | [45032321971](https://github.com/sindredg/agent-runtime/actions/runs/45032321971), `30108d4` |
-| `notify-row-off` | The notification row the park writes with the job's move | Chaos | 3 | [45032324614](https://github.com/sindredg/agent-runtime/actions/runs/45032324614), `30108d4` |
-| `tool-env-passed-on` | The tool container's environment, which holds nothing of the worker's | Normal | 1 | [45047751328](https://github.com/sindredg/agent-runtime/actions/runs/45047751328), `7096a5c` |
-
-The first two guard the notification ([results](notify.md#with-the-mechanism-off)). With
-the third, the secret test finds the provider key and the tracker token in
-a tool result and in two answers of the API.
-
-The one entry on the Claude API, `thinking-signature-changed`, has
-[its own run](kill-runs.md#with-the-stored-signature-changed).
+The one entry on the Claude API, `thinking-signature-changed`, did not run
+here. It has [its own run](kill-runs.md#with-the-stored-signature-changed) at `5a5bfa6`.
 
 ## What this run does not show
 
 - One run per entry. The entries on the chaos stack kill workers at random
   times, so a second run takes other paths.
-- Four switches of the earlier runs have no entry: the takeover cap, the
-  cancel check, the deadline timer, and the skip in the workspace walk.
-  Their tests end in a timeout or an error, not on an assertion
+- Four switches have no entry: the takeover cap, the cancel check, the
+  deadline timer, and the skip in the workspace walk. Each failed its tests
+  at `4ed43c0`, on the full run's machine. Their tests end in a timeout or an
+  error, not on an assertion
   ([issue 163](https://github.com/sindredg/agent-runtime/issues/163)).
 - Two more have no entry: the deny list without the runtime's networks
   ([sandbox](sandbox.md)) and both cuts for `list_dir`
