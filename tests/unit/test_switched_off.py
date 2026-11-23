@@ -870,16 +870,36 @@ def test_a_listed_file_pytest_cannot_collect_is_a_problem(
     assert "tests/unit/test_x.py" in problem
 
 
-@pytest.mark.parametrize("options", ["-q", "-v", "-k nothing_matches"])
-def test_pytest_options_in_the_environment_do_not_change_the_collection(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, options: str
+@pytest.mark.parametrize(
+    ("variable", "value"),
+    [
+        ("PYTEST_ADDOPTS", "-q"),
+        ("PYTEST_ADDOPTS", "-v"),
+        ("PYTEST_ADDOPTS", "-k nothing_matches"),
+        ("PYTEST_PLUGINS", "no_such_plugin"),
+    ],
+)
+def test_pytest_settings_in_the_environment_do_not_change_the_collection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, variable: str, value: str
 ) -> None:
     (tmp_path / "tests" / "unit").mkdir(parents=True)
     (tmp_path / "tests" / "unit" / "test_x.py").write_text("def test_y():\n    assert True\n")
     entry = replace(ENTRY, expect=(switched_off.Expect(NODE, "assert"),))
     monkeypatch.setattr(switched_off, "ENTRIES", {"listed": entry})
-    monkeypatch.setenv("PYTEST_ADDOPTS", options)
+    monkeypatch.setenv(variable, value)
     assert switched_off.uncollected(tmp_path) == []
+
+
+def test_a_listed_file_with_no_tests_says_so(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "tests" / "unit").mkdir(parents=True)
+    (tmp_path / "tests" / "unit" / "test_x.py").write_text("x = 1\n")
+    entry = replace(ENTRY, expect=(switched_off.Expect(NODE, "assert"),))
+    monkeypatch.setattr(switched_off, "ENTRIES", {"empty": entry})
+    assert switched_off.uncollected(tmp_path) == [
+        "pytest could not collect the listed tests: exit 5: no tests collected"
+    ]
 
 
 def test_the_check_command_fails_on_a_test_pytest_does_not_collect(
