@@ -1180,9 +1180,14 @@ def uncollected(root: Path = ROOT) -> list[str]:
 
     A run with an unknown id runs none of its entry's tests. `--noconftest`
     keeps this off the stack: the suites' conftests need Docker to start.
+    A parameter that came from a conftest fixture would read as missing; no
+    conftest has one. `PYTEST_ADDOPTS` is dropped because its options change
+    what pytest collects and the output read here.
     """
     nodes = {expect.node for entry in ENTRIES.values() for expect in entry.expect}
     files = sorted({node.partition("::")[0] for node in nodes})
+    env = without_keys(os.environ)
+    env.pop("PYTEST_ADDOPTS", None)
     done = subprocess.run(  # noqa: S603 - a fixed command and the list's own paths
         [
             sys.executable,
@@ -1200,10 +1205,12 @@ def uncollected(root: Path = ROOT) -> list[str]:
         capture_output=True,
         text=True,
         check=False,
-        env=without_keys(os.environ),
+        env=env,
     )
     if done.returncode != 0:
-        return [f"pytest could not collect the listed tests: exit {done.returncode}"]
+        output = [*done.stdout.splitlines(), *done.stderr.splitlines()]
+        errors = "; ".join(line for line in output if line.startswith("ERROR"))
+        return [f"pytest could not collect the listed tests: exit {done.returncode}: {errors}"]
     collected = set(done.stdout.splitlines())
     return [f"pytest collects no test {node}" for node in sorted(nodes - collected)]
 

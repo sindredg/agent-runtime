@@ -865,7 +865,29 @@ def test_a_listed_file_pytest_cannot_collect_is_a_problem(
     monkeypatch.setattr(switched_off, "ENTRIES", {"broken": entry})
     problems = switched_off.uncollected(tmp_path)
     assert len(problems) == 1
-    assert problems[0].startswith("pytest could not collect the listed tests: exit ")
+    problem = problems[0]
+    assert problem.startswith("pytest could not collect the listed tests: exit ")
+    assert "tests/unit/test_x.py" in problem
+
+
+@pytest.mark.parametrize("options", ["-q", "-v", "-k nothing_matches"])
+def test_pytest_options_in_the_environment_do_not_change_the_collection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, options: str
+) -> None:
+    (tmp_path / "tests" / "unit").mkdir(parents=True)
+    (tmp_path / "tests" / "unit" / "test_x.py").write_text("def test_y():\n    assert True\n")
+    entry = replace(ENTRY, expect=(switched_off.Expect(NODE, "assert"),))
+    monkeypatch.setattr(switched_off, "ENTRIES", {"listed": entry})
+    monkeypatch.setenv("PYTEST_ADDOPTS", options)
+    assert switched_off.uncollected(tmp_path) == []
+
+
+def test_the_check_command_fails_on_a_test_pytest_does_not_collect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(switched_off, "check", list)
+    monkeypatch.setattr(switched_off, "uncollected", lambda: ["pytest collects no test x"])
+    assert switched_off.main(["check"]) == 1
 
 
 def test_an_edit_of_a_migration_is_made_like_one_of_the_source() -> None:
