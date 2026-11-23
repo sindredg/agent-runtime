@@ -31,7 +31,7 @@ Wait as for a busy answer, with two caps.
   that is no message stream, and a retryable error event inside a stream wait,
   with the cause `provider_error`. A spend cap and other 4xx still fail.
 - An overload or rate limit inside a stream counts here, not as busy. Output
-  has begun, so the call can be billed, and a busy wait has no cap.
+  may have begun, so the call can be billed, and a busy wait has no cap.
 - The move, `not_before`, the delay and `retry-after` are those of ADR 0018.
   `n` counts every wait since the last response, of either cause.
 - At most 10 such waits since the last response, and 30 in the job. The next
@@ -49,5 +49,7 @@ Wait as for a busy answer, with two caps.
   fails it, and one for each of the six workers it can lose before a wait is
   stored. Each can be billed without being counted.
 - A busy provider still has no cap and can hold a job until its deadline.
+- The job cap never resets. A long job that meets 31 separate errors fails,
+  even if every retry worked.
 - The caps were tested against the fake provider's faults, not against an
   incident of the Claude API.

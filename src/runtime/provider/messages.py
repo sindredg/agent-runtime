@@ -20,8 +20,8 @@ _RETRYABLE_ERROR_TYPES = frozenset(
 )
 # The provider is busy: it refused the call with a 429 or 529. The job waits
 # and tries again (ADR 0018). An error inside a stream is not counted as busy,
-# whatever its type: output has begun, so the call can be billed, and it falls
-# under the caps on provider errors (ADR 0030).
+# whatever its type: output may have begun, so the call can be billed, and it
+# falls under the caps on provider errors (ADR 0030).
 _BUSY_STATUSES = frozenset({429, 529})
 # A 429 for a spend cap. It has the rate limit's type and no `retry-after`,
 # and waiting does not lift it.
@@ -136,10 +136,11 @@ class AnthropicProvider:
             raise ProviderError(
                 f"no complete response from the provider: {error!r}", status=None, retryable=True
             ) from error
-        except (AssertionError, json.JSONDecodeError) as error:
+        except (AssertionError, json.JSONDecodeError, IndexError, AttributeError) as error:
             # What the SDK raises for a 200 that is not a message stream: an
-            # empty body, other content, or a line that is not JSON. The
-            # answer was bad, not the request, so it may be sent again.
+            # empty body, other content, a line that is not JSON, or events
+            # it cannot put together. The answer was bad, not the request, so
+            # it may be sent again.
             raise ProviderError(
                 f"the provider's answer is not a message stream: {error!r}",
                 status=None,

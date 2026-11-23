@@ -645,6 +645,10 @@ ENTRIES: dict[str, SwitchedOff] = {
             Edit(
                 AGENT,
                 "                if error.busy:\n",
+                # A busy answer is retryable too, so it has to fail here, or
+                # the wait on a provider error would take it.
+                "                if error.busy:\n"
+                '                    raise _JobFailed(f"model call failed: {error}") from error\n'
                 "                if False:  # switched off\n",
             ),
         ),

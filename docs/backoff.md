@@ -36,8 +36,8 @@ and [claim query](../src/runtime/store/jobs.py).
   the time of the calls. A `retry-after` can hold a job until its deadline.
 - The job cap bounds calls that can be billed and are not counted: 31 with a
   recorded wait or failure, plus one for each of the six workers a job can lose.
-- An error inside a stream counts, also an overload: output has begun, so the
-  call can be billed.
+- An error inside a stream counts, also an overload: output may have begun,
+  so the call can be billed.
 - A busy wait does not reset the error count, and has no cap of its own.
 - The counts come from the step log, so any worker continues them.
 

@@ -276,7 +276,7 @@ def test_the_eleventh_error_in_a_row_fails_the_job_and_names_the_cap(
 def test_a_busy_error_inside_a_stream_counts_toward_the_cap(
     stack: Stack, fault: Any, kind: str
 ) -> None:
-    """Output has begun, so the call can be billed: it does not wait without a cap."""
+    """Output may have begun, so the call can be billed: it does not wait without a cap."""
     fault(MAX_ERRORS_IN_A_ROW + 5, kind="stream_error", error=kind)
 
     async def body(engine: AsyncEngine, provider: AnthropicProvider) -> Any:

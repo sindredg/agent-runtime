@@ -215,7 +215,7 @@ def test_a_spend_cap_inside_a_stream_is_not_waited_out() -> None:
 @pytest.mark.parametrize(
     ("kind", "retryable", "busy"),
     [
-        # Output has begun, so the call can be billed: it falls under the caps.
+        # Output may have begun, so the call can be billed: it falls under the caps.
         ("overloaded_error", True, False),
         ("api_error", True, False),
         ("rate_limit_error", True, False),
@@ -243,8 +243,31 @@ def test_an_error_event_inside_a_started_stream_is_classified_by_its_type(
         httpx2.Response(200, json={"hello": "not a stream"}),
         httpx2.Response(200, text="<html>a proxy's page</html>"),
         httpx2.Response(204),
+        sse(
+            [
+                STREAM[0],
+                encode_sse(
+                    "content_block_delta",
+                    {
+                        "type": "content_block_delta",
+                        "index": 5,
+                        "delta": {"type": "text_delta", "text": "x"},
+                    },
+                ),
+            ]
+        ),
+        sse([encode_sse("message_start", {"type": "message_start", "message": "text"})]),
     ],
-    ids=["empty", "ping-only", "bad-json-line", "json-body", "html-body", "no-content"],
+    ids=[
+        "empty",
+        "ping-only",
+        "bad-json-line",
+        "json-body",
+        "html-body",
+        "no-content",
+        "delta-out-of-range",
+        "message-is-a-string",
+    ],
 )
 def test_a_200_that_is_not_a_message_stream_is_a_provider_error(response: httpx2.Response) -> None:
     with pytest.raises(ProviderError) as raised:
