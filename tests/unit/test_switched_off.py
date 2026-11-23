@@ -827,6 +827,89 @@ def test_the_check_reads_an_entrys_edits_of_one_file_together(
     assert switched_off.check(tmp_path) == []
 
 
+def test_pytest_collects_every_listed_test() -> None:
+    assert switched_off.uncollected() == []
+
+
+def test_a_listed_parameter_that_no_longer_exists_is_found(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "tests" / "unit").mkdir(parents=True)
+    (tmp_path / "tests" / "unit" / "test_x.py").write_text(
+        textwrap.dedent(
+            """\
+            import pytest
+
+            @pytest.mark.parametrize("case", ["new"])
+            def test_y(case):
+                assert case
+            """
+        )
+    )
+    stale = f"{NODE}[old]"
+    entry = replace(ENTRY, expect=(switched_off.Expect(stale, "assert"),))
+    monkeypatch.setattr(switched_off, "ENTRIES", {"stale": entry})
+    assert switched_off.uncollected(tmp_path) == [f"pytest collects no test {stale}"]
+
+    current = replace(ENTRY, expect=(switched_off.Expect(f"{NODE}[new]", "assert"),))
+    monkeypatch.setattr(switched_off, "ENTRIES", {"current": current})
+    assert switched_off.uncollected(tmp_path) == []
+
+
+def test_a_listed_file_pytest_cannot_collect_is_a_problem(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "tests" / "unit").mkdir(parents=True)
+    (tmp_path / "tests" / "unit" / "test_x.py").write_text("def test_y(:\n")
+    entry = replace(ENTRY, expect=(switched_off.Expect(NODE, "assert"),))
+    monkeypatch.setattr(switched_off, "ENTRIES", {"broken": entry})
+    problems = switched_off.uncollected(tmp_path)
+    assert len(problems) == 1
+    problem = problems[0]
+    assert problem.startswith("pytest could not collect the listed tests: exit ")
+    assert "tests/unit/test_x.py" in problem
+
+
+@pytest.mark.parametrize(
+    ("variable", "value"),
+    [
+        ("PYTEST_ADDOPTS", "-q"),
+        ("PYTEST_ADDOPTS", "-v"),
+        ("PYTEST_ADDOPTS", "-k nothing_matches"),
+        ("PYTEST_PLUGINS", "no_such_plugin"),
+    ],
+)
+def test_pytest_settings_in_the_environment_do_not_change_the_collection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, variable: str, value: str
+) -> None:
+    (tmp_path / "tests" / "unit").mkdir(parents=True)
+    (tmp_path / "tests" / "unit" / "test_x.py").write_text("def test_y():\n    assert True\n")
+    entry = replace(ENTRY, expect=(switched_off.Expect(NODE, "assert"),))
+    monkeypatch.setattr(switched_off, "ENTRIES", {"listed": entry})
+    monkeypatch.setenv(variable, value)
+    assert switched_off.uncollected(tmp_path) == []
+
+
+def test_a_listed_file_with_no_tests_says_so(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "tests" / "unit").mkdir(parents=True)
+    (tmp_path / "tests" / "unit" / "test_x.py").write_text("x = 1\n")
+    entry = replace(ENTRY, expect=(switched_off.Expect(NODE, "assert"),))
+    monkeypatch.setattr(switched_off, "ENTRIES", {"empty": entry})
+    assert switched_off.uncollected(tmp_path) == [
+        "pytest could not collect the listed tests: exit 5: no tests collected"
+    ]
+
+
+def test_the_check_command_fails_on_a_test_pytest_does_not_collect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(switched_off, "check", list)
+    monkeypatch.setattr(switched_off, "uncollected", lambda: ["pytest collects no test x"])
+    assert switched_off.main(["check"]) == 1
+
+
 def test_an_edit_of_a_migration_is_made_like_one_of_the_source() -> None:
     """Both of the entry's edits land in the one migration file, and nothing else changes."""
     entry = switched_off.ENTRIES["refusal-triggers-off"]
