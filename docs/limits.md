@@ -32,8 +32,8 @@ refused, but the tool ran. An idempotency key on the other side closes this.
   lets one check pass on a lease that is over. The write is still refused.
 - A job is failed at its sixth takeover, also when the workers were lost for
   reasons that have nothing to do with the job. The limit is a constant.
-- Only a rate limit or overload is waited out. Any other failed model call
-  fails the job, and workers share no limit ([Backoff](backoff.md#limits)).
+- Rate limits, overload and, up to a cap, errors that may pass are waited out.
+  Other failed calls fail the job. Workers share no limit ([Backoff](backoff.md#limits)).
 - A response cut off at `max_tokens`, or a refusal, fails the job. It is not
   continued.
 - The whole conversation is sent with every model call. A job that outgrows
@@ -103,7 +103,8 @@ refused, but the tool ran. An idempotency key on the other side closes this.
 ## Halt and budget
 
 - `token_budget` is not a hard bound. A model call that is cut off can be
-  billed and is not counted. A job can be taken over 5 times.
+  billed and is not counted. A job can be taken over 5 times, and can make
+  31 failed calls to a provider that errors ([Backoff](backoff.md#the-caps)).
 - The bound counts tool results by their bytes, a token for each. A job with
   large tool results stops well before its budget is spent.
 - The bound assumes a token is never shorter than one byte. Tokens a provider

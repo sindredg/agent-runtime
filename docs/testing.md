@@ -124,6 +124,8 @@ test writes its result to `.chaos/results.jsonl` with a `verdict`: `passed`,
   is cut, with stop reason `max_tokens`.
 - `PUT /_fake/busy` makes it answer 429 or 529 for a time, for one model or
   all ([Backoff](backoff.md)).
+- `PUT /_fake/fault` fails the next N requests for one model in one named
+  way. Each stays in the request log with what it was answered.
 - The fake tracker stores up to 100,000 issues in memory and never merges
   two.
 
