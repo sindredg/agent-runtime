@@ -104,7 +104,7 @@ refused, but the tool ran. An idempotency key on the other side closes this.
 
 - `token_budget` is not a hard bound. A model call that is cut off can be
   billed and is not counted. A job can be taken over 5 times, and can make
-  31 failed calls to a provider that errors ([Backoff](backoff.md#the-caps)).
+  up to 37 failed calls to a provider that errors ([Backoff](backoff.md#the-caps)).
 - The bound counts tool results by their bytes, a token for each. A job with
   large tool results stops well before its budget is spent.
 - The bound assumes a token is never shorter than one byte. Tokens a provider
@@ -114,7 +114,7 @@ refused, but the tool ran. An idempotency key on the other side closes this.
 - A halt waits for what it cannot race: container removals and the fenced
   write that ends the job. A slow Docker daemon can push a cancel or a
   deadline past 5 s.
-- A cancel answered 202 can still end with the job `succeeded`, as it finishes.
+- A cancel answered 202 can still end `succeeded` or `failed` as the job ends.
 - The deadline timer reads the database clock once, then counts on the
   monotonic clock. A wall clock step while it waits moves the stop by as much.
 - The 5 s a stop leaves around a sandboxed call is a margin, not a bound. A

@@ -40,10 +40,12 @@ Wait as for a busy answer, with two caps.
 
 ## Consequences
 
-- Ten waits in a row last 181 to 362 s. That rides out an incident of a few
-  minutes. A longer one fails the job, and its log shows why.
-- A job makes at most 31 failed calls of this kind: 30 waits and the one that
-  fails it. Each can be billed without being counted.
+- Ten waits in a row last 181 to 362 s, without a `retry-after` and without
+  the time of the calls. That rides out an incident of a few minutes.
+- A `retry-after` raises each wait and can hold a job until its deadline.
+- A job makes at most 37 failed calls of this kind: 30 waits, the one that
+  fails it, and one for each of the six workers it can lose before a wait is
+  stored. Each can be billed without being counted.
 - A busy provider still has no cap and can hold a job until its deadline.
 - The caps were tested against the fake provider's faults, not against an
   incident of the Claude API.

@@ -30,8 +30,10 @@ and [claim query](../src/runtime/store/jobs.py).
 
 - At most 10 waits for a provider error since the last response, and 30 in
   the job. The next error fails the job, and its error names the cap.
-- Ten waits in a row last 181 to 362 s. The job cap bounds calls that can be
-  billed and are not counted: at most 31 failed calls per job.
+- Ten waits in a row last 181 to 362 s, without a `retry-after` and without
+  the time of the calls. A `retry-after` can hold a job until its deadline.
+- The job cap bounds calls that can be billed and are not counted: 31 with a
+  recorded wait or failure, plus one for each of the six workers a job can lose.
 - A busy wait does not reset the error count, and has no cap of its own.
 - The counts come from the step log, so any worker continues them.
 

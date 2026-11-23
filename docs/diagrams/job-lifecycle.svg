@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="500" height="408" viewBox="0 0 500 408" role="img" aria-labelledby="title desc">
   <title id="title">Job states and their transitions</title>
-  <desc id="desc">Jobs start queued. A claim starts a run. Stopping a worker releases the job to queued. Approval and denial return a parked job to queued. A busy provider puts the job in waiting until a fresh claim. A running job may succeed or fail. Any open job can be cancelled or fail at its deadline.</desc>
+  <desc id="desc">Jobs start queued. A claim starts a run. Stopping a worker releases the job to queued. Approval and denial return a parked job to queued. A busy or failing provider puts the job in waiting until a fresh claim. A running job may succeed or fail. Any open job can be cancelled or fail at its deadline.</desc>
   <rect width="500" height="408" rx="8" fill="#0d1117"/>
   <defs>
     <marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
@@ -34,7 +34,8 @@
       <text x="236" y="136">Approval required</text>
       <text x="49" y="148" text-anchor="start">Approve</text>
       <text x="49" y="167" text-anchor="start">or deny</text>
-      <text x="344" y="177" text-anchor="end">Provider busy</text>
+      <text x="344" y="178" text-anchor="end">Provider busy</text>
+      <text x="344" y="197" text-anchor="end">or error</text>
       <text x="434" y="154" text-anchor="end">Claim</text>
       <text x="434" y="174" text-anchor="end">if due</text>
     </g>

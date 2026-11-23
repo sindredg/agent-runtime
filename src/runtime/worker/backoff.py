@@ -14,11 +14,12 @@ import random
 
 BASE_SECONDS = 2.0
 CAP_SECONDS = 60.0
-# Waits for a provider error since the last response. Ten last 181 to 362 s,
-# which rides out an incident of a few minutes.
+# Waits for a provider error since the last response. Ten last 181 to 362 s
+# without a `retry-after`, which rides out an incident of a few minutes.
 MAX_ERRORS_IN_A_ROW = 10
 # Waits for a provider error over the job's life. A failed call can be billed
-# and is not in the budget, so this bounds such calls: 30 and the one that fails.
+# and is not in the budget, so this bounds such calls: 30, the one that fails,
+# and one for each worker lost before its wait was stored.
 MAX_ERRORS_IN_JOB = 30
 
 

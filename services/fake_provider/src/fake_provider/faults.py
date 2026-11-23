@@ -41,7 +41,8 @@ FaultKind = Literal[
     "no_stop_reason",
     # A 200 whose body is not a message stream.
     "not_a_stream",
-    # No answer for `seconds`, then a 504. A client timeout comes first.
+    # No answer for `seconds`, then a 504. A client timeout comes first, and
+    # the log says 504 whether or not the client was still there for it.
     "hold",
     # The spend cap, as a 429 and as an event inside a stream.
     "spend_cap",
