@@ -64,6 +64,26 @@ BACKOFF_WORKER = "tests/integration/test_backoff_worker.py"
 BUSY = f"{BACKOFF_WORKER}::test_a_busy_provider_makes_the_job_wait_and_then_finish"
 BUSY_CASES = ("[429-rate_limit_error]", "[529-overloaded_error]")
 IN_STACK = "tests/integration/test_backoff_in_stack.py::test_a_rate_limited_job_waits_and_succeeds"
+PROVIDER_ERRORS = "tests/integration/test_provider_errors.py"
+MAY_PASS = f"{PROVIDER_ERRORS}::test_an_error_that_may_pass_makes_the_job_wait_and_then_finish"
+MAY_PASS_CASES = (
+    "[status-408]",
+    "[status-409]",
+    "[status-500]",
+    "[status-502]",
+    "[status-503]",
+    "[status-504]",
+    "[stream-api-error]",
+    "[stream-timeout-error]",
+    "[broken-stream]",
+    "[no-stop-reason]",
+    "[not-a-stream]",
+    "[client-timeout]",
+)
+ELEVENTH = f"{PROVIDER_ERRORS}::test_the_eleventh_error_in_a_row_fails_the_job_and_names_the_cap"
+JOB_CAP = f"{PROVIDER_ERRORS}::test_the_job_cap_counts_errors_across_responses"
+BUSY_BETWEEN = f"{PROVIDER_ERRORS}::test_a_busy_answer_between_errors_does_not_reset_the_count"
+ERROR_TAKEOVER = f"{PROVIDER_ERRORS}::test_the_counts_survive_a_takeover_by_another_worker"
 CHAIN = "tests/integration/test_step_log_chain.py"
 VERIFY = "tests/integration/test_verify_command.py"
 # The cases of TAMPERED in the chain's tests that only the hash comparison finds.
@@ -695,6 +715,64 @@ ENTRIES: dict[str, SwitchedOff] = {
             ),
             *(Expect(f"{BUSY}{case}", "assert job is not None") for case in BUSY_CASES),
             Expect(IN_STACK, "assert 1 <= len(refused) <= MOST_REFUSED"),
+        ),
+    ),
+    # A provider error that may pass
+    "provider-error-fails": SwitchedOff(
+        issue=99,
+        what="the wait on a provider error that may pass: it fails the job",
+        edits=(
+            Edit(
+                AGENT,
+                "                if error.retryable and not error.busy:\n",
+                "                if False:  # switched off\n",
+            ),
+        ),
+        stack="up",
+        expect=(
+            *(
+                Expect(f"{MAY_PASS}{case}", "assert first is JobStatus.WAITING")
+                for case in MAY_PASS_CASES
+            ),
+            Expect(
+                f"{PROVIDER_ERRORS}::test_a_retry_after_on_an_error_sets_the_floor_of_the_wait",
+                "assert await run_once(engine, provider, stack) is W",
+            ),
+            Expect(
+                f"{PROVIDER_ERRORS}::test_ten_errors_in_a_row_are_waited_out_and_the_job_succeeds",
+                "assert statuses == [W] * MAX_ERRORS_IN_A_ROW + [S]",
+            ),
+            Expect(ELEVENTH, "assert statuses == [JobStatus.WAITING] * 10 + [JobStatus.FAILED]"),
+            Expect(JOB_CAP, "assert statuses == [JobStatus.WAITING] * 30 + [JobStatus.FAILED]"),
+            Expect(BUSY_BETWEEN, "assert job is not None"),
+            Expect(
+                ERROR_TAKEOVER,
+                'assert await claim_job(conn, worker_id="stopped-worker") is not None',
+            ),
+            Expect(
+                f"{PROVIDER_ERRORS}::test_a_job_whose_cancel_is_requested_does_not_wait_on_an_error",
+                "assert status is JobStatus.CANCELLED",
+            ),
+        ),
+    ),
+    "provider-error-cap-off": SwitchedOff(
+        issue=99,
+        what="the caps on waits for a provider error, in a row and in the job",
+        edits=(
+            Edit(
+                AGENT,
+                "                    if cap is not None:\n",
+                "                    if False:  # switched off\n",
+            ),
+        ),
+        stack="up",
+        expect=(
+            Expect(ELEVENTH, "assert statuses == [JobStatus.WAITING] * 10 + [JobStatus.FAILED]"),
+            Expect(JOB_CAP, "assert statuses == [JobStatus.WAITING] * 30 + [JobStatus.FAILED]"),
+            Expect(
+                BUSY_BETWEEN, "assert statuses == [JobStatus.WAITING] * 11 + [JobStatus.FAILED]"
+            ),
+            Expect(ERROR_TAKEOVER, "assert after == [JobStatus.WAITING, JobStatus.FAILED]"),
         ),
     ),
     # Bad tool output

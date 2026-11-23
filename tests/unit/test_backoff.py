@@ -6,7 +6,15 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from runtime.worker.backoff import CAP_SECONDS, ceiling, delay, floor
+from runtime.worker.backoff import (
+    CAP_SECONDS,
+    MAX_ERRORS_IN_A_ROW,
+    MAX_ERRORS_IN_JOB,
+    ceiling,
+    delay,
+    error_cap,
+    floor,
+)
 
 
 def test_the_ceiling_doubles_from_two_seconds_up_to_the_cap() -> None:
@@ -57,3 +65,28 @@ def test_the_random_part_spreads_jobs_that_were_refused_together() -> None:
     delays = {round(delay(3, 5, rng), 6) for _ in range(20)}
     assert len(delays) == 20
     assert all(5 <= value <= 9 for value in delays)
+
+
+def test_the_caps_are_the_decided_numbers() -> None:
+    assert (MAX_ERRORS_IN_A_ROW, MAX_ERRORS_IN_JOB) == (10, 30)
+
+
+def test_ten_waits_in_a_row_last_181_to_362_seconds() -> None:
+    """The reason for the cap of ten: it rides out an incident of a few minutes."""
+    shortest = sum(floor(n, None) for n in range(1, MAX_ERRORS_IN_A_ROW + 1))
+    longest = sum(ceiling(n) for n in range(1, MAX_ERRORS_IN_A_ROW + 1))
+    assert (shortest, longest) == (181, 362)
+
+
+def test_an_error_is_waited_out_until_the_cap_in_a_row() -> None:
+    assert error_cap(MAX_ERRORS_IN_A_ROW - 1, MAX_ERRORS_IN_A_ROW - 1) is None
+    reached = error_cap(MAX_ERRORS_IN_A_ROW, MAX_ERRORS_IN_A_ROW)
+    assert reached is not None
+    assert f"{MAX_ERRORS_IN_A_ROW} provider errors in a row" in reached
+
+
+def test_an_error_is_waited_out_until_the_cap_in_the_job() -> None:
+    assert error_cap(0, MAX_ERRORS_IN_JOB - 1) is None
+    reached = error_cap(0, MAX_ERRORS_IN_JOB)
+    assert reached is not None
+    assert f"{MAX_ERRORS_IN_JOB} provider errors in the job" in reached

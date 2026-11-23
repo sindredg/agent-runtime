@@ -40,6 +40,8 @@ class StatusCause(StrEnum):
     APPROVAL_REQUESTED = "approval_requested"
     # The provider was rate limited or overloaded; the job waits (ADR 0018).
     PROVIDER_BUSY = "provider_busy"
+    # The provider failed in a way that may pass; the job waits (ADR 0030).
+    PROVIDER_ERROR = "provider_error"
 
 
 @dataclass(frozen=True, slots=True)

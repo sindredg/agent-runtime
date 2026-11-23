@@ -554,19 +554,24 @@ def test_a_question_is_forgotten_with_its_call() -> None:
     assert replay("go", steps).approval_question is None
 
 
-def waited() -> tuple[StepKind, dict[str, Any]]:
+def waited(cause: str = "provider_busy") -> tuple[StepKind, dict[str, Any]]:
     return StepKind.STATUS_CHANGED, {
         "from": "running",
         "to": "waiting",
-        "cause": "provider_busy",
+        "cause": cause,
         "not_before": "2026-11-18T15:00:05+00:00",
     }
+
+
+def failed_call() -> tuple[StepKind, dict[str, Any]]:
+    """A wait after a provider error that may pass (ADR 0030)."""
+    return waited("provider_error")
 
 
 def test_waits_for_a_busy_provider_are_counted_until_the_next_response() -> None:
     """The n-th wait in a row grows with n (ADR 0018). A response starts the count again."""
     state = replay("go", log(request(), waited(), request(), waited(), request()))
-    assert state.busy_in_a_row == 2
+    assert state.waits_in_a_row == 2
     # The request is still to be sent: a wait is not part of the conversation.
     assert state.needs_model_call
     assert state.messages == [PROMPT]
@@ -575,17 +580,60 @@ def test_waits_for_a_busy_provider_are_counted_until_the_next_response() -> None
         "go",
         log(request(), waited(), request(), response(call("a")), intent("a"), result("a")),
     )
-    assert state.busy_in_a_row == 0
+    assert state.waits_in_a_row == 0
     state.apply(Step(JOB, 7, *waited(), 1, datetime.now(UTC)))
-    assert state.busy_in_a_row == 1
+    assert state.waits_in_a_row == 1
 
 
 def test_a_request_without_an_answer_is_not_a_busy_answer() -> None:
     """A stopped worker leaves a request with no response. It was not refused."""
     state = replay("go", log(request(), request(), request()))
-    assert state.busy_in_a_row == 0
+    assert state.waits_in_a_row == 0
     cancelled = (
         StepKind.STATUS_CHANGED,
         {"from": "running", "to": "needs_approval", "cause": "approval_requested"},
     )
-    assert replay("go", log(request(), cancelled)).busy_in_a_row == 0
+    assert replay("go", log(request(), cancelled)).waits_in_a_row == 0
+
+
+def test_only_waits_for_a_provider_error_count_as_errors() -> None:
+    state = replay(
+        "go",
+        log(request(), failed_call(), request(), waited(), request(), failed_call(), request()),
+    )
+    assert (state.waits_in_a_row, state.errors_in_a_row, state.errors_in_job) == (3, 2, 2)
+
+
+def test_a_busy_wait_does_not_reset_the_error_count() -> None:
+    """Otherwise a provider that alternates 429 and 500 would never reach the cap."""
+    steps = [request(), failed_call()] * 4 + [request(), waited()]
+    assert replay("go", log(*steps)).errors_in_a_row == 4
+
+
+def test_a_response_resets_the_errors_in_a_row_and_not_those_in_the_job() -> None:
+    state = replay(
+        "go",
+        log(
+            request(),
+            failed_call(),
+            request(),
+            failed_call(),
+            request(),
+            response(call("a")),
+            intent("a"),
+            result("a"),
+            request(),
+            failed_call(),
+        ),
+    )
+    assert (state.waits_in_a_row, state.errors_in_a_row, state.errors_in_job) == (1, 1, 3)
+
+
+def test_a_job_cancelled_instead_of_waiting_counts_no_error() -> None:
+    """A cancel requested meanwhile moves the job to `cancelled`: there was no wait."""
+    cancelled = (
+        StepKind.STATUS_CHANGED,
+        {"from": "running", "to": "cancelled", "cause": "cancel_requested"},
+    )
+    state = replay("go", log(request(), cancelled))
+    assert (state.waits_in_a_row, state.errors_in_a_row, state.errors_in_job) == (0, 0, 0)
