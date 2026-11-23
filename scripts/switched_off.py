@@ -447,7 +447,7 @@ ENTRIES: dict[str, SwitchedOff] = {
             for statement in (
                 "UPDATE steps SET payload = '{\"changed\": true}' WHERE job_id = $1",
                 "DELETE FROM steps WHERE job_id = $1 AND seq = 3",
-                "TRUNCATE steps",
+                "TRUNCATE steps CASCADE",
             )
         ),
     ),
@@ -1175,6 +1175,39 @@ def check(root: Path = ROOT) -> list[str]:
     return problems
 
 
+def uncollected(root: Path = ROOT) -> list[str]:
+    """The listed test ids, parameters included, that pytest does not collect.
+
+    A run with an unknown id runs none of its entry's tests. `--noconftest`
+    keeps this off the stack: the suites' conftests need Docker to start.
+    """
+    nodes = {expect.node for entry in ENTRIES.values() for expect in entry.expect}
+    files = sorted({node.partition("::")[0] for node in nodes})
+    done = subprocess.run(  # noqa: S603 - a fixed command and the list's own paths
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "--collect-only",
+            "-q",
+            "--noconftest",
+            "-p",
+            "no:cacheprovider",
+            f"--rootdir={root}",
+            *files,
+        ],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+        env=without_keys(os.environ),
+    )
+    if done.returncode != 0:
+        return [f"pytest could not collect the listed tests: exit {done.returncode}"]
+    collected = set(done.stdout.splitlines())
+    return [f"pytest collects no test {node}" for node in sorted(nodes - collected)]
+
+
 def _inside(path: str, under: tuple[str, ...]) -> bool:
     """Whether a path is relative, has no `..` part, and starts with one of `under`."""
     pure = PurePosixPath(path)
@@ -1604,8 +1637,11 @@ def main(argv: list[str]) -> int:
             print(json.dumps(names("fake")))
             return 0
         case ["check"]:
-            problems = check()
-            print("\n".join(problems) or "every edit matches once and compiles")
+            problems = [*check(), *uncollected()]
+            print(
+                "\n".join(problems)
+                or "every edit matches once and compiles, and pytest collects every listed test"
+            )
             return 1 if problems else 0
         case ["dispatch", name, provider] if name in ENTRIES:
             return _dispatch(name, provider, None)
