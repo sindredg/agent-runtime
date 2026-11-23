@@ -42,8 +42,8 @@ class ProviderError(Exception):
     `retryable` says whether the same request may succeed later: rate
     limits, overload, server errors, timeouts and broken connections. The
     job waits and sends it again, up to a cap (ADR 0030).
-    `busy` says the provider is rate limited or overloaded: such a wait has
-    no cap (ADR 0018). `retry_after` is the provider's `retry-after` header
+    `busy` says the provider refused the call with a 429 or 529, before any
+    output: such a wait has no cap (ADR 0018). `retry_after` is the provider's `retry-after` header
     in seconds, None without one.
     """
 

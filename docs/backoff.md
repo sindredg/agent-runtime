@@ -20,8 +20,9 @@ and [claim query](../src/runtime/store/jobs.py).
 | Answer | Cause | Outcome |
 |---|---|---|
 | 429, whatever its error type | `provider_busy` | Waits |
-| 529, or `rate_limit_error` or `overloaded_error` inside a stream | `provider_busy` | Waits |
-| Another 5xx, 408, 409, or `api_error` or `timeout_error` inside a stream | `provider_error` | Waits, up to the caps |
+| 529 | `provider_busy` | Waits |
+| Another 5xx, 408, 409 | `provider_error` | Waits, up to the caps |
+| `api_error`, `timeout_error`, `overloaded_error` or `rate_limit_error` inside a stream | `provider_error` | Waits, up to the caps |
 | A timeout, a broken or incomplete stream, a 200 that is no message stream | `provider_error` | Waits, up to the caps |
 | A spend cap (`enforced_spend_limit_reached`), as a 429 or inside a stream | | Fails the job: waiting does not lift it |
 | Any other 4xx | | Fails the job |
@@ -34,6 +35,8 @@ and [claim query](../src/runtime/store/jobs.py).
   the time of the calls. A `retry-after` can hold a job until its deadline.
 - The job cap bounds calls that can be billed and are not counted: 31 with a
   recorded wait or failure, plus one for each of the six workers a job can lose.
+- An error inside a stream counts, also an overload: output has begun, so the
+  call can be billed.
 - A busy wait does not reset the error count, and has no cap of its own.
 - The counts come from the step log, so any worker continues them.
 

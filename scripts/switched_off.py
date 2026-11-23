@@ -75,6 +75,8 @@ MAY_PASS_CASES = (
     "[status-504]",
     "[stream-api-error]",
     "[stream-timeout-error]",
+    "[stream-overloaded]",
+    "[stream-rate-limit]",
     "[broken-stream]",
     "[no-stop-reason]",
     "[not-a-stream]",
@@ -84,6 +86,8 @@ ELEVENTH = f"{PROVIDER_ERRORS}::test_the_eleventh_error_in_a_row_fails_the_job_a
 JOB_CAP = f"{PROVIDER_ERRORS}::test_the_job_cap_counts_errors_across_responses"
 BUSY_BETWEEN = f"{PROVIDER_ERRORS}::test_a_busy_answer_between_errors_does_not_reset_the_count"
 ERROR_TAKEOVER = f"{PROVIDER_ERRORS}::test_the_counts_survive_a_takeover_by_another_worker"
+STREAM_CAP = f"{PROVIDER_ERRORS}::test_a_busy_error_inside_a_stream_counts_toward_the_cap"
+STREAM_CAP_CASES = ("[overloaded_error]", "[rate_limit_error]")
 CHAIN = "tests/integration/test_step_log_chain.py"
 VERIFY = "tests/integration/test_verify_command.py"
 # The cases of TAMPERED in the chain's tests that only the hash comparison finds.
@@ -773,6 +777,13 @@ ENTRIES: dict[str, SwitchedOff] = {
                 BUSY_BETWEEN, "assert statuses == [JobStatus.WAITING] * 11 + [JobStatus.FAILED]"
             ),
             Expect(ERROR_TAKEOVER, "assert after == [JobStatus.WAITING, JobStatus.FAILED]"),
+            *(
+                Expect(
+                    f"{STREAM_CAP}{case}",
+                    "assert statuses == [JobStatus.WAITING] * 10 + [JobStatus.FAILED]",
+                )
+                for case in STREAM_CAP_CASES
+            ),
         ),
     ),
     # Bad tool output

@@ -215,9 +215,10 @@ def test_a_spend_cap_inside_a_stream_is_not_waited_out() -> None:
 @pytest.mark.parametrize(
     ("kind", "retryable", "busy"),
     [
-        ("overloaded_error", True, True),
+        # Output has begun, so the call can be billed: it falls under the caps.
+        ("overloaded_error", True, False),
         ("api_error", True, False),
-        ("rate_limit_error", True, True),
+        ("rate_limit_error", True, False),
         ("invalid_request_error", False, False),
     ],
 )

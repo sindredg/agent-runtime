@@ -118,17 +118,22 @@ class _ProviderFault(_ProviderWait):
     instead = "the provider failed"
 
 
-# The longest provider error text a wait keeps in its step. The step log is
-# append-only and a job can wait thousands of times; a longer text is cut.
-WAIT_ERROR_LENGTH = 1000
+# The longest error text a step keeps, for a wait and for a failed job. The
+# step log is append-only and the text can be a proxy's whole error page.
+ERROR_TEXT_LENGTH = 1000
 _CUT = " [cut]"
+
+
+def _cut(text: str) -> str:
+    """`text`, cut to the length a step keeps."""
+    if len(text) <= ERROR_TEXT_LENGTH:
+        return text
+    return text[: ERROR_TEXT_LENGTH - len(_CUT)] + _CUT
 
 
 def _wait(waiting: _ProviderWait, rng: random.Random) -> Wait:
     """The wait for the provider, with its error text cut to length."""
-    text = str(waiting.error)
-    if len(text) > WAIT_ERROR_LENGTH:
-        text = text[: WAIT_ERROR_LENGTH - len(_CUT)] + _CUT
+    text = _cut(str(waiting.error))
     return Wait(
         seconds=backoff.delay(waiting.attempt, waiting.error.retry_after, rng),
         attempt=waiting.attempt,
@@ -907,7 +912,9 @@ async def _run(
         deadline.cancel()
 
     if failure is not None:
-        failure = _storable(failure, "the job failed with an error that cannot be stored as text")
+        failure = _storable(
+            _cut(failure), "the job failed with an error that cannot be stored as text"
+        )
         # One statement for the `error` step and the status: a worker that
         # stops here leaves the job failed, or not failed at all. The step
         # takes the next free seq by itself, also when the failure was a

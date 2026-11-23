@@ -683,7 +683,7 @@ def test_a_fault_can_be_cleared_and_replaced() -> None:
         {"model": "two", "count": 1, "kind": "status", "status": 418},
         {"model": "two", "count": 1, "kind": "status", "status": 529},
         {"model": "two", "count": 1, "kind": "stream_error"},
-        {"model": "two", "count": 1, "kind": "stream_error", "error": "overloaded_error"},
+        {"model": "two", "count": 1, "kind": "stream_error", "error": "invalid_request_error"},
         {"model": "two", "count": 1, "kind": "hold"},
         {"model": "two", "count": 1, "kind": "hold", "seconds": 61},
         {"model": "two", "count": 1, "kind": "broken_stream", "status": 500},

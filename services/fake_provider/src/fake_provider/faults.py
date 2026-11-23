@@ -63,7 +63,9 @@ class Fault(BaseModel):
     count: int = Field(ge=1, le=MAX_FAULT_COUNT)
     kind: FaultKind
     status: Literal[400, 408, 409, 500, 502, 503, 504] | None = None
-    error: Literal["api_error", "timeout_error"] | None = None
+    error: Literal["api_error", "timeout_error", "overloaded_error", "rate_limit_error"] | None = (
+        None
+    )
     retry_after: int | None = Field(default=None, ge=0, le=MAX_RETRY_AFTER)
     seconds: float | None = Field(default=None, gt=0, le=MAX_HOLD_SECONDS, allow_inf_nan=False)
 

@@ -18,10 +18,11 @@ _RETRYABLE_STATUSES = frozenset({408, 409, 429})
 _RETRYABLE_ERROR_TYPES = frozenset(
     {"overloaded_error", "api_error", "rate_limit_error", "timeout_error"}
 )
-# The provider is busy: rate limited (429) or overloaded (529, or the same
-# error type inside a stream). The job waits and tries again (ADR 0018).
+# The provider is busy: it refused the call with a 429 or 529. The job waits
+# and tries again (ADR 0018). An error inside a stream is not counted as busy,
+# whatever its type: output has begun, so the call can be billed, and it falls
+# under the caps on provider errors (ADR 0030).
 _BUSY_STATUSES = frozenset({429, 529})
-_BUSY_ERROR_TYPES = frozenset({"rate_limit_error", "overloaded_error"})
 # A 429 for a spend cap. It has the rate limit's type and no `retry-after`,
 # and waiting does not lift it.
 _SPEND_CAP = "enforced_spend_limit_reached"
@@ -120,7 +121,6 @@ class AnthropicProvider:
                     f"provider sent an error during the stream: {kind}: {error.message}",
                     status=None,
                     retryable=not capped and kind in _RETRYABLE_ERROR_TYPES,
-                    busy=not capped and kind in _BUSY_ERROR_TYPES,
                 ) from error
             capped = status == 429 and _spend_cap(error)
             raise ProviderError(

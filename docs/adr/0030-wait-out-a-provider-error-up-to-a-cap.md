@@ -1,6 +1,6 @@
 # 0030: Wait out a provider error that may pass, up to a cap
 
-Status: accepted, 2026-11-24. Extends [ADR 0018](0018-wait-out-a-busy-provider-in-the-waiting-status.md).
+Status: accepted, 2026-11-24. Extends [ADR 0018](0018-wait-out-a-busy-provider-in-the-waiting-status.md) and changes one point of it: an overload inside a stream now falls under these caps.
 
 ![A busy answer makes the job wait. An error that may pass makes it wait while it is under both caps. Over a cap, or on an error that will not pass, the job fails. After a wait any worker sends the same request again.](../diagrams/provider-errors.svg)
 
@@ -28,8 +28,10 @@ it is not in `tokens_used`.
 Wait as for a busy answer, with two caps.
 
 - A 5xx but 529, 408, 409, a timeout, a broken or incomplete stream, a 200
-  that is no message stream, and an in-stream `api_error` or `timeout_error`
-  wait, with the cause `provider_error`. A spend cap and other 4xx still fail.
+  that is no message stream, and a retryable error event inside a stream wait,
+  with the cause `provider_error`. A spend cap and other 4xx still fail.
+- An overload or rate limit inside a stream counts here, not as busy. Output
+  has begun, so the call can be billed, and a busy wait has no cap.
 - The move, `not_before`, the delay and `retry-after` are those of ADR 0018.
   `n` counts every wait since the last response, of either cause.
 - At most 10 such waits since the last response, and 30 in the job. The next

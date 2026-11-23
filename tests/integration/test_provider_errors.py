@@ -16,13 +16,14 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from runtime.provider.base import ProviderError
 from runtime.provider.messages import AnthropicProvider
 from runtime.store import held
 from runtime.store.engine import create_engine
 from runtime.store.jobs import Job, claim_job, get_job
 from runtime.store.status import JobStatus
 from runtime.store.steps import StatusCause, Step, StepKind, read_steps
-from runtime.worker.agent import AgentSettings, run_job
+from runtime.worker.agent import _CUT, ERROR_TEXT_LENGTH, AgentSettings, run_job
 from runtime.worker.backoff import MAX_ERRORS_IN_A_ROW, MAX_ERRORS_IN_JOB, floor
 
 from .conftest import FIXED, HELLO, Stack, expire_lease
@@ -47,6 +48,8 @@ MAY_PASS: dict[str, tuple[dict[str, Any], str]] = {
     "status-504": ({"kind": "status", "status": 504}, "provider answered 504"),
     "stream-api-error": ({"kind": "stream_error", "error": "api_error"}, "api_error"),
     "stream-timeout-error": ({"kind": "stream_error", "error": "timeout_error"}, "timeout_error"),
+    "stream-overloaded": ({"kind": "stream_error", "error": "overloaded_error"}, "overloaded"),
+    "stream-rate-limit": ({"kind": "stream_error", "error": "rate_limit_error"}, "rate_limit"),
     "broken-stream": ({"kind": "broken_stream"}, "no complete response"),
     "no-stop-reason": ({"kind": "no_stop_reason"}, "ended before the message was complete"),
     "not-a-stream": ({"kind": "not_a_stream"}, "not a message stream"),
@@ -267,6 +270,56 @@ def test_the_eleventh_error_in_a_row_fails_the_job_and_names_the_cap(
     requests = stack.requests_for(job)
     assert len(requests) == MAX_ERRORS_IN_A_ROW + 1
     assert len(faulted(requests)) == MAX_ERRORS_IN_A_ROW + 1
+
+
+@pytest.mark.parametrize("kind", ["overloaded_error", "rate_limit_error"])
+def test_a_busy_error_inside_a_stream_counts_toward_the_cap(
+    stack: Stack, fault: Any, kind: str
+) -> None:
+    """Output has begun, so the call can be billed: it does not wait without a cap."""
+    fault(MAX_ERRORS_IN_A_ROW + 5, kind="stream_error", error=kind)
+
+    async def body(engine: AsyncEngine, provider: AnthropicProvider) -> Any:
+        async with engine.begin() as conn:
+            job = await stack.create(conn, HELLO)
+        statuses = await run_until_it_ends(engine, provider, stack, job, MAX_ERRORS_IN_A_ROW + 3)
+        return job, statuses, await stored(engine, job.id)
+
+    job, statuses, (final, steps) = stack.run(body)
+    assert statuses == [JobStatus.WAITING] * 10 + [JobStatus.FAILED]
+    assert {wait["cause"] for wait in waits(steps)} == {"provider_error"}
+    assert final.error is not None
+    assert f"{MAX_ERRORS_IN_A_ROW} provider errors in a row" in final.error
+    assert len(faulted(stack.requests_for(job))) == MAX_ERRORS_IN_A_ROW + 1
+
+
+@pytest.mark.parametrize(
+    ("retryable", "claims"), [(False, 1), (True, MAX_ERRORS_IN_A_ROW + 1)], ids=["fatal", "at-cap"]
+)
+def test_the_text_that_fails_a_job_is_cut(stack: Stack, retryable: bool, claims: int) -> None:
+    """A proxy's error page does not go whole into the append-only log."""
+    page = "provider answered 502: " + "x" * 200_000
+
+    async def body(engine: AsyncEngine, provider: AnthropicProvider) -> Any:
+        async with engine.begin() as conn:
+            job = await stack.create(conn, HELLO)
+
+        async def complete(request: Any) -> Any:
+            raise ProviderError(page, status=502, retryable=retryable)
+
+        provider.complete = complete  # type: ignore[method-assign]
+        statuses = await run_until_it_ends(engine, provider, stack, job, claims)
+        return statuses, await stored(engine, job.id)
+
+    statuses, (final, steps) = stack.run(body)
+    assert statuses[-1] is JobStatus.FAILED
+    assert final.error is not None
+    assert len(final.error) == ERROR_TEXT_LENGTH
+    assert final.error.endswith(_CUT)
+    if retryable:
+        assert f"{MAX_ERRORS_IN_A_ROW} provider errors in a row" in final.error
+    [failed] = [step for step in steps if step.kind is StepKind.ERROR]
+    assert failed.payload["message"] == final.error
 
 
 def test_the_job_cap_counts_errors_across_responses(stack: Stack, fault: Any) -> None:
