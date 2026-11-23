@@ -724,7 +724,7 @@ ENTRIES: dict[str, SwitchedOff] = {
         edits=(
             Edit(
                 AGENT,
-                "                if error.retryable and not error.busy:\n",
+                "                if error.retryable:\n",
                 "                if False:  # switched off\n",
             ),
         ),

@@ -185,17 +185,16 @@ def test_an_error_that_may_pass_makes_the_job_wait_and_then_finish(
         async with engine.begin() as conn:
             job = await stack.create(conn, HELLO)
         first = await run_once(engine, provider, stack)
+        # Here, before the second claim: a job that failed has nothing to claim.
+        assert first is JobStatus.WAITING
         waited = await stored(engine, job.id)
         await end_the_wait(engine, job.id)
         second = await run_once(engine, provider, stack)
-        return job, first, waited, second, await stored(engine, job.id)
+        return job, waited, second, await stored(engine, job.id)
 
     timeout = CLIENT_TIMEOUT if answer["kind"] == "hold" else 30.0
-    job, first, (waiting, waited_steps), second, (final, _) = with_client_timeout(
-        stack, timeout, body
-    )
+    job, (waiting, waited_steps), second, (final, _) = with_client_timeout(stack, timeout, body)
 
-    assert first is JobStatus.WAITING
     assert waiting.status is JobStatus.WAITING
     assert waiting.lease_owner is None
     [wait] = waits(waited_steps)

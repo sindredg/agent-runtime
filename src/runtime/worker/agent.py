@@ -758,7 +758,7 @@ async def _loop(
                     # The request step stays without a response. It is
                     # sent again once the wait is over.
                     raise _ProviderBusy(error, state.waits_in_a_row + 1) from error
-                if error.retryable and not error.busy:
+                if error.retryable:
                     # The same wait, up to a cap (ADR 0030). The counts come
                     # from the log, so any worker continues them.
                     cap = backoff.error_cap(state.errors_in_a_row, state.errors_in_job)
