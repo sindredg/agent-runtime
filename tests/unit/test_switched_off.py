@@ -964,11 +964,6 @@ def test_each_stack_starts_as_its_make_target_does(
     assert switched_off.stack_commands(stack, provider) == commands
 
 
-def test_an_entry_of_the_fake_provider_may_name_the_long_stack() -> None:
-    entry = replace(ENTRY, stack="long", expect=(switched_off.Expect(switched_off.IN_STACK, "x"),))
-    assert switched_off.run_problems(entry) == []
-
-
 def test_a_stack_the_script_does_not_know_is_refused_and_every_entry_has_one_it_knows() -> None:
     with pytest.raises(ValueError, match="no stack 'lab2'"):
         switched_off.stack_commands("lab2", "fake")

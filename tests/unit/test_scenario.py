@@ -168,5 +168,7 @@ def test_a_scenario_has_no_context_window_unless_it_sets_one() -> None:
 
 @pytest.mark.parametrize("window", [0, -1, True, "5", 1.5])
 def test_a_context_window_that_is_not_a_positive_whole_number_is_refused(window: Any) -> None:
-    with pytest.raises(ValueError):
+    # The constraint's own error, not the one for a key the model does not know.
+    expected = r"context_window\s+Input should be (greater than or equal to 1|a valid integer)"
+    with pytest.raises(ValueError, match=expected):
         parse_scenario(scenario({"content": [TEXT]}, context_window=window))
