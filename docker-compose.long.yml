@@ -4,8 +4,8 @@
 #   docker compose -f docker-compose.yml -f docker-compose.long.yml up --wait
 #
 # `make long-up` does that. LONG_SCENARIO_DIR names the host directory of
-# scenario files, and SUMMARY_TRIGGER the trigger; unset, no job summarises.
-# `make up` afterwards brings the normal stack back.
+# scenario files; unset, the packaged ones. SUMMARY_TRIGGER sets the trigger;
+# unset, no job summarises. `make up` afterwards brings the normal stack back.
 name: agent-runtime
 
 services:
@@ -22,11 +22,12 @@ services:
 
   fake-provider:
     environment:
-      # Only the scenarios of this directory, none of the packaged ones.
+      # The scenarios of the mounted directory only. By default that is the
+      # package's own directory in the checkout, so the stack has the same set.
       FAKE_SCENARIO_DIR: /scenarios
     volumes:
       - type: bind
-        source: ${LONG_SCENARIO_DIR:?set LONG_SCENARIO_DIR to a directory of scenario files}
+        source: ${LONG_SCENARIO_DIR:-./services/fake_provider/src/fake_provider/scenarios}
         target: /scenarios
         read_only: true
         # A misspelt directory stops the start instead of being created empty.

@@ -114,9 +114,9 @@ The tests that pause or stop a worker use the default 30 s lease. Each chaos
 test writes its result to `.chaos/results.jsonl` with a `verdict`: `passed`,
 `failed`, or `void` when the machine's clock was set during the run.
 
-`docker-compose.long.yml` (`make long-up`) sets up the long stack, for a job
-longer than its context window: two workers, no sandbox, `MAX_TOKENS` 32000,
-issue numbers from 100000, and `SUMMARY_TRIGGER` and `LONG_SCENARIO_DIR` from the shell.
+`docker-compose.long.yml` (`make long-up`) runs a job past its context window:
+two workers, no sandbox, six-digit issue numbers, `SUMMARY_TRIGGER` from the
+shell, and the scenarios of `LONG_SCENARIO_DIR`, by default the packaged ones.
 
 ## The fakes
 

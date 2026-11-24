@@ -30,10 +30,10 @@ up-claude:
 	docker compose exec -T worker printenv ANTHROPIC_BASE_URL MODEL
 
 # The stack for a job longer than the context window: two workers, no
-# sandbox, the fake provider with the scenarios of LONG_SCENARIO_DIR, and
-# issue numbers from 100000. SUMMARY_TRIGGER comes from the shell; unset,
-# no job summarises. Starts the stack and runs nothing. `make up` puts the
-# normal stack back.
+# sandbox, the fake provider with the scenarios of LONG_SCENARIO_DIR (unset,
+# the packaged ones), and issue numbers from 100000. SUMMARY_TRIGGER comes
+# from the shell; unset, no job summarises. Starts the stack and runs
+# nothing. `make up` puts the normal stack back.
 long-up:
 	docker compose -f docker-compose.yml -f docker-compose.long.yml up --build --wait
 
