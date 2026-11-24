@@ -22,13 +22,14 @@ from fake_provider.scenario import Scenario, load_scenarios
 from runtime.provider.base import ModelRequest, ModelResponse
 from runtime.provider.messages import AnthropicProvider
 from runtime.spec import JobSpec
+from runtime.store.held import LeaseLost
 from runtime.store.jobs import Job
 from runtime.store.status import JobStatus
 from runtime.store.steps import Step, StepKind
 from runtime.tools.base import Tool, ToolCall, ToolRegistry, ToolResult
 from runtime.worker import agent
 from runtime.worker.budget import ALLOWANCE, input_bound
-from runtime.worker.halt import Halt
+from runtime.worker.halt import Halt, Halted, HaltReason
 from runtime.worker.lease import Lease
 from runtime.worker.replay import replay
 from runtime.worker.summary import (
@@ -47,6 +48,11 @@ SPEC = {
     "prompt": "Read the notes files a.txt to h.txt in order, then say you are done.",
     "model": "summary",
 }
+# The `summary` scenario's summary text, held by the test.
+SUMMARY_TEXT = (
+    "The task: read the notes files a.txt to h.txt in order, then say done."
+    " Read so far: every file before the turn named below."
+)
 # Fires twice in the `summary` scenario with the notes below: after the
 # third and the sixth read. Measured by the fake's own count.
 TRIGGER = 1000
@@ -538,11 +544,17 @@ def test_a_long_job_summarises_twice_and_succeeds() -> None:
     summaries = [entry for entry in log if entry["tool_choice"] is not None]
     assert [entry["summary"] for entry in summaries] == [1, 2]
     for entry in summaries:
+        index = log.index(entry)
         assert entry["tool_choice"] == {"type": "none"}
+        assert entry["body"]["tools"] == log[index - 1]["body"]["tools"]
         assert entry["body"]["messages"][-1]["content"][-1] == {
             "type": "text",
             "text": SUMMARY_INSTRUCTION,
         }
+        # The next window opens with the summary as the fake sent it, and the continuation.
+        sent = f"{SUMMARY_TEXT}\n\n[summary {entry['summary']}] [turn {entry['turn']}]"
+        assert log[index + 1]["body"]["messages"] == [opening_message(sent)]
+    assert [entry["turn"] for entry in summaries] == [3, 6]
     # Every turn of the script was answered once, in order, across the windows.
     turns = [entry["turn"] for entry in log if entry["tool_choice"] is None]
     assert turns == list(range(9))
@@ -672,3 +684,75 @@ def test_the_job_window_opens_under_the_trigger_in_the_long_job() -> None:
     after = [writer.steps[s.seq + 1] for s in kinds(writer, StepKind.SUMMARY)]
     assert [step.kind for step in after] == [StepKind.MODEL_RESPONSE] * SUMMARIES
     assert all(step.payload["usage"]["input_tokens"] < TRIGGER for step in after)
+
+
+# A halt during an open summary call
+
+
+class Hanging:
+    """The real client, except that a summary request is never answered."""
+
+    def __init__(self, app: Any) -> None:
+        self.recording = Recording(app)
+        self.open = asyncio.Event()
+        self.given_up = False
+
+    async def complete(self, request: ModelRequest) -> ModelResponse:
+        if request.tool_choice is None:
+            return await self.recording.complete(request)
+        self.open.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            self.given_up = True
+        raise AssertionError("unreachable")
+
+    async def aclose(self) -> None:
+        await self.recording.aclose()
+
+
+@pytest.mark.parametrize("how", ["cancel", "lost lease"])
+def test_a_halt_or_a_lost_lease_gives_up_an_open_summary_call(how: str) -> None:
+    writer = Writer([])
+    halt = Halt(JOB)
+    lease = Lease(JOB, 1, timedelta(seconds=60), claimed_at=time.monotonic())
+
+    async def go() -> tuple[BaseException | None, float, bool]:
+        provider = Hanging(create_app(scenarios()))
+        loop = asyncio.create_task(
+            agent._loop(
+                writer,  # type: ignore[arg-type]
+                provider,
+                TOOLS,
+                job(SPEC),
+                JobSpec.model_validate(SPEC),
+                settings(TRIGGER),
+                Path("/nonexistent"),
+                lease,
+                [],
+                asyncio.Event(),
+                halt,
+            )
+        )
+        await asyncio.wait_for(provider.open.wait(), 10)
+        asked = time.monotonic()
+        if how == "cancel":
+            halt.set(HaltReason.CANCELLED)
+        else:
+            lease.mark_lost()
+        try:
+            await asyncio.wait_for(loop, 10)
+        except (Halted, LeaseLost) as stopped:
+            return stopped, time.monotonic() - asked, provider.given_up
+        finally:
+            await provider.aclose()
+        return None, time.monotonic() - asked, provider.given_up
+
+    stopped, took, given_up = asyncio.run(go())
+
+    expected = Halted if how == "cancel" else LeaseLost
+    assert isinstance(stopped, expected)
+    assert given_up
+    assert took < 5
+    assert writer.steps[-1].kind is StepKind.MODEL_REQUEST
+    assert writer.steps[-1].payload["summary"] is True

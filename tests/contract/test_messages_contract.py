@@ -182,6 +182,9 @@ def summary_exchange(name: str) -> ModelResponse:
 
     async def run() -> ModelResponse:
         base_url, secret, model = target(name)
+        if name == "fake":
+            # The fake answers a summary request only in a scenario with a summary.
+            model = "summary"
         provider = AnthropicProvider(api_key=secret, base_url=base_url)
         try:
             first = await provider.complete(
