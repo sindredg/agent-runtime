@@ -13,7 +13,8 @@ job next.
 The token budget is kept with an upper bound of each call's input
 (`runtime.worker.budget`). A cancel and the deadline halt the job
 (`runtime.worker.halt`). A tool call that needs approval waits for a person
-before it runs (`runtime.worker.approval`).
+before it runs (`runtime.worker.approval`). A job that repeats one call with
+the same result five times in a row fails (ADR 0031).
 """
 
 import asyncio
@@ -54,7 +55,7 @@ from runtime.worker.budget import input_bound, max_tokens_within
 from runtime.worker.halt import Halt, Halted, HaltReason, watch_cancel
 from runtime.worker.lease import Lease, keep_renewing
 from runtime.worker.recovery import Ask, Recovered, decide
-from runtime.worker.replay import Replay, replay
+from runtime.worker.replay import MAX_REPEATS, Replay, replay
 from runtime.worker.workspace import prepare_workspace, remove_workspace
 
 log = logging.getLogger("runtime.worker")
@@ -710,6 +711,13 @@ async def _loop(
             return JobStatus.QUEUED, None
 
         if state.needs_model_call:
+            # Before the request step, like the budget: the call is not made.
+            # The count comes from the log, so any worker continues it (ADR 0031).
+            if (stuck := state.stuck_on) is not None:
+                raise _JobFailed(
+                    f"the job repeated the same call to {stuck} with the same result"
+                    f" {MAX_REPEATS} times in a row"
+                )
             definitions = tools.definitions()
             used = job.tokens_used + writer.tokens_added
             bound = input_bound(
@@ -980,8 +988,8 @@ async def run_job(
     command is killed, and the job ends `cancelled` or `failed`.
 
     A failure of the job (a bad spec, a provider error that will not pass or
-    is over its cap, a response that cannot be used) is recorded as an
-    `error` step and the status `failed`.
+    is over its cap, a response that cannot be used, a call repeated with the
+    same result) is recorded as an `error` step and the status `failed`.
 
     Returns None when the worker dropped the job: its lease was gone, or the
     database could not be reached. Nothing is written then. The job stays

@@ -4,12 +4,17 @@ The step log is the only state. A worker that takes a job over replays the
 log once, then folds in each step it writes itself.
 """
 
+import json
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
 from runtime.store.steps import StatusCause, Step, StepKind
+
+# Tool results in a row with the same call and the same result that stop a
+# job (ADR 0031). By the fifth, the model got nothing new four times.
+MAX_REPEATS = 5
 
 
 @dataclass(slots=True)
@@ -64,6 +69,19 @@ class Replay:
     errors_in_a_row: int = 0
     # Waits for a provider error over the job's life. No response resets it.
     errors_in_job: int = 0
+    # Tool results in a row whose call and result are the same as the one
+    # before (ADR 0031), and what they repeat: the call's tool name, its
+    # input as canonical JSON, the result's content and `is_error`. A
+    # response in between does not reset the count.
+    repeats: int = 0
+    repeated: tuple[str, str, Any, bool] | None = None
+
+    @property
+    def stuck_on(self) -> str | None:
+        """The tool of the last MAX_REPEATS results, if they repeat one call and result."""
+        if self.repeats < MAX_REPEATS or self.repeated is None:
+            return None
+        return self.repeated[0]
 
     @property
     def needs_model_call(self) -> bool:
@@ -134,6 +152,7 @@ class Replay:
                     "is_error": payload["is_error"],
                 }
             )
+            self._count_repeat(tool_use_id, payload["content"], payload["is_error"])
             self.pending = [block for block in self.pending if block["id"] != tool_use_id]
             self.interrupted, self.interrupted_at = None, None
             self._forget_question()
@@ -145,6 +164,21 @@ class Replay:
         ):
             given = step.kind is StepKind.APPROVAL_GIVEN
             self.approval = "given" if given else "denied"
+
+    def _count_repeat(self, tool_use_id: str, content: Any, is_error: bool) -> None:
+        """Count a result with the same call and result as the one before (ADR 0031).
+
+        The call is the open `tool_use` block the result answers. A result
+        that answers none starts no count.
+        """
+        block = next((block for block in self.pending if block["id"] == tool_use_id), None)
+        if block is None:
+            self.repeats, self.repeated = 0, None
+            return
+        canonical = json.dumps(block["input"], sort_keys=True, separators=(",", ":"))
+        this = (block["name"], canonical, content, is_error)
+        self.repeats = self.repeats + 1 if this == self.repeated else 1
+        self.repeated = this
 
     def _forget_question(self) -> None:
         self.approval, self.approval_for, self.approval_question = None, None, None

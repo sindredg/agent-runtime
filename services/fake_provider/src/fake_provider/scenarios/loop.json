@@ -1,5 +1,5 @@
 {
-  "description": "A job that loops: thirty rounds of reading the same file, each adding its text to the conversation. For the token budget.",
+  "description": "A job that loops: thirty rounds of reading two files in turn, each adding its text to the conversation. For the token budget. The repeat stop does not see a loop over two calls, so the budget is what stops it.",
   "turns": [
     {
       "content": [
@@ -26,7 +26,7 @@
           "type": "tool_use",
           "name": "read_file",
           "input": {
-            "path": "notes.txt"
+            "path": "more-notes.txt"
           }
         }
       ]
@@ -56,7 +56,7 @@
           "type": "tool_use",
           "name": "read_file",
           "input": {
-            "path": "notes.txt"
+            "path": "more-notes.txt"
           }
         }
       ]
@@ -86,7 +86,7 @@
           "type": "tool_use",
           "name": "read_file",
           "input": {
-            "path": "notes.txt"
+            "path": "more-notes.txt"
           }
         }
       ]
@@ -116,7 +116,7 @@
           "type": "tool_use",
           "name": "read_file",
           "input": {
-            "path": "notes.txt"
+            "path": "more-notes.txt"
           }
         }
       ]
@@ -146,7 +146,7 @@
           "type": "tool_use",
           "name": "read_file",
           "input": {
-            "path": "notes.txt"
+            "path": "more-notes.txt"
           }
         }
       ]
@@ -176,7 +176,7 @@
           "type": "tool_use",
           "name": "read_file",
           "input": {
-            "path": "notes.txt"
+            "path": "more-notes.txt"
           }
         }
       ]
@@ -206,7 +206,7 @@
           "type": "tool_use",
           "name": "read_file",
           "input": {
-            "path": "notes.txt"
+            "path": "more-notes.txt"
           }
         }
       ]
@@ -236,7 +236,7 @@
           "type": "tool_use",
           "name": "read_file",
           "input": {
-            "path": "notes.txt"
+            "path": "more-notes.txt"
           }
         }
       ]
@@ -266,7 +266,7 @@
           "type": "tool_use",
           "name": "read_file",
           "input": {
-            "path": "notes.txt"
+            "path": "more-notes.txt"
           }
         }
       ]
@@ -296,7 +296,7 @@
           "type": "tool_use",
           "name": "read_file",
           "input": {
-            "path": "notes.txt"
+            "path": "more-notes.txt"
           }
         }
       ]
@@ -326,7 +326,7 @@
           "type": "tool_use",
           "name": "read_file",
           "input": {
-            "path": "notes.txt"
+            "path": "more-notes.txt"
           }
         }
       ]
@@ -356,7 +356,7 @@
           "type": "tool_use",
           "name": "read_file",
           "input": {
-            "path": "notes.txt"
+            "path": "more-notes.txt"
           }
         }
       ]
@@ -386,7 +386,7 @@
           "type": "tool_use",
           "name": "read_file",
           "input": {
-            "path": "notes.txt"
+            "path": "more-notes.txt"
           }
         }
       ]
@@ -416,7 +416,7 @@
           "type": "tool_use",
           "name": "read_file",
           "input": {
-            "path": "notes.txt"
+            "path": "more-notes.txt"
           }
         }
       ]
@@ -446,7 +446,7 @@
           "type": "tool_use",
           "name": "read_file",
           "input": {
-            "path": "notes.txt"
+            "path": "more-notes.txt"
           }
         }
       ]
