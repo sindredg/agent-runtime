@@ -106,7 +106,7 @@ unless switched on.
 | Setting | Value |
 |---|---|
 | Workers | Three, restarted when they end themselves |
-| Lease | 2 s, renewed every 0.5 s. The failpoint tests use 6 s and 2 s. |
+| Lease | 2 s, renewed every 0.5 s, poll 0.2 s. The failpoint tests use 6 s and 2 s. |
 | Sandbox timeout | 10 s, so a takeover during a sandboxed call waits 40 s, not 60 s |
 | `CHAOS_LOG_DIR` | `/chaos` in the worker, mounted from `./.chaos` on the host |
 
@@ -114,16 +114,16 @@ The tests that pause or stop a worker use the default 30 s lease. Each chaos
 test writes its result to `.chaos/results.jsonl` with a `verdict`: `passed`,
 `failed`, or `void` when the machine's clock was set during the run.
 
-`docker-compose.long.yml` (`make long-up`) runs a job past its context window:
-two workers, no sandbox, six-digit issue numbers, `SUMMARY_TRIGGER` from the
-shell, and the scenarios of `LONG_SCENARIO_DIR`, by default the packaged ones.
+`docker-compose.long.yml` (`make long-up`) sets up the long stack, for a job
+longer than its context window: two workers, no sandbox, `MAX_TOKENS` 32000,
+six-digit issue numbers and `SUMMARY_TRIGGER` from the shell.
 
 ## The fakes
 
 - The fake provider keeps the newest 10,000 requests. It picks a scenario by
   `model` and a turn by the assistant messages, counted on from a summary's
-  `[turn N]` marker. Ids carry that job-wide turn, so none repeats across
-  windows: `msg_fake_<scenario>_<turn>`, `toolu_fake_<scenario>_<turn>_<block>`.
+  `[turn N]` marker. A turn's ids carry that job-wide turn, so none repeats
+  across windows: `msg_fake_<scenario>_<turn>`, `toolu_fake_<scenario>_<turn>_<block>`.
 - It counts tokens as a quarter of the characters of JSON, at least 1: input
   from `system`, `tools` and `messages`, output from the answer's content.
 - A request over the scenario's `context_window` gets 400 before any turn is

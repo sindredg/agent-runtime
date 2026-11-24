@@ -202,7 +202,9 @@ def create_app(
         """The scenario name, what to log, the message and the delay, or RequestError.
 
         The input estimate goes into the log entry as soon as it is known, so
-        a refused request keeps it too.
+        a request refused after it is measured (over the window, past the
+        script, an unexpected summary request) keeps it too. A faulted or busy
+        answer comes before this, so its entry has no `input_estimate`.
         """
         if "x-api-key" not in headers and "authorization" not in headers:
             raise RequestError(401, "authentication_error", "x-api-key header is required")
