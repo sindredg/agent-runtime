@@ -23,6 +23,7 @@ from runtime.provider.messages import (
     _thinking_tokens,
     retry_after,
 )
+from runtime.worker import __main__ as worker_main
 from runtime.worker.__main__ import quiet_serializer_warnings
 
 REQUEST = ModelRequest(
@@ -325,6 +326,22 @@ def test_the_worker_keeps_a_serializer_warning_off_stderr(
         response = complete(lambda request: sse(chunks))
     assert response.stop_reason == MESSAGE["stop_reason"]
     assert marker not in capsys.readouterr().err
+
+
+def test_the_worker_process_drops_serializer_warnings(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def nothing(config: object) -> None:
+        return None
+
+    monkeypatch.setattr(worker_main, "run", nothing)
+    monkeypatch.setattr(worker_main, "configure_logging", lambda: None)
+    monkeypatch.setattr(worker_main.WorkerConfig, "from_env", staticmethod(lambda: None))
+    with warnings.catch_warnings():
+        worker_main.main()
+        installed = [
+            (action, message.pattern if message else None)
+            for action, message, *_ in warnings.filters
+        ]
+    assert ("ignore", "Pydantic serializer warnings") in installed
 
 
 def test_a_refusal_shows_no_explanation_in_its_repr() -> None:
