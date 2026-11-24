@@ -90,7 +90,7 @@ listed here is refused.
 | `prompt` | The first user message. Not empty. |
 | `system` | System prompt. Not empty if given. |
 | `model` | Model id, by default the worker's `MODEL`. With the fake provider it names a scenario. |
-| `files` | Text files for the job's workspace: relative path to content. 1 MiB in total. |
+| `files` | Text files for the job's workspace: relative path to content. 8 MiB in total, paths included. |
 | `scope` | What `run_shell` may reach on the network. Left out: no network. |
 | `needs_approval` | Names of tools whose calls wait for a person, at most 100 |
 | `token_budget` | At least 1. Default: the API's `DEFAULT_TOKEN_BUDGET`. |

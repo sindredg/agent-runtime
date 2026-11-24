@@ -9,8 +9,8 @@ from runtime.scope import MAX_TARGETS, Target
 from runtime.tools.paths import check_relative
 
 # The spec is one database row. Files that seed the workspace are part of it,
-# so they are kept small. The limit counts paths and contents.
-MAX_FILES_BYTES = 1024 * 1024
+# so they are bounded. The limit counts paths and contents (ADR 0032).
+MAX_FILES_BYTES = 8 * 1024 * 1024
 # Limits most file systems have: one name, and a whole path.
 MAX_NAME_BYTES = 255
 MAX_PATH_BYTES = 1024
