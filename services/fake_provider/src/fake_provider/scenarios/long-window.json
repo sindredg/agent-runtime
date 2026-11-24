@@ -1,0 +1,666 @@
+{
+  "description": "A job longer than its context window of 3400 tokens. Turns 1 to 43 each write a paragraph of notes and read notes/NN.txt, a file of one short line, or open an issue in parts 05, 16, 27 and 38. Then it ends. With SUMMARY_TRIGGER 3000 and six-digit issue numbers it summarises three times and every request fits the window. The response of turn 11 is then 2999 tokens, and 3000 with seven-digit numbers. Without a trigger a request goes over the window.",
+  "context_window": 3400,
+  "turns": [
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes on part 01. Line 01 of part 01: a fact that a later step needs. Line 02 of part 01: a fact that a later step needs. Line 03 of part 01: a fact that a later step needs. Line 04 of part 01: a fact that a later step needs. Line 05 of part 01: a fact that a later step needs. Line 06 of part 01: a fact that a later step needs. Line 07 of part 01: a fact that a later step needs. Line 08 of part 01: a fact that a later step needs. Line 09 of part 01: a fact that a later step needs. Line 10 of part 01: a fact that a later step needs. Line 11 of part 01: a fact that a later step needs. Line 12 of part 01: a fact that a later step needs. Line 13 of part 01: a fact that a later step needs."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes/01.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes on part 02. Line 01 of part 02: a fact that a later step needs. Line 02 of part 02: a fact that a later step needs. Line 03 of part 02: a fact that a later step needs. Line 04 of part 02: a fact that a later step needs. Line 05 of part 02: a fact that a later step needs. Line 06 of part 02: a fact that a later step needs. Line 07 of part 02: a fact that a later step needs. Line 08 of part 02: a fact that a later step needs. Line 09 of part 02: a fact that a later step needs. Line 10 of part 02: a fact that a later step needs. Line 11 of part 02: a fact that a later step needs. Line 12 of part 02: a fact that a later step needs. Line 13 of part 02: a fact that a later step needs."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes/02.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes on part 03. Line 01 of part 03: a fact that a later step needs. Line 02 of part 03: a fact that a later step needs. Line 03 of part 03: a fact that a later step needs. Line 04 of part 03: a fact that a later step needs. Line 05 of part 03: a fact that a later step needs. Line 06 of part 03: a fact that a later step needs. Line 07 of part 03: a fact that a later step needs. Line 08 of part 03: a fact that a later step needs. Line 09 of part 03: a fact that a later step needs. Line 10 of part 03: a fact that a later step needs. Line 11 of part 03: a fact that a later step needs. Line 12 of part 03: a fact that a later step needs. Line 13 of part 03: a fact that a later step needs."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes/03.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes on part 04. Line 01 of part 04: a fact that a later step needs. Line 02 of part 04: a fact that a later step needs. Line 03 of part 04: a fact that a later step needs. Line 04 of part 04: a fact that a later step needs. Line 05 of part 04: a fact that a later step needs. Line 06 of part 04: a fact that a later step needs. Line 07 of part 04: a fact that a later step needs. Line 08 of part 04: a fact that a later step needs. Line 09 of part 04: a fact that a later step needs. Line 10 of part 04: a fact that a later step needs. Line 11 of part 04: a fact that a later step needs. Line 12 of part 04: a fact that a later step needs. Line 13 of part 04: a fact that a later step needs."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes/04.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes on part 05. Line 01 of part 05: a fact that a later step needs. Line 02 of part 05: a fact that a later step needs. Line 03 of part 05: a fact that a later step needs. Line 04 of part 05: a fact that a later step needs. Line 05 of part 05: a fact that a later step needs. Line 06 of part 05: a fact that a later step needs. Line 07 of part 05: a fact that a later step needs. Line 08 of part 05: a fact that a later step needs. Line 09 of part 05: a fact that a later step needs. Line 10 of part 05: a fact that a later step needs. Line 11 of part 05: a fact that a later step needs. Line 12 of part 05: a fact that a later step needs. Line 13 of part 05: a fact that a later step needs."
+        },
+        {
+          "type": "tool_use",
+          "name": "create_issue",
+          "input": {
+            "title": "Finding in part 05",
+            "body": "Part 05 needs work."
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes on part 06. Line 01 of part 06: a fact that a later step needs. Line 02 of part 06: a fact that a later step needs. Line 03 of part 06: a fact that a later step needs. Line 04 of part 06: a fact that a later step needs. Line 05 of part 06: a fact that a later step needs. Line 06 of part 06: a fact that a later step needs. Line 07 of part 06: a fact that a later step needs. Line 08 of part 06: a fact that a later step needs. Line 09 of part 06: a fact that a later step needs. Line 10 of part 06: a fact that a later step needs. Line 11 of part 06: a fact that a later step needs. Line 12 of part 06: a fact that a later step needs. Line 13 of part 06: a fact that a later step needs."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes/06.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes on part 07. Line 01 of part 07: a fact that a later step needs. Line 02 of part 07: a fact that a later step needs. Line 03 of part 07: a fact that a later step needs. Line 04 of part 07: a fact that a later step needs. Line 05 of part 07: a fact that a later step needs. Line 06 of part 07: a fact that a later step needs. Line 07 of part 07: a fact that a later step needs. Line 08 of part 07: a fact that a later step needs. Line 09 of part 07: a fact that a later step needs. Line 10 of part 07: a fact that a later step needs. Line 11 of part 07: a fact that a later step needs. Line 12 of part 07: a fact that a later step needs. Line 13 of part 07: a fact that a later step needs."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes/07.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes on part 08. Line 01 of part 08: a fact that a later step needs. Line 02 of part 08: a fact that a later step needs. Line 03 of part 08: a fact that a later step needs. Line 04 of part 08: a fact that a later step needs. Line 05 of part 08: a fact that a later step needs. Line 06 of part 08: a fact that a later step needs. Line 07 of part 08: a fact that a later step needs. Line 08 of part 08: a fact that a later step needs. Line 09 of part 08: a fact that a later step needs. Line 10 of part 08: a fact that a later step needs. Line 11 of part 08: a fact that a later step needs. Line 12 of part 08: a fact that a later step needs. Line 13 of part 08: a fact that a later step needs."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes/08.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes on part 09. Line 01 of part 09: a fact that a later step needs. Line 02 of part 09: a fact that a later step needs. Line 03 of part 09: a fact that a later step needs. Line 04 of part 09: a fact that a later step needs. Line 05 of part 09: a fact that a later step needs. Line 06 of part 09: a fact that a later step needs. Line 07 of part 09: a fact that a later step needs. Line 08 of part 09: a fact that a later step needs. Line 09 of part 09: a fact that a later step needs. Line 10 of part 09: a fact that a later step needs. Line 11 of part 09: a fact that a later step needs. Line 12 of part 09: a fact that a later step needs. Line 13 of part 09: a fact that a later step needs."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes/09.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes on part 10. Line 01 of part 10: a fact that a later step needs. Line 02 of part 10: a fact that a later step needs. Line 03 of part 10: a fact that a later step needs. Line 04 of part 10: a fact that a later step needs. Line 05 of part 10: a fact that a later step needs. Line 06 of part 10: a fact that a later step needs. Line 07 of part 10: a fact that a later step needs. Line 08 of part 10: a fact that a later step needs. Line 09 of part 10: a fact that a later step needs. Line 10 of part 10: a fact that a later step needs. Line 11 of part 10: a fact that a later step needs. Line 12 of part 10: a fact that a later step needs. Line 13 of part 10: a fact that a later step needs."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes/10.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes on part 11. Line 01 of part 11: a fact that a later step needs. Line 02 of part 11: a fact that a later step needs. Line 03 of part 11: a fact that a later step needs. Line 04 of part 11: a fact that a later step needs. Line 05 of part 11: a fact that a later step needs. Line 06 of part 11: a fact that a later step needs. Line 07 of part 11: a fact that a later step needs. Line 08 of part 11: a fact that a later step needs. Line 09 of part 11: a fact that a later step needs. Line 10 of part 11: a fact that a later step needs."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes/11.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes on part 12. Line 01 of part 12: a fact that a later step needs. Line 02 of part 12: a fact that a later step needs. Line 03 of part 12: a fact that a later step needs. Line 04 of part 12: a fact that a later step needs. Line 05 of part 12: a fact that a later step needs. Line 06 of part 12: a fact that a later step needs. Line 07 of part 12: a fact that a later step needs. Line 08 of part 12: a fact that a later step needs. Line 09 of part 12: a fact that a later step needs. Line 10 of part 12: a fact that a later step needs."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes/12.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes on part 13. Line 01 of part 13: a fact that a later step needs. Line 02 of part 13: a fact that a later step needs. Line 03 of part 13: a fact that a later step needs. Line 04 of part 13: a fact that a later step needs. Line 05 of part 13: a fact that a later step needs. Line 06 of part 13: a fact that a later step needs. Line 07 of part 13: a fact that a later step needs. Line 08 of part 13: a fact that a later step needs. Line 09 of part 13: a fact that a later step needs. Line 10 of part 13: a fact that a later step needs. Line 11 of part 13: a fact that a later step needs. Line 12 of part 13: a fact that a later step needs. Line 13 of part 13: a fact that a later step needs."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes/13.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes on part 14. Line 01 of part 14: a fact that a later step needs. Line 02 of part 14: a fact that a later step needs. Line 03 of part 14: a fact that a later step needs. Line 04 of part 14: a fact that a later step needs. Line 05 of part 14: a fact that a later step needs. Line 06 of part 14: a fact that a later step needs. Line 07 of part 14: a fact that a later step needs. Line 08 of part 14: a fact that a later step needs. Line 09 of part 14: a fact that a later step needs. Line 10 of part 14: a fact that a later step needs. Line 11 of part 14: a fact that a later step needs. Line 12 of part 14: a fact that a later step needs. Line 13 of part 14: a fact that a later step needs."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes/14.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes on part 15. Line 01 of part 15: a fact that a later step needs. Line 02 of part 15: a fact that a later step needs. Line 03 of part 15: a fact that a later step needs. Line 04 of part 15: a fact that a later step needs. Line 05 of part 15: a fact that a later step needs. Line 06 of part 15: a fact that a later step needs. Line 07 of part 15: a fact that a later step needs. Line 08 of part 15: a fact that a later step needs. Line 09 of part 15: a fact that a later step needs. Line 10 of part 15: a fact that a later step needs. Line 11 of part 15: a fact that a later step needs. Line 12 of part 15: a fact that a later step needs. Line 13 of part 15: a fact that a later step needs."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes/15.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes on part 16. Line 01 of part 16: a fact that a later step needs. Line 02 of part 16: a fact that a later step needs. Line 03 of part 16: a fact that a later step needs. Line 04 of part 16: a fact that a later step needs. Line 05 of part 16: a fact that a later step needs. Line 06 of part 16: a fact that a later step needs. Line 07 of part 16: a fact that a later step needs. Line 08 of part 16: a fact that a later step needs. Line 09 of part 16: a fact that a later step needs. Line 10 of part 16: a fact that a later step needs. Line 11 of part 16: a fact that a later step needs. Line 12 of part 16: a fact that a later step needs. Line 13 of part 16: a fact that a later step needs."
+        },
+        {
+          "type": "tool_use",
+          "name": "create_issue",
+          "input": {
+            "title": "Finding in part 16",
+            "body": "Part 16 needs work."
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes on part 17. Line 01 of part 17: a fact that a later step needs. Line 02 of part 17: a fact that a later step needs. Line 03 of part 17: a fact that a later step needs. Line 04 of part 17: a fact that a later step needs. Line 05 of part 17: a fact that a later step needs. Line 06 of part 17: a fact that a later step needs. Line 07 of part 17: a fact that a later step needs. Line 08 of part 17: a fact that a later step needs. Line 09 of part 17: a fact that a later step needs. Line 10 of part 17: a fact that a later step needs. Line 11 of part 17: a fact that a later step needs. Line 12 of part 17: a fact that a later step needs. Line 13 of part 17: a fact that a later step needs."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes/17.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes on part 18. Line 01 of part 18: a fact that a later step needs. Line 02 of part 18: a fact that a later step needs. Line 03 of part 18: a fact that a later step needs. Line 04 of part 18: a fact that a later step needs. Line 05 of part 18: a fact that a later step needs. Line 06 of part 18: a fact that a later step needs. Line 07 of part 18: a fact that a later step needs. Line 08 of part 18: a fact that a later step needs. Line 09 of part 18: a fact that a later step needs. Line 10 of part 18: a fact that a later step needs. Line 11 of part 18: a fact that a later step needs. Line 12 of part 18: a fact that a later step needs. Line 13 of part 18: a fact that a later step needs."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes/18.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes on part 19. Line 01 of part 19: a fact that a later step needs. Line 02 of part 19: a fact that a later step needs. Line 03 of part 19: a fact that a later step needs. Line 04 of part 19: a fact that a later step needs. Line 05 of part 19: a fact that a later step needs. Line 06 of part 19: a fact that a later step needs. Line 07 of part 19: a fact that a later step needs. Line 08 of part 19: a fact that a later step needs. Line 09 of part 19: a fact that a later step needs. Line 10 of part 19: a fact that a later step needs. Line 11 of part 19: a fact that a later step needs. Line 12 of part 19: a fact that a later step needs. Line 13 of part 19: a fact that a later step needs."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes/19.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes on part 20. Line 01 of part 20: a fact that a later step needs. Line 02 of part 20: a fact that a later step needs. Line 03 of part 20: a fact that a later step needs. Line 04 of part 20: a fact that a later step needs. Line 05 of part 20: a fact that a later step needs. Line 06 of part 20: a fact that a later step needs. Line 07 of part 20: a fact that a later step needs. Line 08 of part 20: a fact that a later step needs. Line 09 of part 20: a fact that a later step needs. Line 10 of part 20: a fact that a later step needs. Line 11 of part 20: a fact that a later step needs. Line 12 of part 20: a fact that a later step needs. Line 13 of part 20: a fact that a later step needs."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes/20.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes on part 21. Line 01 of part 21: a fact that a later step needs. Line 02 of part 21: a fact that a later step needs. Line 03 of part 21: a fact that a later step needs. Line 04 of part 21: a fact that a later step needs. Line 05 of part 21: a fact that a later step needs. Line 06 of part 21: a fact that a later step needs. Line 07 of part 21: a fact that a later step needs. Line 08 of part 21: a fact that a later step needs. Line 09 of part 21: a fact that a later step needs. Line 10 of part 21: a fact that a later step needs. Line 11 of part 21: a fact that a later step needs. Line 12 of part 21: a fact that a later step needs. Line 13 of part 21: a fact that a later step needs."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes/21.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes on part 22. Line 01 of part 22: a fact that a later step needs. Line 02 of part 22: a fact that a later step needs. Line 03 of part 22: a fact that a later step needs. Line 04 of part 22: a fact that a later step needs. Line 05 of part 22: a fact that a later step needs. Line 06 of part 22: a fact that a later step needs. Line 07 of part 22: a fact that a later step needs. Line 08 of part 22: a fact that a later step needs. Line 09 of part 22: a fact that a later step needs. Line 10 of part 22: a fact that a later step needs. Line 11 of part 22: a fact that a later step needs. Line 12 of part 22: a fact that a later step needs. Line 13 of part 22: a fact that a later step needs."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes/22.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes on part 23. Line 01 of part 23: a fact that a later step needs. Line 02 of part 23: a fact that a later step needs. Line 03 of part 23: a fact that a later step needs. Line 04 of part 23: a fact that a later step needs. Line 05 of part 23: a fact that a later step needs. Line 06 of part 23: a fact that a later step needs. Line 07 of part 23: a fact that a later step needs. Line 08 of part 23: a fact that a later step needs. Line 09 of part 23: a fact that a later step needs. Line 10 of part 23: a fact that a later step needs. Line 11 of part 23: a fact that a later step needs. Line 12 of part 23: a fact that a later step needs. Line 13 of part 23: a fact that a later step needs."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes/23.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes on part 24. Line 01 of part 24: a fact that a later step needs. Line 02 of part 24: a fact that a later step needs. Line 03 of part 24: a fact that a later step needs. Line 04 of part 24: a fact that a later step needs. Line 05 of part 24: a fact that a later step needs. Line 06 of part 24: a fact that a later step needs. Line 07 of part 24: a fact that a later step needs. Line 08 of part 24: a fact that a later step needs. Line 09 of part 24: a fact that a later step needs. Line 10 of part 24: a fact that a later step needs. Line 11 of part 24: a fact that a later step needs. Line 12 of part 24: a fact that a later step needs. Line 13 of part 24: a fact that a later step needs."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes/24.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes on part 25. Line 01 of part 25: a fact that a later step needs. Line 02 of part 25: a fact that a later step needs. Line 03 of part 25: a fact that a later step needs. Line 04 of part 25: a fact that a later step needs. Line 05 of part 25: a fact that a later step needs. Line 06 of part 25: a fact that a later step needs. Line 07 of part 25: a fact that a later step needs. Line 08 of part 25: a fact that a later step needs. Line 09 of part 25: a fact that a later step needs. Line 10 of part 25: a fact that a later step needs. Line 11 of part 25: a fact that a later step needs. Line 12 of part 25: a fact that a later step needs. Line 13 of part 25: a fact that a later step needs."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes/25.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes on part 26. Line 01 of part 26: a fact that a later step needs. Line 02 of part 26: a fact that a later step needs. Line 03 of part 26: a fact that a later step needs. Line 04 of part 26: a fact that a later step needs. Line 05 of part 26: a fact that a later step needs. Line 06 of part 26: a fact that a later step needs. Line 07 of part 26: a fact that a later step needs. Line 08 of part 26: a fact that a later step needs. Line 09 of part 26: a fact that a later step needs. Line 10 of part 26: a fact that a later step needs. Line 11 of part 26: a fact that a later step needs. Line 12 of part 26: a fact that a later step needs. Line 13 of part 26: a fact that a later step needs."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes/26.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes on part 27. Line 01 of part 27: a fact that a later step needs. Line 02 of part 27: a fact that a later step needs. Line 03 of part 27: a fact that a later step needs. Line 04 of part 27: a fact that a later step needs. Line 05 of part 27: a fact that a later step needs. Line 06 of part 27: a fact that a later step needs. Line 07 of part 27: a fact that a later step needs. Line 08 of part 27: a fact that a later step needs. Line 09 of part 27: a fact that a later step needs. Line 10 of part 27: a fact that a later step needs. Line 11 of part 27: a fact that a later step needs. Line 12 of part 27: a fact that a later step needs. Line 13 of part 27: a fact that a later step needs."
+        },
+        {
+          "type": "tool_use",
+          "name": "create_issue",
+          "input": {
+            "title": "Finding in part 27",
+            "body": "Part 27 needs work."
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes on part 28. Line 01 of part 28: a fact that a later step needs. Line 02 of part 28: a fact that a later step needs. Line 03 of part 28: a fact that a later step needs. Line 04 of part 28: a fact that a later step needs. Line 05 of part 28: a fact that a later step needs. Line 06 of part 28: a fact that a later step needs. Line 07 of part 28: a fact that a later step needs. Line 08 of part 28: a fact that a later step needs. Line 09 of part 28: a fact that a later step needs. Line 10 of part 28: a fact that a later step needs. Line 11 of part 28: a fact that a later step needs. Line 12 of part 28: a fact that a later step needs. Line 13 of part 28: a fact that a later step needs."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes/28.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes on part 29. Line 01 of part 29: a fact that a later step needs. Line 02 of part 29: a fact that a later step needs. Line 03 of part 29: a fact that a later step needs. Line 04 of part 29: a fact that a later step needs. Line 05 of part 29: a fact that a later step needs. Line 06 of part 29: a fact that a later step needs. Line 07 of part 29: a fact that a later step needs. Line 08 of part 29: a fact that a later step needs. Line 09 of part 29: a fact that a later step needs. Line 10 of part 29: a fact that a later step needs. Line 11 of part 29: a fact that a later step needs. Line 12 of part 29: a fact that a later step needs. Line 13 of part 29: a fact that a later step needs."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes/29.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes on part 30. Line 01 of part 30: a fact that a later step needs. Line 02 of part 30: a fact that a later step needs. Line 03 of part 30: a fact that a later step needs. Line 04 of part 30: a fact that a later step needs. Line 05 of part 30: a fact that a later step needs. Line 06 of part 30: a fact that a later step needs. Line 07 of part 30: a fact that a later step needs. Line 08 of part 30: a fact that a later step needs. Line 09 of part 30: a fact that a later step needs. Line 10 of part 30: a fact that a later step needs. Line 11 of part 30: a fact that a later step needs. Line 12 of part 30: a fact that a later step needs. Line 13 of part 30: a fact that a later step needs."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes/30.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes on part 31. Line 01 of part 31: a fact that a later step needs. Line 02 of part 31: a fact that a later step needs. Line 03 of part 31: a fact that a later step needs. Line 04 of part 31: a fact that a later step needs. Line 05 of part 31: a fact that a later step needs. Line 06 of part 31: a fact that a later step needs. Line 07 of part 31: a fact that a later step needs. Line 08 of part 31: a fact that a later step needs. Line 09 of part 31: a fact that a later step needs. Line 10 of part 31: a fact that a later step needs. Line 11 of part 31: a fact that a later step needs. Line 12 of part 31: a fact that a later step needs. Line 13 of part 31: a fact that a later step needs."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes/31.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes on part 32. Line 01 of part 32: a fact that a later step needs. Line 02 of part 32: a fact that a later step needs. Line 03 of part 32: a fact that a later step needs. Line 04 of part 32: a fact that a later step needs. Line 05 of part 32: a fact that a later step needs. Line 06 of part 32: a fact that a later step needs. Line 07 of part 32: a fact that a later step needs. Line 08 of part 32: a fact that a later step needs. Line 09 of part 32: a fact that a later step needs. Line 10 of part 32: a fact that a later step needs. Line 11 of part 32: a fact that a later step needs. Line 12 of part 32: a fact that a later step needs. Line 13 of part 32: a fact that a later step needs."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes/32.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes on part 33. Line 01 of part 33: a fact that a later step needs. Line 02 of part 33: a fact that a later step needs. Line 03 of part 33: a fact that a later step needs. Line 04 of part 33: a fact that a later step needs. Line 05 of part 33: a fact that a later step needs. Line 06 of part 33: a fact that a later step needs. Line 07 of part 33: a fact that a later step needs. Line 08 of part 33: a fact that a later step needs. Line 09 of part 33: a fact that a later step needs. Line 10 of part 33: a fact that a later step needs. Line 11 of part 33: a fact that a later step needs. Line 12 of part 33: a fact that a later step needs. Line 13 of part 33: a fact that a later step needs."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes/33.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes on part 34. Line 01 of part 34: a fact that a later step needs. Line 02 of part 34: a fact that a later step needs. Line 03 of part 34: a fact that a later step needs. Line 04 of part 34: a fact that a later step needs. Line 05 of part 34: a fact that a later step needs. Line 06 of part 34: a fact that a later step needs. Line 07 of part 34: a fact that a later step needs. Line 08 of part 34: a fact that a later step needs. Line 09 of part 34: a fact that a later step needs. Line 10 of part 34: a fact that a later step needs. Line 11 of part 34: a fact that a later step needs. Line 12 of part 34: a fact that a later step needs. Line 13 of part 34: a fact that a later step needs."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes/34.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes on part 35. Line 01 of part 35: a fact that a later step needs. Line 02 of part 35: a fact that a later step needs. Line 03 of part 35: a fact that a later step needs. Line 04 of part 35: a fact that a later step needs. Line 05 of part 35: a fact that a later step needs. Line 06 of part 35: a fact that a later step needs. Line 07 of part 35: a fact that a later step needs. Line 08 of part 35: a fact that a later step needs. Line 09 of part 35: a fact that a later step needs. Line 10 of part 35: a fact that a later step needs. Line 11 of part 35: a fact that a later step needs. Line 12 of part 35: a fact that a later step needs. Line 13 of part 35: a fact that a later step needs."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes/35.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes on part 36. Line 01 of part 36: a fact that a later step needs. Line 02 of part 36: a fact that a later step needs. Line 03 of part 36: a fact that a later step needs. Line 04 of part 36: a fact that a later step needs. Line 05 of part 36: a fact that a later step needs. Line 06 of part 36: a fact that a later step needs. Line 07 of part 36: a fact that a later step needs. Line 08 of part 36: a fact that a later step needs. Line 09 of part 36: a fact that a later step needs. Line 10 of part 36: a fact that a later step needs. Line 11 of part 36: a fact that a later step needs. Line 12 of part 36: a fact that a later step needs. Line 13 of part 36: a fact that a later step needs."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes/36.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes on part 37. Line 01 of part 37: a fact that a later step needs. Line 02 of part 37: a fact that a later step needs. Line 03 of part 37: a fact that a later step needs. Line 04 of part 37: a fact that a later step needs. Line 05 of part 37: a fact that a later step needs. Line 06 of part 37: a fact that a later step needs. Line 07 of part 37: a fact that a later step needs. Line 08 of part 37: a fact that a later step needs. Line 09 of part 37: a fact that a later step needs. Line 10 of part 37: a fact that a later step needs. Line 11 of part 37: a fact that a later step needs. Line 12 of part 37: a fact that a later step needs. Line 13 of part 37: a fact that a later step needs."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes/37.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes on part 38. Line 01 of part 38: a fact that a later step needs. Line 02 of part 38: a fact that a later step needs. Line 03 of part 38: a fact that a later step needs. Line 04 of part 38: a fact that a later step needs. Line 05 of part 38: a fact that a later step needs. Line 06 of part 38: a fact that a later step needs. Line 07 of part 38: a fact that a later step needs. Line 08 of part 38: a fact that a later step needs. Line 09 of part 38: a fact that a later step needs. Line 10 of part 38: a fact that a later step needs. Line 11 of part 38: a fact that a later step needs. Line 12 of part 38: a fact that a later step needs. Line 13 of part 38: a fact that a later step needs."
+        },
+        {
+          "type": "tool_use",
+          "name": "create_issue",
+          "input": {
+            "title": "Finding in part 38",
+            "body": "Part 38 needs work."
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes on part 39. Line 01 of part 39: a fact that a later step needs. Line 02 of part 39: a fact that a later step needs. Line 03 of part 39: a fact that a later step needs. Line 04 of part 39: a fact that a later step needs. Line 05 of part 39: a fact that a later step needs. Line 06 of part 39: a fact that a later step needs. Line 07 of part 39: a fact that a later step needs. Line 08 of part 39: a fact that a later step needs. Line 09 of part 39: a fact that a later step needs. Line 10 of part 39: a fact that a later step needs. Line 11 of part 39: a fact that a later step needs. Line 12 of part 39: a fact that a later step needs. Line 13 of part 39: a fact that a later step needs."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes/39.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes on part 40. Line 01 of part 40: a fact that a later step needs. Line 02 of part 40: a fact that a later step needs. Line 03 of part 40: a fact that a later step needs. Line 04 of part 40: a fact that a later step needs. Line 05 of part 40: a fact that a later step needs. Line 06 of part 40: a fact that a later step needs. Line 07 of part 40: a fact that a later step needs. Line 08 of part 40: a fact that a later step needs. Line 09 of part 40: a fact that a later step needs. Line 10 of part 40: a fact that a later step needs. Line 11 of part 40: a fact that a later step needs. Line 12 of part 40: a fact that a later step needs. Line 13 of part 40: a fact that a later step needs."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes/40.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes on part 41. Line 01 of part 41: a fact that a later step needs. Line 02 of part 41: a fact that a later step needs. Line 03 of part 41: a fact that a later step needs. Line 04 of part 41: a fact that a later step needs. Line 05 of part 41: a fact that a later step needs. Line 06 of part 41: a fact that a later step needs. Line 07 of part 41: a fact that a later step needs. Line 08 of part 41: a fact that a later step needs. Line 09 of part 41: a fact that a later step needs. Line 10 of part 41: a fact that a later step needs. Line 11 of part 41: a fact that a later step needs. Line 12 of part 41: a fact that a later step needs. Line 13 of part 41: a fact that a later step needs."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes/41.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes on part 42. Line 01 of part 42: a fact that a later step needs. Line 02 of part 42: a fact that a later step needs. Line 03 of part 42: a fact that a later step needs. Line 04 of part 42: a fact that a later step needs. Line 05 of part 42: a fact that a later step needs. Line 06 of part 42: a fact that a later step needs. Line 07 of part 42: a fact that a later step needs. Line 08 of part 42: a fact that a later step needs. Line 09 of part 42: a fact that a later step needs. Line 10 of part 42: a fact that a later step needs. Line 11 of part 42: a fact that a later step needs. Line 12 of part 42: a fact that a later step needs. Line 13 of part 42: a fact that a later step needs."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes/42.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Notes on part 43. Line 01 of part 43: a fact that a later step needs. Line 02 of part 43: a fact that a later step needs. Line 03 of part 43: a fact that a later step needs. Line 04 of part 43: a fact that a later step needs. Line 05 of part 43: a fact that a later step needs. Line 06 of part 43: a fact that a later step needs. Line 07 of part 43: a fact that a later step needs. Line 08 of part 43: a fact that a later step needs. Line 09 of part 43: a fact that a later step needs. Line 10 of part 43: a fact that a later step needs. Line 11 of part 43: a fact that a later step needs. Line 12 of part 43: a fact that a later step needs. Line 13 of part 43: a fact that a later step needs."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes/43.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Done: all 43 parts are read."
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "text": "The task: read the notes of every part in order, open an issue where they ask for one, then say done. Read so far: every part before the turn named below."
+  }
+}

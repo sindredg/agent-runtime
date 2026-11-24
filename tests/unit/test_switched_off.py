@@ -165,6 +165,7 @@ RANDOM_KILLS = replace(
         (replace(KEYED, model="claude-sonnet-5-5"), "the workflow offers no model"),
         (replace(KEYED, model=None), "the workflow offers no model None"),
         (replace(KEYED, stack="chaos"), "a run on the Claude API uses the kills stack"),
+        (replace(KEYED, stack="long"), "a run on the Claude API uses the kills stack"),
         (replace(KEYED, record=None), "is judged by its record"),
         (replace(KEYED, provider="fake"), "the fake provider takes no model"),
         (replace(KEYED, runs=6), "6 jobs may spend 300000 tokens, over 250000"),
@@ -929,6 +930,7 @@ def test_an_edit_of_a_migration_is_made_like_one_of_the_source() -> None:
     [
         ("none", "fake", []),
         ("up", "fake", [["make", "up"]]),
+        ("long", "fake", [["make", "long-up"]]),
         (
             "chaos",
             "fake",

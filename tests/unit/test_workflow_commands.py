@@ -332,6 +332,7 @@ TARGETS = (
     "lab",
     "kills",
     "kills-claude",
+    "long-up",
 )
 # What runs tests or the stack, or prints stored text: pytest, one of the
 # targets, a container's logs, or a record file.

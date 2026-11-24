@@ -857,3 +857,55 @@ def test_the_runtime_reads_them_from_the_stream_through_the_real_sdk(
     assert response.stop_reason == "refusal"
     assert response.refusal == refusal
     assert response.thinking_tokens == thinking
+
+
+# The context window
+
+
+def windowed(window: int) -> TestClient:
+    return client({"two": TWO_TURNS.model_copy(update={"context_window": window})})
+
+
+def test_a_request_over_the_context_window_is_refused_as_the_api_refuses_it() -> None:
+    size = estimate_tokens({"system": None, "tools": None, "messages": [USER]})
+    api = windowed(size - 1)
+
+    response = api.post("/v1/messages", json=request(), headers=HEADERS)
+
+    assert error_of(response) == (400, "invalid_request_error")
+    message = f"prompt is too long: {size} tokens > {size - 1} maximum"
+    assert response.json()["error"]["message"] == message
+    (entry,) = api.get("/_fake/requests").json()
+    assert (entry["status"], entry["error"], entry["input_estimate"]) == (400, message, size)
+
+
+def test_a_request_at_the_context_window_is_answered_and_logs_its_estimate() -> None:
+    size = estimate_tokens({"system": None, "tools": None, "messages": [USER]})
+    api = windowed(size)
+
+    response = api.post("/v1/messages", json=request(), headers=HEADERS)
+
+    assert response.status_code == 200
+    assert response.json()["usage"]["input_tokens"] == size
+    (entry,) = api.get("/_fake/requests").json()
+    assert entry["input_estimate"] == entry["usage"]["input_tokens"] == size
+
+
+def test_the_window_is_checked_before_the_turn_and_the_summary() -> None:
+    """A request past the script, or a summary request, over the window gets the window error."""
+    past = second_request()
+    past["messages"] += [{"role": "assistant", "content": "Done."}, USER]
+    summary = request(tool_choice={"type": "none"})
+    api = windowed(1)
+
+    for body in (past, summary):
+        response = api.post("/v1/messages", json=body, headers=HEADERS)
+        assert error_of(response) == (400, "invalid_request_error")
+        assert response.json()["error"]["message"].startswith("prompt is too long: ")
+
+
+def test_a_scenario_without_a_window_answers_any_size() -> None:
+    body = request(system="x" * 100_000)
+    response = client().post("/v1/messages", json=body, headers=HEADERS)
+    assert response.status_code == 200
+    assert response.json()["usage"]["input_tokens"] > 25_000

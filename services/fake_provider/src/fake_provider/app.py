@@ -3,7 +3,8 @@
 `POST /v1/messages` picks a scenario by the request's `model` and a turn by
 the number of assistant messages in the request, counted on from a summary's
 marker. A request with `tool_choice` `none` gets the scenario's summary
-(`fake_provider.summary`). It answers as a stream of
+(`fake_provider.summary`). A request over the scenario's context window is
+refused with 400, before any turn is picked. It answers as a stream of
 server-sent events when the request sets `stream`, otherwise as one JSON
 message. Every request is kept in a log that tests read back as the record
 of what the provider was really asked.
@@ -96,10 +97,20 @@ def stream_parts(message: dict[str, Any], delay: float) -> Iterator[bytes | floa
 
 
 def default_scenarios() -> dict[str, Scenario]:
-    """Scenarios from FAKE_SCENARIO_DIR if set, otherwise the ones in the package."""
+    """Scenarios from FAKE_SCENARIO_DIR if set, otherwise the ones in the package.
+
+    A set directory that is not a directory, cannot be listed, or holds no
+    scenario raises, so the fake does not start with nothing to answer.
+    """
     directory = os.environ.get("FAKE_SCENARIO_DIR")
     if directory:
-        return load_scenarios(Path(directory))
+        # Listed first: a glob of a file or of a directory it cannot read
+        # finds nothing and raises nothing.
+        os.listdir(directory)
+        found = load_scenarios(Path(directory))
+        if not found:
+            raise ValueError(f"FAKE_SCENARIO_DIR {directory} holds no scenario file")
+        return found
     with resources.as_file(resources.files("fake_provider") / "scenarios") as packaged:
         return load_scenarios(packaged)
 
@@ -185,8 +196,16 @@ def create_app(
 
         return StreamingResponse(events(), media_type="text/event-stream", headers=headers)
 
-    def answer(body: Any, headers: Any) -> tuple[str, dict[str, Any], dict[str, Any], float]:
-        """The scenario name, what to log, the message and the delay, or RequestError."""
+    def answer(
+        body: Any, headers: Any, entry: dict[str, Any]
+    ) -> tuple[str, dict[str, Any], dict[str, Any], float]:
+        """The scenario name, what to log, the message and the delay, or RequestError.
+
+        The input estimate goes into the log entry as soon as it is known, so
+        a request refused after it is measured (over the window, past the
+        script, an unexpected summary request) keeps it too. A faulted or busy
+        answer comes before this, so its entry has no `input_estimate`.
+        """
         if "x-api-key" not in headers and "authorization" not in headers:
             raise RequestError(401, "authentication_error", "x-api-key header is required")
         if "anthropic-version" not in headers:
@@ -196,9 +215,20 @@ def create_app(
         scenario = known.get(name)
         if scenario is None:
             raise RequestError(404, "not_found_error", f"model: {name}")
+        prompt = {key: body.get(key) for key in ("system", "tools", "messages")}
+        # The same estimate the answer reports as `input_tokens`.
+        estimate = estimate_tokens(prompt)
+        entry["input_estimate"] = estimate
+        window = scenario.context_window
+        if window is not None and estimate > window:
+            # The fake's copy of the API's wording for a prompt over the window.
+            raise RequestError(
+                400,
+                "invalid_request_error",
+                f"prompt is too long: {estimate} tokens > {window} maximum",
+            )
         summaries, start = place(messages)
         turn = start + turn_index(messages)
-        prompt = {key: body.get(key) for key in ("system", "tools", "messages")}
         if body.get("tool_choice") == {"type": "none"}:
             if scenario.summary is None:
                 # So that a test cannot pass on a summary request it did not expect.
@@ -214,7 +244,7 @@ def create_app(
                 number,
                 turn,
                 model=name,
-                input_tokens=estimate_tokens(prompt),
+                input_tokens=estimate,
                 max_tokens=body["max_tokens"],
             )
             return name, {"turn": turn, "summary": number}, message, scenario.summary.delay_seconds
@@ -230,7 +260,7 @@ def create_app(
             scenario,
             turn,
             model=name,
-            input_tokens=estimate_tokens(prompt),
+            input_tokens=estimate,
             max_tokens=body["max_tokens"],
         )
         return name, {"turn": turn}, message, scenario.turns[turn].delay_seconds
@@ -276,7 +306,7 @@ def create_app(
                 refused.headers["retry-after"] = str(window.retry_after)
             return refused
         try:
-            name, place_of, message, delay = answer(body, request.headers)
+            name, place_of, message, delay = answer(body, request.headers, entry)
         except RequestError as refused:
             entry.update(status=refused.status, error=refused.message)
             return error(refused.status, refused.kind, refused.message, request_id)

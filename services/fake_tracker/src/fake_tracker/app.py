@@ -6,11 +6,19 @@ two entries. Tests read the list back as the record of what really happened
 outside the runtime, independent of the runtime's own step log.
 
 Everything is kept in memory and is gone when the service stops.
+
+FAKE_TRACKER_FIRST_ISSUE sets the first issue number. Set, it must have as
+many digits as the MAX_ISSUES-th number, which is the last the tracker gives:
+a post past it is refused with 507, also after a clear, since a clear does
+not restart the numbering. So every number has one width, and a number in a
+tool result does not change the length of the text. Unset, numbering starts
+at 1 and goes on after a clear.
 """
 
 import json
+import os
+from collections.abc import Mapping
 from datetime import UTC, datetime
-from itertools import count
 from typing import Annotated, Any
 
 from fastapi import FastAPI, Query, Request
@@ -24,6 +32,9 @@ from allowed_hosts import AllowedHosts
 # test run can use up.
 MAX_BODY_LENGTH = 64 * 1024
 MAX_ISSUES = 100_000
+# The largest issue number the worker takes from a tracker: Gitea's is a
+# 64-bit integer. A first number whose last one is past it is refused.
+MAX_NUMBER = 2**63 - 1
 # The names the stack and the tests reach it by. Any other Host is refused,
 # so a web page that points its own name at 127.0.0.1 cannot use it.
 HOSTS = ("fake-tracker", "localhost", "127.0.0.1")
@@ -45,11 +56,45 @@ def _json(content: Any, status: int = 200) -> Response:
     return Response(content=json.dumps(content), status_code=status, media_type="application/json")
 
 
-def create_app() -> FastAPI:
+def first_issue(env: Mapping[str, str]) -> int:
+    """The first issue number: FAKE_TRACKER_FIRST_ISSUE, or 1 when it is unset or empty.
+
+    Raises ValueError for a value that is not a positive whole number, whose
+    last number would be past MAX_NUMBER, or whose width differs from that of
+    the last number a full tracker holds.
+    """
+    value = env.get("FAKE_TRACKER_FIRST_ISSUE")
+    if not value:
+        return 1
+    if not value.isascii() or not value.isdigit() or not value.strip("0"):
+        raise ValueError(f"FAKE_TRACKER_FIRST_ISSUE must be a positive whole number, not {value!r}")
+    # The digits are counted first, so a value too long for int() gets this message too.
+    digits = value.lstrip("0")
+    if len(digits) > len(str(MAX_NUMBER)) or int(digits) + MAX_ISSUES - 1 > MAX_NUMBER:
+        raise ValueError(
+            "FAKE_TRACKER_FIRST_ISSUE is too large: the last number a full tracker gives"
+            f" must be at most {MAX_NUMBER}, the largest issue number the worker takes"
+        )
+    first = int(digits)
+    last = first + MAX_ISSUES - 1
+    if len(str(first)) != len(str(last)):
+        raise ValueError(
+            f"FAKE_TRACKER_FIRST_ISSUE {first} has {len(str(first))} digits and the last"
+            f" number, {last}, has {len(str(last))}: the numbers would not have one width"
+        )
+    return first
+
+
+def create_app(env: Mapping[str, str] | None = None) -> FastAPI:
+    """The app. Reads FAKE_TRACKER_FIRST_ISSUE from `env`, or from the environment."""
+    env = os.environ if env is None else env
+    first = first_issue(env)
+    # Set, the last number the tracker gives. Unset, there is none.
+    last = first + MAX_ISSUES - 1 if env.get("FAKE_TRACKER_FIRST_ISSUE") else None
     app = FastAPI(title="fake-tracker")
     app.add_middleware(AllowedHosts, hosts=HOSTS)
     issues: list[dict[str, Any]] = []
-    numbers = count(1)
+    next_number = first
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(request: Request, error: RequestValidationError) -> Response:
@@ -70,16 +115,22 @@ def create_app() -> FastAPI:
 
     @app.post("/issues", status_code=201)
     async def create_issue(new: NewIssue) -> Response:
+        nonlocal next_number
+        # Before the check for a full tracker: once the last number is given,
+        # a clear does not help, so the answer says to restart the tracker.
+        if last is not None and next_number > last:
+            return _json({"detail": "the tracker has given its last number; restart it"}, 507)
         if len(issues) >= MAX_ISSUES:
             return _json({"detail": "the tracker is full; clear it with DELETE /issues"}, 507)
         entry = {
-            "id": next(numbers),
+            "id": next_number,
             "title": new.title,
             "body": new.body,
             "operation_id": new.operation_id,
             "created_at": datetime.now(UTC).isoformat(),
         }
         issues.append(entry)
+        next_number += 1
         return _json(entry, 201)
 
     @app.get("/issues")

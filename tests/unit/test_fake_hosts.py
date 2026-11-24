@@ -44,7 +44,7 @@ RECEIVER_REQUESTS: list[tuple[str, str, Any]] = [
 ]
 CASES = (
     [("fake-provider", create_provider, *r) for r in PROVIDER_REQUESTS]
-    + [("fake-tracker", create_tracker, *r) for r in TRACKER_REQUESTS]
+    + [("fake-tracker", lambda: create_tracker({}), *r) for r in TRACKER_REQUESTS]
     + [("fake-receiver", create_receiver, *r) for r in RECEIVER_REQUESTS]
 )
 
@@ -59,7 +59,7 @@ def test_a_foreign_host_is_refused(
 
 
 def test_a_refused_request_changes_nothing() -> None:
-    tracker = create_tracker()
+    tracker = create_tracker({})
     TestClient(tracker, base_url=f"http://{FOREIGN}").post("/issues", json=ISSUE)
     assert TestClient(tracker, base_url="http://localhost").get("/issues").json() == []
     provider = create_provider()
@@ -77,7 +77,7 @@ def test_a_refused_request_changes_nothing() -> None:
     ("create", "path"),
     [
         (create_provider, "/_fake/busy"),
-        (create_tracker, "/issues"),
+        (lambda: create_tracker({}), "/issues"),
         (create_receiver, "/notifications"),
     ],
 )
@@ -92,7 +92,7 @@ def test_a_change_from_another_sites_page_is_refused(create: Any, path: str, ori
     ("app", "own_name", "other_fake"),
     [
         (create_provider(), "fake-provider", "fake-tracker"),
-        (create_tracker(), "fake-tracker", "fake-provider"),
+        (create_tracker({}), "fake-tracker", "fake-provider"),
         (create_receiver(), "fake-receiver", "fake-tracker"),
     ],
 )

@@ -1,5 +1,5 @@
 .PHONY: all up up-claude down clean logs test integration escape chaos lab kills kills-claude
-.PHONY: switched-off switched-off-rehearsal notify-timing
+.PHONY: switched-off switched-off-rehearsal notify-timing long-up
 
 # The group that owns the Docker socket. The worker joins it to start a
 # container for each sandboxed tool call. Every compose command needs it.
@@ -28,6 +28,14 @@ up:
 up-claude:
 	docker compose -f docker-compose.yml -f docker-compose.claude.yml up --build --wait
 	docker compose exec -T worker printenv ANTHROPIC_BASE_URL MODEL
+
+# The stack for a job longer than the context window: two workers, no
+# sandbox, the fake provider with the scenarios of LONG_SCENARIO_DIR (unset,
+# the packaged ones), and issue numbers from 100000. SUMMARY_TRIGGER comes
+# from the shell; unset, no job summarises. Starts the stack and runs
+# nothing. `make up` puts the normal stack back.
+long-up:
+	docker compose -f docker-compose.yml -f docker-compose.long.yml up --build --wait
 
 # Stop the services and keep the database volume.
 down:

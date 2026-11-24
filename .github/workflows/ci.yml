@@ -125,6 +125,7 @@ jobs:
             -f docker-compose.yml -f docker-compose.claude.yml config --quiet
           docker compose -f docker-compose.yml -f docker-compose.lab.yml config --quiet
           docker compose -f docker-compose.yml -f docker-compose.kills.yml config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.long.yml config --quiet
           CLAUDE_API_KEY=not-a-real-key docker compose \
             -f docker-compose.yml -f docker-compose.kills.yml \
             -f docker-compose.claude.yml config --quiet
