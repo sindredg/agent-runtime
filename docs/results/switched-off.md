@@ -9,8 +9,9 @@ The list can also say that a test passes, with the reason. Three tests of
 `resume-off` kill the worker before any step is complete, so starting over
 is the same as resuming.
 
-Status: tested for the 40 entries of the run below. The two added since it
-have [not run from `main`](#added-since-this-run).
+Status: tested. The 40 entries of the run below ran from `main` at
+`4ed43c0`. Three entries ran again at `96172b5`, after the provider-error
+change ([below](#run-at-96172b5)).
 
 ```mermaid
 flowchart LR
@@ -73,14 +74,16 @@ flowchart LR
 | `notify-row-off` | The notification row the park writes with the job's move | Chaos | 3 |
 | `tool-env-passed-on` | The tool container's environment, which holds nothing of the worker's | Normal | 1 |
 
-### Added since this run
+### Run at `96172b5`
 
-Configured, not tested from `main`.
+One run each, from `main`, on the fake provider, on GitHub-hosted
+`ubuntu-26.04` runners. Every test ended as the list says.
 
-| Entry | Mechanism switched off | Stack | Tests |
-|---|---|---|---|
-| `provider-error-fails` | The wait on a provider error that may pass: it fails the job | Normal | 19 |
-| `provider-error-cap-off` | The caps on waits for a provider error, in a row and in the job | Normal | 4 |
+| Entry | Mechanism switched off | Stack | Tests | Run |
+|---|---|---|---|---|
+| `provider-error-fails` | The wait on a provider error that may pass: it fails the job | Normal | 21 of 21 | [45296388449](https://github.com/sindredg/agent-runtime/actions/runs/45296388449) |
+| `provider-error-cap-off` | The caps on waits for a provider error, in a row and in the job | Normal | 6 of 6 | [45296393483](https://github.com/sindredg/agent-runtime/actions/runs/45296393483) |
+| `busy-answer-fails` | The wait on a 429 or 529. Its edit now fails the job itself | Normal | 5 of 5 | [45296384558](https://github.com/sindredg/agent-runtime/actions/runs/45296384558) |
 
 ### Earlier outcomes
 
