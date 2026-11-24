@@ -6,9 +6,16 @@ two entries. Tests read the list back as the record of what really happened
 outside the runtime, independent of the runtime's own step log.
 
 Everything is kept in memory and is gone when the service stops.
+
+FAKE_TRACKER_FIRST_ISSUE sets the first issue number. Set, it must have as
+many digits as the MAX_ISSUES-th number, so every number up to a full tracker
+has one width, and a number in a tool result does not change the length of
+the text. A clear does not restart the numbering: numbers after it can be wider.
 """
 
 import json
+import os
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from itertools import count
 from typing import Annotated, Any
@@ -45,11 +52,34 @@ def _json(content: Any, status: int = 200) -> Response:
     return Response(content=json.dumps(content), status_code=status, media_type="application/json")
 
 
-def create_app() -> FastAPI:
+def first_issue(env: Mapping[str, str]) -> int:
+    """The first issue number: FAKE_TRACKER_FIRST_ISSUE, or 1 when it is unset or empty.
+
+    Raises ValueError for a value that is not a positive whole number, or
+    whose width differs from that of the last number a full tracker holds.
+    """
+    value = env.get("FAKE_TRACKER_FIRST_ISSUE")
+    if not value:
+        return 1
+    if not value.isascii() or not value.isdigit() or int(value) < 1:
+        raise ValueError(f"FAKE_TRACKER_FIRST_ISSUE must be a positive whole number, not {value!r}")
+    first = int(value)
+    last = first + MAX_ISSUES - 1
+    if len(str(first)) != len(str(last)):
+        raise ValueError(
+            f"FAKE_TRACKER_FIRST_ISSUE {first} has {len(str(first))} digits and the last"
+            f" number, {last}, has {len(str(last))}: the numbers would not have one width"
+        )
+    return first
+
+
+def create_app(env: Mapping[str, str] | None = None) -> FastAPI:
+    """The app. Reads FAKE_TRACKER_FIRST_ISSUE from `env`, or from the environment."""
+    first = first_issue(os.environ if env is None else env)
     app = FastAPI(title="fake-tracker")
     app.add_middleware(AllowedHosts, hosts=HOSTS)
     issues: list[dict[str, Any]] = []
-    numbers = count(1)
+    numbers = count(first)
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(request: Request, error: RequestValidationError) -> Response:

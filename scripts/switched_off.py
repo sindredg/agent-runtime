@@ -168,8 +168,9 @@ class SwitchedOff:
     # `none`: no stack, for unit tests. `up`: the normal stack. `chaos`: three
     # workers and a short lease. `kills`: the kill runs' stack, three workers
     # and a 6 s lease. `lab`: the images built, and the lab's tests start the
-    # stack with Gitea themselves.
-    stack: Literal["none", "up", "chaos", "kills", "lab"]
+    # stack with Gitea themselves. `long`: the stack of `make long-up`, for a
+    # job longer than the context window, on the fake provider.
+    stack: Literal["none", "up", "chaos", "kills", "lab", "long"]
     expect: tuple[Expect, ...]
     # `claude`: the run is on the Claude API, in the job that holds the key.
     provider: Literal["fake", "claude"] = "fake"
@@ -1223,6 +1224,8 @@ def stack_commands(stack: str, provider: str) -> list[list[str]]:
             return []
         case "up":
             return [["make", "up"]]
+        case "long":
+            return [["make", "long-up"]]
         case "chaos":
             compose = ["-f", "docker-compose.yml", "-f", "docker-compose.chaos.yml"]
             return [["docker", "compose", *compose, "up", "--build", "--wait"]]

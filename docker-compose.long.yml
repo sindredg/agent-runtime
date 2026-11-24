@@ -1,0 +1,40 @@
+# Changes to the stack for a job longer than the context window. Used on top
+# of docker-compose.yml, with the fake provider only:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.long.yml up --wait
+#
+# `make long-up` does that. LONG_SCENARIO_DIR names the host directory of
+# scenario files, and SUMMARY_TRIGGER the trigger; unset, no job summarises.
+# `make up` afterwards brings the normal stack back.
+name: agent-runtime
+
+services:
+  worker:
+    # Two workers, so that a job has another worker to go to. The lease and
+    # the heartbeat stay at the defaults.
+    deploy:
+      replicas: 2
+    environment:
+      # No sandbox: run_shell and list_dir are not offered.
+      SANDBOX_IMAGE: ""
+      MAX_TOKENS: "32000"
+      SUMMARY_TRIGGER: ${SUMMARY_TRIGGER:-}
+
+  fake-provider:
+    environment:
+      # Only the scenarios of this directory, none of the packaged ones.
+      FAKE_SCENARIO_DIR: /scenarios
+    volumes:
+      - type: bind
+        source: ${LONG_SCENARIO_DIR:?set LONG_SCENARIO_DIR to a directory of scenario files}
+        target: /scenarios
+        read_only: true
+        # A misspelt directory stops the start instead of being created empty.
+        bind:
+          create_host_path: false
+
+  fake-tracker:
+    environment:
+      # Every issue number has six digits, so a number never changes the
+      # length of a tool result.
+      FAKE_TRACKER_FIRST_ISSUE: "100000"

@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from fake_tracker.app import MAX_BODY_LENGTH, MAX_ISSUES, create_app
+from fake_tracker.app import MAX_BODY_LENGTH, MAX_ISSUES, create_app, first_issue
 
 # The fake answers only the names the stack and the tests use.
 LOCAL = "http://localhost"
@@ -111,3 +111,55 @@ def test_a_full_tracker_refuses_new_issues(monkeypatch: pytest.MonkeyPatch) -> N
 
 def test_healthz(client: TestClient) -> None:
     assert client.get("/healthz").json() == {"status": "ok"}
+
+
+# The first issue number
+
+
+def test_without_a_first_number_the_tracker_numbers_from_one() -> None:
+    for env in ({}, {"FAKE_TRACKER_FIRST_ISSUE": ""}):
+        assert first_issue(env) == 1
+        created = TestClient(create_app(env), base_url=LOCAL).post("/issues", json=issue())
+        assert created.json()["id"] == 1
+
+
+def test_the_long_stacks_first_number_keeps_one_width_to_the_last() -> None:
+    env = {"FAKE_TRACKER_FIRST_ISSUE": "100000"}
+    client = TestClient(create_app(env), base_url=LOCAL)
+
+    ids = [client.post("/issues", json=issue()).json()["id"] for _ in range(3)]
+
+    assert ids == [100_000, 100_001, 100_002]
+    assert len(str(first_issue(env) + MAX_ISSUES - 1)) == 6
+
+
+def test_every_number_of_a_full_tracker_has_the_width_of_the_first(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """From the first to the MAX_ISSUES-th number, with a small tracker so it can be filled."""
+    monkeypatch.setattr("fake_tracker.app.MAX_ISSUES", 90)
+    client = TestClient(create_app({"FAKE_TRACKER_FIRST_ISSUE": "10"}), base_url=LOCAL)
+
+    answers = [client.post("/issues", json=issue()) for _ in range(91)]
+
+    ids = [answer.json()["id"] for answer in answers[:90]]
+    assert ids == list(range(10, 100))
+    assert {len(str(number)) for number in ids} == {2}
+    assert answers[90].status_code == 507
+
+
+@pytest.mark.parametrize("first", ["999999", "1", "99999", "910000"])
+def test_a_first_number_whose_width_would_change_stops_the_tracker(first: str) -> None:
+    """The last number a full tracker gives, first + MAX_ISSUES - 1, has more digits."""
+    with pytest.raises(ValueError, match="would not have one width"):
+        create_app({"FAKE_TRACKER_FIRST_ISSUE": first})
+
+
+# The last: 100000 in Arabic-Indic digits, which `str.isdigit` accepts.
+ARABIC_INDIC = "\u0661\u0660\u0660\u0660\u0660\u0660"
+
+
+@pytest.mark.parametrize("first", ["0", "-5", "abc", "1e5", " 100000", "100000.0", ARABIC_INDIC])
+def test_a_first_number_that_is_not_a_positive_whole_number_stops_the_tracker(first: str) -> None:
+    with pytest.raises(ValueError, match="positive whole number"):
+        create_app({"FAKE_TRACKER_FIRST_ISSUE": first})

@@ -7,6 +7,9 @@ are counted on from the turn its marker names (`fake_provider.summary`).
 
 A scenario with a `summary` section answers a request with `tool_choice`
 `none` with a summary. Without one, such a request is refused.
+
+A scenario with a `context_window` refuses a request whose input is over it,
+so a job can be played that outgrows its window.
 """
 
 import math
@@ -123,6 +126,9 @@ class Scenario(_Strict):
     description: str = ""
     turns: list[Turn] = Field(min_length=1)
     summary: Summary | None = None
+    # The context window, in the fake's estimated tokens. A request over it
+    # is refused as the API refuses one. Left out, there is no window.
+    context_window: int | None = Field(default=None, ge=1, strict=True)
 
 
 def parse_scenario(text: str) -> Scenario:

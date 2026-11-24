@@ -159,3 +159,14 @@ def test_the_packaged_chaos_scenarios_load() -> None:
     assert all(turn.delay_seconds > 0 for turn in scenarios["ci-triage-slow"].turns)
     assert scenarios["ci-triage-stall"].turns[0].delay_seconds >= 5
     assert scenarios["crash-loop"].turns[0].content[-1].name == "crash_worker"  # type: ignore[union-attr]
+
+
+def test_a_scenario_has_no_context_window_unless_it_sets_one() -> None:
+    assert parse_scenario(scenario({"content": [TEXT]})).context_window is None
+    assert parse_scenario(scenario({"content": [TEXT]}, context_window=1)).context_window == 1
+
+
+@pytest.mark.parametrize("window", [0, -1, True, "5", 1.5])
+def test_a_context_window_that_is_not_a_positive_whole_number_is_refused(window: Any) -> None:
+    with pytest.raises(ValueError):
+        parse_scenario(scenario({"content": [TEXT]}, context_window=window))

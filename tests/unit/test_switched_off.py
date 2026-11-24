@@ -165,6 +165,7 @@ RANDOM_KILLS = replace(
         (replace(KEYED, model="claude-sonnet-5-5"), "the workflow offers no model"),
         (replace(KEYED, model=None), "the workflow offers no model None"),
         (replace(KEYED, stack="chaos"), "a run on the Claude API uses the kills stack"),
+        (replace(KEYED, stack="long"), "a run on the Claude API uses the kills stack"),
         (replace(KEYED, record=None), "is judged by its record"),
         (replace(KEYED, provider="fake"), "the fake provider takes no model"),
         (replace(KEYED, runs=6), "6 jobs may spend 300000 tokens, over 250000"),
@@ -929,6 +930,7 @@ def test_an_edit_of_a_migration_is_made_like_one_of_the_source() -> None:
     [
         ("none", "fake", []),
         ("up", "fake", [["make", "up"]]),
+        ("long", "fake", [["make", "long-up"]]),
         (
             "chaos",
             "fake",
@@ -960,6 +962,11 @@ def test_each_stack_starts_as_its_make_target_does(
     stack: str, provider: str, commands: list[list[str]]
 ) -> None:
     assert switched_off.stack_commands(stack, provider) == commands
+
+
+def test_an_entry_of_the_fake_provider_may_name_the_long_stack() -> None:
+    entry = replace(ENTRY, stack="long", expect=(switched_off.Expect(switched_off.IN_STACK, "x"),))
+    assert switched_off.run_problems(entry) == []
 
 
 def test_a_stack_the_script_does_not_know_is_refused_and_every_entry_has_one_it_knows() -> None:
