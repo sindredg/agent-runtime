@@ -675,6 +675,20 @@ def test_the_json_of_an_unusual_refused_step_leaves_the_explanation_out(content:
     assert "cyber" in line
 
 
+def test_a_refused_summary_shows_its_category_and_not_its_explanation() -> None:
+    payload = {**refused({"category": "cyber", "explanation": MARKER})["payload"]}
+    payload["problem"] = "it stopped with stop_reason refusal"
+    line = format_step(step(2, "summary", payload))
+    assert line == "   2  summary         stop_reason=refusal refusal=cyber tokens=12+7 No."
+
+
+def test_a_step_of_a_kind_with_no_line_of_its_own_leaves_the_explanation_out() -> None:
+    payload = {"refusal": {"category": "cyber", "explanation": MARKER}}
+    line = format_step(step(2, "some_later_kind", payload))
+    assert MARKER not in line
+    assert "cyber" in line
+
+
 def test_an_unknown_step_kind_is_still_printed() -> None:
     assert format_step(step(7, "approval_requested", {"why": "rerun"})).startswith(
         "   7  approval_requested"

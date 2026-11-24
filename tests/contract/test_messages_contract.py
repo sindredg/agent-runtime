@@ -1,6 +1,6 @@
 """The fake provider and the Claude API answer the same requests the same way.
 
-Started by hand, never in CI: it calls the Claude API (five small requests,
+Started by hand, never in CI: it calls the Claude API (seven small requests,
 one of them refused on purpose) and needs a key. A recorded run starts from
 the Manual runs workflow (docs/contract-test.md). On a local machine:
 
@@ -29,6 +29,7 @@ from runtime.logs import json_safe, text_safe
 from runtime.provider.base import ModelRequest, ModelResponse
 from runtime.provider.messages import AnthropicProvider
 from runtime.worker.budget import input_bound
+from runtime.worker.summary import TOOL_CHOICE_NONE, summary_messages, summary_problem
 
 FAKE_URL = os.environ.get("FAKE_PROVIDER_URL", "http://127.0.0.1:8001")
 CLAUDE_URL = "https://api.anthropic.com"
@@ -174,6 +175,63 @@ def test_tool_call_then_answer(name: str) -> None:
     )
     assert first.input_tokens <= first_bound
     assert second.input_tokens <= second_bound
+
+
+def summary_exchange(name: str) -> ModelResponse:
+    """A tool call, then the summary request the worker sends after its result (ADR 0033)."""
+
+    async def run() -> ModelResponse:
+        base_url, secret, model = target(name)
+        provider = AnthropicProvider(api_key=secret, base_url=base_url)
+        try:
+            first = await provider.complete(
+                ModelRequest(
+                    model=model,
+                    max_tokens=2048,
+                    messages=[PROMPT],
+                    tools=(TOOL,),
+                    user_id="contract",
+                )
+            )
+            results = [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": block["id"],
+                    "content": "Hello from the file.",
+                }
+                for block in first.content
+                if block["type"] == "tool_use"
+            ]
+            conversation: list[dict[str, Any]] = [
+                PROMPT,
+                {"role": "assistant", "content": first.content},
+                {"role": "user", "content": results},
+            ]
+            return await provider.complete(
+                ModelRequest(
+                    model=model,
+                    max_tokens=2048,
+                    messages=summary_messages(conversation),
+                    tools=(TOOL,),
+                    user_id="contract",
+                    tool_choice=TOOL_CHOICE_NONE,
+                )
+            )
+        finally:
+            await provider.aclose()
+
+    return asyncio.run(run())
+
+
+@pytest.mark.parametrize("name", ["fake", "claude"])
+def test_a_summary_request_keeps_the_tools_and_is_answered_with_text_only(name: str) -> None:
+    """The shape of the summary request: `tool_choice` `none`, the tools kept, and the
+    instruction as a text block after the last `tool_result`. The provider accepts it,
+    and the answer is a usable summary."""
+    summary = summary_exchange(name)
+
+    assert summary_problem(summary.stop_reason, summary.content) is None
+    assert all(block["type"] != "tool_use" for block in summary.content)
 
 
 def raw_message(name: str, messages: list[dict[str, Any]]) -> dict[str, Any]:

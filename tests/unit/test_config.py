@@ -58,6 +58,19 @@ def test_worker_defaults() -> None:
     assert config.tracker is None
     assert config.sandbox is None
     assert config.sweep_interval == 300.0
+    assert config.summary_trigger is None
+
+
+def test_the_summary_trigger_is_read() -> None:
+    config = WorkerConfig.from_env({**WORKER_ENV, "SUMMARY_TRIGGER": "80000"})
+    assert config.summary_trigger == 80_000
+    assert WorkerConfig.from_env({**WORKER_ENV, "SUMMARY_TRIGGER": ""}).summary_trigger is None
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "soon", "1.5"])
+def test_the_summary_trigger_must_be_a_positive_integer(value: str) -> None:
+    with pytest.raises(ConfigError, match="SUMMARY_TRIGGER"):
+        WorkerConfig.from_env({**WORKER_ENV, "SUMMARY_TRIGGER": value})
 
 
 def test_worker_settings_are_read() -> None:
