@@ -102,7 +102,7 @@ the WHERE clauses of the partial indexes.
 | Kind | Written | Main fields |
 |---|---|---|
 | `model_request` | Before each model call | `model`, `max_tokens`, `messages` (a count), `input_bound`, `tokens_used` |
-| `model_response` | After each model call, with the `tokens_used` update | `id`, `content`, `stop_reason`, `usage` |
+| `model_response` | After each model call, with the `tokens_used` update | `id`, `content`, `stop_reason`, `usage`. A refused call adds `refusal`. |
 | `tool_intent` | Before every run of a tool. A call that runs again gets a new one. | `tool_use_id`, `name`, `input` |
 | `tool_result` | After a tool ran, could not run, or was denied | `tool_use_id`, `content`, `is_error` |
 | `approval_requested` | When a person has to decide about a call | `tool_use_id`, `name`, `input`, `operation_id`, `reason` |
@@ -120,6 +120,8 @@ Fields that are present only in some steps:
 |---|---|---|
 | `problem` | `model_response` | The response cannot be used |
 | `content_dropped` | `model_response` | The content could not be stored and was replaced by an empty list |
+| `refusal` | `model_response` | Why the model declined: `category` and `explanation`, each null when not sent or not usable |
+| `usage.thinking_tokens` | `model_response` | Output tokens spent on thinking, when reported. Already inside `output_tokens`. |
 | `needs_approval` | `tool_intent` | The run has a person's approval behind it |
 | `ends_within` | `tool_intent` | Seconds by which a sandboxed call's container has ended, or a tool's own request |
 | `scope` | `tool_intent` | Each target of a scoped call, with its resolved addresses and ports |
@@ -128,6 +130,9 @@ Fields that are present only in some steps:
 | `dropped_packets` | `tool_result` | What the guard of a scoped call dropped |
 | `denied` | `tool_result` | A person refused the call |
 | `question` | `approval_given`, `approval_denied` | The `seq` of the `approval_requested` step it answers |
+
+A refusal's `explanation` stays in its step, and the step routes return it. The job's
+error, `runtime logs`, the status page and the worker's log name only the category.
 
 ## What a payload can hold
 

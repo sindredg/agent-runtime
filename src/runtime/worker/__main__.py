@@ -6,6 +6,8 @@ import logging
 import signal
 from datetime import timedelta
 
+from sqlalchemy.ext.asyncio import AsyncEngine
+
 from runtime.config import WorkerConfig
 from runtime.failpoints import Failpoints
 from runtime.logs import configure_logging
@@ -24,6 +26,12 @@ from runtime.worker.sweep import keep_sweeping
 ALIVE_INTERVAL_SECONDS = 5.0
 
 log = logging.getLogger("runtime.worker")
+
+
+def worker_engine(database_url: str) -> AsyncEngine:
+    """The worker's engine. Its bound values are step payloads, and a refusal's
+    explanation in one must reach no log, so SQLAlchemy's errors leave them out."""
+    return create_engine(database_url, application_name="runtime-worker", hide_parameters=True)
 
 
 async def run(config: WorkerConfig) -> None:
@@ -46,7 +54,7 @@ async def run(config: WorkerConfig) -> None:
         # Before anything starts: on a host where a command could stop its
         # own timeout, the worker does not run at all.
         check_host()
-    engine = create_engine(config.database_url, application_name="runtime-worker")
+    engine = worker_engine(config.database_url)
     # Before the first claim: a worker connected as the owner could change
     # or delete steps (ADR 0013).
     try:

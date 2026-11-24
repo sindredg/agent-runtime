@@ -56,10 +56,10 @@ def build_message(
                 }
             )
     stop_reason: str = turn.resolved_stop_reason
-    output_tokens = estimate_tokens(content)
+    output_tokens = estimate_tokens(content) + (turn.thinking_tokens or 0)
     if output_tokens > max_tokens:
         content, stop_reason, output_tokens = _cut(content, max_tokens), "max_tokens", max_tokens
-    return {
+    message: dict[str, Any] = {
         "id": f"msg_fake_{name}_{turn_index:02d}",
         "type": "message",
         "role": "assistant",
@@ -74,6 +74,18 @@ def build_message(
             "cache_read_input_tokens": 0,
         },
     }
+    # Only for a turn that sets them, so an ordinary answer is unchanged.
+    if turn.thinking_tokens is not None:
+        message["usage"]["output_tokens_details"] = {
+            "thinking_tokens": min(turn.thinking_tokens, output_tokens)
+        }
+    if stop_reason == "refusal" and turn.stop_details is not None:
+        message["stop_details"] = {
+            "type": "refusal",
+            "category": turn.stop_details.category,
+            "explanation": turn.stop_details.explanation,
+        }
+    return message
 
 
 def _chunks(text: str) -> Iterator[str]:
@@ -86,14 +98,18 @@ def stream_events(message: dict[str, Any]) -> Iterator[tuple[str, dict[str, Any]
 
     The order is the API's: message_start, then per content block a start,
     its deltas and a stop, then message_delta with the stop reason and the
-    final output token count, then message_stop.
+    final output token count, then message_stop. A refusal's `stop_details`
+    and the thinking count come on message_delta, as they do from the API.
     """
     usage = message["usage"]
     opening = {
-        **message,
+        **{key: value for key, value in message.items() if key != "stop_details"},
         "content": [],
         "stop_reason": None,
-        "usage": {**usage, "output_tokens": 1},
+        "usage": {
+            **{key: value for key, value in usage.items() if key != "output_tokens_details"},
+            "output_tokens": 1,
+        },
     }
     yield "message_start", {"type": "message_start", "message": opening}
     yield "ping", {"type": "ping"}
@@ -119,14 +135,13 @@ def stream_events(message: dict[str, Any]) -> Iterator[tuple[str, dict[str, Any]
                 {"type": "content_block_delta", "index": index, "delta": delta},
             )
         yield "content_block_stop", {"type": "content_block_stop", "index": index}
-    yield (
-        "message_delta",
-        {
-            "type": "message_delta",
-            "delta": {"stop_reason": message["stop_reason"], "stop_sequence": None},
-            "usage": {"output_tokens": usage["output_tokens"]},
-        },
-    )
+    ending: dict[str, Any] = {"stop_reason": message["stop_reason"], "stop_sequence": None}
+    if "stop_details" in message:
+        ending["stop_details"] = message["stop_details"]
+    final_usage: dict[str, Any] = {"output_tokens": usage["output_tokens"]}
+    if "output_tokens_details" in usage:
+        final_usage["output_tokens_details"] = usage["output_tokens_details"]
+    yield "message_delta", {"type": "message_delta", "delta": ending, "usage": final_usage}
     yield "message_stop", {"type": "message_stop"}
 
 

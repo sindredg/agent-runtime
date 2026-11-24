@@ -782,6 +782,17 @@ async def _loop(
                     "output_tokens": response.output_tokens,
                 },
             }
+            if response.thinking_tokens is not None:
+                payload["usage"]["thinking_tokens"] = response.thinking_tokens
+            if response.refusal is not None:
+                # The explanation stays in this step. It is not shown or logged.
+                explanation = response.refusal.explanation
+                payload["refusal"] = {
+                    "category": response.refusal.category,
+                    "explanation": (
+                        None if explanation is None else _storable(_cut(explanation), None)
+                    ),
+                }
             problem = _response_problem(response, state.used_ids)
             try:
                 check_json(payload)
@@ -835,10 +846,12 @@ async def _loop(
             and lowered < settings.max_tokens
         ):
             failure += f", which the token budget had lowered to {lowered}"
+        if state.stop_reason == "refusal" and state.refusal_category is not None:
+            failure += f" (category: {state.refusal_category})"
         raise _JobFailed(failure)
 
 
-def _storable(text: str, instead: str) -> str:
+def _storable[T](text: str, instead: T) -> str | T:
     """`text`, or `instead` if a JSON column cannot hold it."""
     try:
         check_json(text)

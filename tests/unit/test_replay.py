@@ -637,3 +637,25 @@ def test_a_job_cancelled_instead_of_waiting_counts_no_error() -> None:
     )
     state = replay("go", log(request(), cancelled))
     assert (state.waits_in_a_row, state.errors_in_a_row, state.errors_in_job) == (0, 0, 0)
+
+
+# A refusal
+
+
+def test_replay_keeps_the_category_of_a_refusal() -> None:
+    kind, payload = response(text("no"), stop="refusal")
+    refused = {**payload, "refusal": {"category": "cyber", "explanation": "why"}}
+    state = replay("go", log(request(), (kind, refused)))
+    assert state.stop_reason == "refusal"
+    assert state.refusal_category == "cyber"
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [{}, {"refusal": {"category": None, "explanation": None}}],
+    ids=["no field", "null category"],
+)
+def test_replay_has_no_category_without_one(extra: dict[str, Any]) -> None:
+    kind, payload = response(text("no"), stop="refusal")
+    state = replay("go", log(request(), (kind, {**payload, **extra})))
+    assert state.refusal_category is None

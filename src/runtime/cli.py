@@ -239,8 +239,11 @@ def _detail(kind: str, payload: dict[str, Any]) -> str:
     if kind == "model_response":
         usage = payload["usage"]
         text = " ".join(b["text"] for b in payload["content"] if b.get("type") == "text")
+        refusal = payload.get("refusal")
+        category = refusal.get("category") if isinstance(refusal, dict) else None
+        declined = f" refusal={_preview(category)}" if isinstance(category, str) else ""
         return (
-            f"stop_reason={payload['stop_reason']}"
+            f"stop_reason={payload['stop_reason']}{declined}"
             f" tokens={usage['input_tokens']}+{usage['output_tokens']} {_preview(text)}"
         )
     if kind == "tool_intent":
@@ -263,6 +266,15 @@ def _detail(kind: str, payload: dict[str, Any]) -> str:
     return _preview(json.dumps(payload))
 
 
+def _without_explanation(payload: Any) -> Any:
+    """The payload without a refusal's explanation, which is never shown."""
+    refusal = payload.get("refusal") if isinstance(payload, dict) else None
+    if not isinstance(refusal, dict):
+        return payload
+    kept = {key: value for key, value in refusal.items() if key != "explanation"}
+    return {**payload, "refusal": kept}
+
+
 def format_step(step: dict[str, Any]) -> str:
     """One line for one step: seq, kind, and the part of the payload worth a glance.
 
@@ -274,7 +286,7 @@ def format_step(step: dict[str, Any]) -> str:
     try:
         detail = _detail(kind, payload)
     except LookupError, TypeError, AttributeError:
-        detail = _preview(json.dumps(payload))
+        detail = _preview(json.dumps(_without_explanation(payload)))
     return f"{step['seq']:>4}  {kind:<14}  {detail}".rstrip()
 
 
