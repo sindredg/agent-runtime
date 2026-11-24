@@ -21,6 +21,7 @@ from typing import Any
 import pytest
 
 from runtime.failpoints import NAMES
+from runtime.logs import text_safe
 
 from .conftest import (
     FAILPOINT_LEASE,
@@ -48,7 +49,7 @@ def verdict(run: Run, uninterrupted: list[dict[str, Any]]) -> list[str]:
     """What is wrong with a run, by the pass lines of G1 and G2. Empty when it passes."""
     problems = []
     if run.job["status"] != "succeeded":
-        problems.append(f"G1: status is {run.job['status']} ({run.job['error']})")
+        problems.append(text_safe(f"G1: status is {run.job['status']} ({run.job['error']})"))
     elif run.last_conversation != uninterrupted:
         problems.append("G1: the last request differs from an uninterrupted run's")
     # A request that was cut off is sent again, so a turn may repeat. A turn
@@ -92,7 +93,10 @@ def test_jobs_survive_a_kill_at_a_random_time(
         problems = verdict(run, uninterrupted)
         print(f"{index:>3} {'FAIL' if problems else 'ok  '} {run.summary()}")
         failed_runs += bool(problems)
-        failures += [f"run {index} (seed {SEED}:{index}): {p} :: {run.summary()}" for p in problems]
+        failures += [
+            text_safe(f"run {index} (seed {SEED}:{index}): {p} :: {run.summary()}")
+            for p in problems
+        ]
 
     record(
         "G1+G2 random kills",

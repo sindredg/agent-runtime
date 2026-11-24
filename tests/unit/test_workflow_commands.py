@@ -14,6 +14,7 @@ import logging
 import re
 import subprocess
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any
@@ -243,6 +244,46 @@ def test_a_kill_runs_problem_lines_hold_no_marker(
     assert "#\\u0023[error]four" in out
 
 
+def test_a_kill_runs_failure_message_and_list_hold_no_marker(kills: ModuleType) -> None:
+    """pytest prints the message of `assert not failures` and the list itself."""
+    rules = importlib.import_module("kills.rules")
+    job = {
+        "id": "a job",
+        "status": "failed",
+        "error": HOSTILE,
+        "takeovers": 0,
+        "lease_epoch": 1,
+        "tokens_used": 10,
+        "token_budget": rules.TOKEN_BUDGET,
+    }
+    run = rules.Run(job, [], {}, note=HOSTILE)
+    failures = [kills.failure("run 0", p, run) for p in rules.problems(run)]
+    assert failures
+    assert commands("\n".join(failures)) == commands(repr(failures)) == []
+
+
+def test_the_contract_report_holds_no_marker(tmp_path: Path) -> None:
+    contract = load("contract_printer", ROOT / "tests" / "contract" / "test_messages_contract.py")
+    usage = {"input_tokens": 1, "output_tokens": 1}
+    fake = [
+        {"content": [{"type": "text", "text": "ok"}], "usage": usage, "stop_reason": "end_turn"}
+    ]
+    real = [
+        {
+            "content": [{"type": "text", "text": HOSTILE}],
+            "usage": usage,
+            "stop_reason": HOSTILE,
+        }
+    ]
+    contract.write_report(tmp_path / "report", fake, real)
+    written = {path.name: path.read_text() for path in (tmp_path / "report").iterdir()}
+    assert sorted(written) == ["api-only.txt", "api.json", "fake.json"]
+    assert [name for name, text in written.items() if commands(text)] == []
+    assert json.loads(written["api.json"]) == real
+    assert json.loads(written["fake.json"]) == fake
+    assert "#\\u0023[error]four" in written["api-only.txt"]
+
+
 def test_the_lab_demo_prints_no_marker(capsys: pytest.CaptureFixture[str]) -> None:
     lab = load("lab_conftest_printer", ROOT / "tests" / "lab" / "conftest.py")
     lab.say(HOSTILE)
@@ -254,7 +295,11 @@ def test_the_lab_demo_prints_no_marker(capsys: pytest.CaptureFixture[str]) -> No
 
 # The workflows
 
-WORKFLOWS = sorted((ROOT / ".github" / "workflows").glob("*.yml"))
+WORKFLOWS = sorted(
+    path
+    for pattern in ("*.yml", "*.yaml")
+    for path in (ROOT / ".github" / "workflows").glob(pattern)
+)
 # The make targets that run tests, start the stack or print its logs. A
 # test below keeps the list equal to the Makefile's.
 TARGETS = (
@@ -274,90 +319,222 @@ TARGETS = (
     "kills-claude",
 )
 # What runs tests or the stack, or prints stored text: pytest, one of the
-# targets, a service's logs, or a record file.
+# targets, a container's logs, or a record file.
 PRINTS = re.compile(
     r"\bpytest\b"
     rf"|\bmake ({'|'.join(map(re.escape, TARGETS))})(?![\w-])"
-    r"|docker compose .*\blogs\b"
+    r"|\bdocker\b.*\blogs\b"
     r"|\.(chaos|kills|notify-timing|contract)/"
 )
-STOP = ["token=$(openssl rand -hex 16)", 'echo "::stop-commands::$token"']
+# The steps with a `run` that print nothing from the stack or the tests:
+# lint of the repository's own files, setup, checks of inputs, and stops.
+QUIET = {
+    "Sync the environment",
+    "ruff check",
+    "ruff format",
+    "mypy",
+    "yamllint",
+    "JSON syntax",
+    "SVG syntax",
+    "Docs limits",
+    "actionlint",
+    "hadolint",
+    "checkmake",
+    "Docker socket group",
+    "Validate the compose files",
+    "Call the API from the host",
+    "Gitea is stopped after the demo",
+    "Stop the stack",
+    "Refuse the contract test",
+    "Refuse a switched-off run off main",
+    "Check the model name",
+    "Check the entry against the provider",
+    "Check the entry against the provider and the model",
+    "Names",
+    "Commit",
+}
+STOP = ["exec 2>&1", "token=$(openssl rand -hex 16)", 'echo "::stop-commands::$token"']
 RESUME = 'echo "::$token::"'
 
 
-def runs(workflow: Path) -> list[tuple[str, str, list[str]]]:
-    """(job, step name, lines of its `run`) for every step with a `run`."""
-    found: list[tuple[str, str, list[str]]] = []
-    job = name = ""
-    script: list[str] | None = None
-    for line in [*workflow.read_text().splitlines(), "end:"]:
-        indent = len(line) - len(line.lstrip(" "))
-        if script is not None and (indent >= 10 or not line.strip()):
-            script.append(line[10:])
-            continue
-        if script is not None:
-            found.append((job, name, [s for s in script if s.strip()]))
-            script = None
-        if indent == 2 and line.rstrip().endswith(":") and not line.lstrip().startswith("#"):
-            job = line.strip().removesuffix(":")
-        elif indent == 6 and line.lstrip().startswith("- "):
-            name = line.split("- name: ", 1)[1] if "- name: " in line else ""
-        if line.startswith(("        run: ", "      - run: ")):
-            command = line.split("run: ", 1)[1]
-            script = [] if command in ("|", "|-", ">", ">-") else [command]
+@dataclass
+class Step:
+    job: str
+    name: str = ""
+    uses: str = ""
+    run: list[str] | None = None
+    given: dict[str, str] = field(default_factory=dict)
+
+
+def indent(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
+
+
+def scalar(text: str) -> str:
+    """A plain value without a trailing comment or its quotes."""
+    text = re.sub(r"\s+#.*$", "", text).strip()
+    quoted = len(text) > 1 and text[0] == text[-1] and text[0] in "'\""
+    return text[1:-1] if quoted else text
+
+
+def steps_of(text: str) -> list[Step]:
+    """Every step of every job, read line by line at whatever indentation the file uses."""
+    lines = text.splitlines()
+    found: list[Step] = []
+
+    def nested(start: int, above: int) -> tuple[list[str], int]:
+        """The lines from `start` that are blank or deeper than `above`, and where they end."""
+        end = start
+        while end < len(lines) and (not lines[end].strip() or indent(lines[end]) > above):
+            end += 1
+        return lines[start:end], end
+
+    def key(step: Step, text: str, at: int, start: int) -> int:
+        name, _, rest = text.partition(":")
+        rest = rest.strip()
+        inner, end = nested(start, at)
+        if name == "name":
+            step.name = scalar(rest)
+        elif name == "uses":
+            step.uses = scalar(rest)
+        elif name == "run" and rest[:1] in ("|", ">") and rest:
+            body = [line for line in inner if line.strip()]
+            cut = min((indent(line) for line in body), default=0)
+            step.run = [line[cut:] for line in body]
+        elif name == "run":
+            step.run = [rest]
+        elif name == "with":
+            for line in inner:
+                if line.strip() and not line.strip().startswith("#"):
+                    given, _, value = line.strip().partition(":")
+                    step.given[given.strip()] = scalar(value)
+        return end
+
+    job, job_at, steps_at, dash_at = "", -1, -1, -1
+    in_jobs, i = False, 0
+    while i < len(lines):
+        line = lines[i]
+        text, at = line.strip(), indent(line)
+        if not text or text.startswith("#"):
+            i += 1
+        elif at == 0:
+            in_jobs, job_at, steps_at, dash_at = text == "jobs:", -1, -1, -1
+            i += 1
+        elif not in_jobs:
+            i += 1
+        elif at <= job_at or job_at < 0:
+            job_at, job, steps_at, dash_at = at, text.split(":", 1)[0], -1, -1
+            i += 1
+        elif text.startswith("- ") and 0 <= steps_at <= at and dash_at in (-1, at):
+            dash_at, step = at, Step(job)
+            found.append(step)
+            first = text[2:].lstrip(" ")
+            key_at = at + len(text) - len(first)
+            i = key(step, first, key_at, i + 1)
+            while i < len(lines):
+                if not lines[i].strip() or lines[i].strip().startswith("#"):
+                    i += 1
+                elif lines[i].strip() and indent(lines[i]) == key_at:
+                    i = key(step, lines[i].strip(), key_at, i + 1)
+                else:
+                    break
+        elif text.startswith("steps:"):
+            steps_at, dash_at = at, -1
+            i += 1
+        else:
+            if at <= steps_at:
+                steps_at, dash_at = -1, -1
+            i = nested(i + 1, at)[1]
     return found
 
 
-def printing_steps() -> dict[tuple[str, str, str], list[str]]:
-    return {
-        (workflow.name, job, name): script
-        for workflow in WORKFLOWS
-        for job, name, script in runs(workflow)
-        if any(PRINTS.search(line) for line in script)
+def every_step() -> list[tuple[str, Step]]:
+    found = [(path.name, step) for path in WORKFLOWS for step in steps_of(path.read_text())]
+    assert len(found) > 100, "the workflows were not read"
+    return found
+
+
+def unwrapped(steps: list[tuple[str, Step]]) -> list[tuple[str, str, str]]:
+    """The steps with a `run` that are neither quiet nor wrapped, and quiet ones that print."""
+    wrong = []
+    for file, step in steps:
+        if step.run is None:
+            continue
+        if step.name in QUIET:
+            ok = not any(PRINTS.search(line) for line in step.run)
+        else:
+            ok = (
+                step.run[:3] == STOP
+                and step.run[-1] == RESUME
+                and sum("token" in line for line in step.run) == 3
+            )
+        if not ok:
+            wrong.append((file, step.job, step.name))
+    return wrong
+
+
+def test_every_step_with_a_run_stops_workflow_commands_unless_it_prints_nothing_stored() -> None:
+    steps = every_step()
+    assert unwrapped(steps) == []
+    # Every quiet name is a step's: the list holds nothing stale.
+    named = {step.name for _, step in steps if step.run is not None}
+    assert QUIET - named == set()
+    wrapped = {
+        (file, step.job, step.name) for file, step in steps if step.run and step.run[:3] == STOP
     }
+    assert ("ci.yml", "integration", "Integration tests") in wrapped
+    assert ("manual-runs.yml", "claude", "Contract test") in wrapped
+    assert len(wrapped) == 29
 
 
-def test_every_step_that_runs_tests_or_prints_stored_text_stops_workflow_commands() -> None:
-    steps = printing_steps()
-    unwrapped = [
-        step
-        for step, script in steps.items()
-        if script[:2] != STOP
-        or script[-1] != RESUME
-        or sum("token" in line for line in script) != 3
+def test_the_reader_takes_any_indentation() -> None:
+    text = (
+        "on: push\n"
+        "jobs:\n"
+        "    build:\n"
+        "        runs-on: x\n"
+        "        steps:\n"
+        "        -   uses: astral-sh/setup-uv@abc  # v1\n"
+        "            with:\n"
+        "                version: '1'\n"
+        "        # a comment between steps\n"
+        "        -   name: Worker logs\n"
+        "            run: docker logs worker-1\n"
+        "        -   name: Quiet\n"
+        "            run: |\n"
+        "              exec 2>&1\n"
+        "\n"
+        "              echo done\n"
+        "\n"
+        "            if: always()\n"
+        "        env:\n"
+        "            A: b\n"
+        "    other:\n"
+        "      steps:\n"
+        "        - run: make up\n"
+    )
+    steps = steps_of(text)
+    assert [(s.job, s.name, s.uses, s.run, s.given) for s in steps] == [
+        ("build", "", "astral-sh/setup-uv@abc", None, {"version": "1"}),
+        ("build", "Worker logs", "", ["docker logs worker-1"], {}),
+        ("build", "Quiet", "", ["exec 2>&1", "echo done"], {}),
+        ("other", "", "", ["make up"], {}),
     ]
-    assert unwrapped == []
-    assert set(steps) == {
-        ("ci.yml", "python", "Unit tests"),
-        ("ci.yml", "stack", "Start the stack"),
-        ("ci.yml", "stack", "Service logs"),
-        ("ci.yml", "integration", "Start the stack"),
-        ("ci.yml", "integration", "Integration tests"),
-        ("ci.yml", "integration", "Service logs"),
-        ("ci.yml", "escape", "Escape tests"),
-        ("ci.yml", "chaos", "Chaos tests"),
-        ("ci.yml", "chaos", "Results"),
-        ("ci.yml", "chaos", "Service logs"),
-        ("ci.yml", "lab", "Lab demo"),
-        ("ci.yml", "lab", "Service logs"),
-        ("ci.yml", "kills", "Kill runs"),
-        ("ci.yml", "kills", "Results"),
-        ("ci.yml", "kills", "Service logs"),
-        ("manual-runs.yml", "fake", "Kill runs"),
-        ("manual-runs.yml", "fake", "Switched-off run"),
-        ("manual-runs.yml", "fake", "Timed notification run"),
-        ("manual-runs.yml", "fake", "Rehearsal of a switched-off run"),
-        ("manual-runs.yml", "fake", "Results"),
-        ("manual-runs.yml", "fake", "Service logs"),
-        ("manual-runs.yml", "fake-entries", "Switched-off run"),
-        ("manual-runs.yml", "fake-entries", "Results"),
-        ("manual-runs.yml", "fake-entries", "Service logs"),
-        ("manual-runs.yml", "claude", "Kill runs on the Claude API"),
-        ("manual-runs.yml", "claude", "Switched-off run on the Claude API"),
-        ("manual-runs.yml", "claude", "Contract test"),
-        ("manual-runs.yml", "claude", "Results"),
-        ("manual-runs.yml", "claude", "Service logs"),
-    }
+    assert unwrapped([("x.yaml", step) for step in steps]) == [
+        ("x.yaml", "build", "Worker logs"),
+        ("x.yaml", "build", "Quiet"),
+        ("x.yaml", "other", ""),
+    ]
+
+
+def test_setup_uv_runs_without_its_problem_matchers() -> None:
+    setups = [
+        (file, step.job, step.given.get("add-problem-matchers"))
+        for file, step in every_step()
+        if step.uses.startswith("astral-sh/setup-uv@")
+    ]
+    assert len(setups) == 11
+    assert [setup for setup in setups if setup[2] != "false"] == []
 
 
 def test_the_targets_are_every_make_target_that_runs_tests_or_the_stack() -> None:

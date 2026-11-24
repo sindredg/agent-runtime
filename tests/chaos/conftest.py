@@ -25,7 +25,7 @@ from typing import Any
 import httpx2
 import pytest
 
-from runtime.logs import json_safe
+from runtime.logs import json_safe, text_safe
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 COMPOSE = ["docker", "compose", "-f", "docker-compose.yml", "-f", "docker-compose.chaos.yml"]
@@ -245,7 +245,9 @@ class Chaos:
             if reached(job):
                 return job
             if time.monotonic() > deadline:
-                raise AssertionError(f"job {job_id} did not reach {what} in {timeout:g} s: {job}")
+                raise AssertionError(
+                    text_safe(f"job {job_id} did not reach {what} in {timeout:g} s: {job}")
+                )
             time.sleep(0.05)
 
     def finish(self, job_id: str, *, timeout: float = 90.0, note: str = "") -> Run:
@@ -262,7 +264,9 @@ class Chaos:
                 if self.answer(job_id, "approve", asked) == 200:
                     approvals[operation] = approvals.get(operation, 0) + 1
             if time.monotonic() > deadline:
-                raise AssertionError(f"job {job_id} was not final after {timeout:g} s: {job}")
+                raise AssertionError(
+                    text_safe(f"job {job_id} was not final after {timeout:g} s: {job}")
+                )
             time.sleep(0.1)
         return self.read(job_id, approvals=approvals, note=note)
 
@@ -292,7 +296,8 @@ def lease_trouble(logs: str, job_id: str) -> list[str]:
         if entry.get("message") not in LEASE_TROUBLE:
             continue
         error = str(entry.get("exception", "")).strip().splitlines()
-        found.append(" ".join(filter(None, [entry.get("time"), entry["message"], *error[-1:]])))
+        line = " ".join(filter(None, [entry.get("time"), entry["message"], *error[-1:]]))
+        found.append(text_safe(line))
     return found
 
 

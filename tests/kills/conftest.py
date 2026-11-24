@@ -80,6 +80,14 @@ def show(text: str) -> None:
     print(text_safe(text))
 
 
+def failure(where: str, problem: str, run: Run) -> str:
+    """A line of a failed test's message, with its workflow-command markers escaped.
+
+    pytest prints the list of these lines as well as the message.
+    """
+    return text_safe(f"{where}: {problem} :: {run.summary()}")
+
+
 class Stack:
     def __init__(self, chosen: Settings, directory: Path) -> None:
         self.settings = chosen

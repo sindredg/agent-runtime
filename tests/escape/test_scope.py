@@ -17,6 +17,7 @@ from dataclasses import dataclass
 
 import pytest
 
+from runtime.logs import text_safe
 from runtime.scope import Allowed, Resolved
 
 from .conftest import GUARD_IMAGE, IMAGE, Host, docker_cli
@@ -96,7 +97,7 @@ def test_the_target_in_scope_is_reached_and_the_one_outside_is_dropped(
     result = host.shell(
         f"{greet(targets.inside)}; {connect(targets.outside)}", only(targets.inside)
     )
-    print(f"\n{result.content!r} dropped={result.dropped_packets}")
+    print(text_safe(f"\n{result.content!r} dropped={result.dropped_packets}"))
 
     assert result.content.splitlines()[:2] == ["hello from inside", "blocked"]
     # Counted by the guard, and told to the model.
@@ -110,7 +111,7 @@ def test_only_the_scopes_ports_of_a_target_are_open(host: Host, targets: Targets
         f"{greet(targets.inside)}; {connect(targets.inside, 9090)}",
         only(targets.inside, ports=(PORT,)),
     )
-    print(f"\n{result.content!r}")
+    print(text_safe(f"\n{result.content!r}"))
 
     assert result.content.splitlines()[:2] == ["hello from inside", "blocked"]
 
@@ -121,7 +122,7 @@ def test_a_name_in_the_scope_resolves_as_pinned_and_no_other_name_resolves(
     scope = only(targets.inside, pinned=(("lab.test", (targets.inside,)),))
 
     result = host.shell(f"{greet('lab.test')}; getent hosts example.com || echo no-lookup", scope)
-    print(f"\n{result.content!r} dropped={result.dropped_packets}")
+    print(text_safe(f"\n{result.content!r} dropped={result.dropped_packets}"))
 
     assert result.content.splitlines()[:2] == ["hello from inside", "no-lookup"]
 
@@ -142,7 +143,7 @@ def test_the_deny_list_holds_even_when_a_scope_allows_it(
     scope = Resolved((Allowed(allowed, (ipaddress.ip_network(allowed),), None),), ())
 
     result = host.shell(script, scope)
-    print(f"\n{result.content!r} dropped={result.dropped_packets}")
+    print(text_safe(f"\n{result.content!r} dropped={result.dropped_packets}"))
 
     assert result.content.splitlines()[0] == "blocked"
     assert result.dropped_packets is not None and result.dropped_packets > 0
@@ -174,7 +175,7 @@ def test_the_rules_cannot_be_changed_from_inside(host: Host, targets: Targets) -
             await asyncio.gather(call, return_exceptions=True)
 
     said = asyncio.run(attack())
-    print(f"\n{said!r}")
+    print(text_safe(f"\n{said!r}"))
 
     assert "Operation not permitted" in said
     assert "flush=0" not in said
