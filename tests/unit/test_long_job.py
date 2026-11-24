@@ -51,6 +51,8 @@ SUMMARIES = 3
 FIRST_ISSUE = "100000"
 WIDER = "1000000"
 REFUSAL = re.compile(r"prompt is too long: (\d+) tokens > (\d+) maximum")
+# The turn whose response the scenario sizes to one token under the trigger.
+BOUNDARY = 10
 
 
 def scenario(window: bool = True) -> Scenario:
@@ -286,27 +288,19 @@ def issue_results(entry: dict[str, Any]) -> int:
 
 
 def test_one_more_digit_in_an_issue_number_moves_the_summary(tmp_path: Path) -> None:
-    """A response at exactly T - 1 tokens, and the same job with issue numbers one digit wider.
+    """At the trigger, one response is exactly T - 1 tokens with six-digit issue numbers.
 
-    The fake counts a quarter of the characters, so one more character adds
-    a token only to a request one short of a multiple of four. The response
-    is the first after the first issue that the wider number takes up by one.
+    Its request holds one issue result, the first. The fake counts a quarter
+    of the characters, and the scenario puts that request one character short
+    of a multiple of four, so a seventh digit takes the response to T. The
+    summary then comes right after it, a turn earlier.
     """
-    _, _, narrow = run(tmp_path / "narrow", None, with_window=False)
-    _, _, wide = run(tmp_path / "wide", None, with_window=False, first_issue=WIDER)
-    first = next(i for i, entry in enumerate(narrow) if issue_results(entry) == 1)
-    second = next(i for i, entry in enumerate(narrow) if issue_results(entry) == 2)
-    moved = [i for i in range(first, second) if tokens(wide[i]) == tokens(narrow[i]) + 1]
-    assert moved
-    turn = moved[0]
-    trigger = tokens(narrow[turn]) + 1
-
-    outcome, _, before = run(tmp_path / "before", trigger)
-    wider, _, after = run(tmp_path / "after", trigger, first_issue=WIDER)
+    outcome, _, narrow = run(tmp_path / "narrow", TRIGGER)
+    wider, _, wide = run(tmp_path / "wide", TRIGGER, first_issue=WIDER)
 
     assert (outcome, wider) == ("succeeded", "succeeded")
-    assert tokens(before[turn]) == trigger - 1
-    assert tokens(after[turn]) == trigger
-    # The summary follows the response at the trigger, so the wider number moves it.
-    assert first_summary(after)["turn"] == turn + 1
-    assert first_summary(before)["turn"] > turn + 1
+    assert issue_results(narrow[BOUNDARY]) == 1
+    assert tokens(narrow[BOUNDARY]) == TRIGGER - 1
+    assert tokens(wide[BOUNDARY]) == TRIGGER
+    assert first_summary(wide)["turn"] == BOUNDARY + 1
+    assert first_summary(narrow)["turn"] > BOUNDARY + 1

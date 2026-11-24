@@ -1,5 +1,5 @@
 {
-  "description": "A job longer than its context window of 3400 tokens. Turns 1 to 43 each write a paragraph of notes and read notes/NN.txt, a file of one short line, or open an issue in parts 05, 16, 27 and 38. Then it ends. With SUMMARY_TRIGGER 3000 it summarises three times and every request fits the window. Without a trigger a request goes over it.",
+  "description": "A job longer than its context window of 3400 tokens. Turns 1 to 43 each write a paragraph of notes and read notes/NN.txt, a file of one short line, or open an issue in parts 05, 16, 27 and 38. Then it ends. With SUMMARY_TRIGGER 3000 and six-digit issue numbers it summarises three times and every request fits the window. The response of turn 11 is then 2999 tokens, and 3000 with seven-digit numbers. Without a trigger a request goes over the window.",
   "context_window": 3400,
   "turns": [
     {
@@ -73,7 +73,7 @@
           "name": "create_issue",
           "input": {
             "title": "Finding in part 05",
-            "body": "Part 05 needs a look."
+            "body": "Part 05 needs work."
           }
         }
       ]
@@ -157,7 +157,7 @@
       "content": [
         {
           "type": "text",
-          "text": "Notes on part 11. Line 01 of part 11: a fact that a later step needs. Line 02 of part 11: a fact that a later step needs. Line 03 of part 11: a fact that a later step needs. Line 04 of part 11: a fact that a later step needs. Line 05 of part 11: a fact that a later step needs. Line 06 of part 11: a fact that a later step needs. Line 07 of part 11: a fact that a later step needs. Line 08 of part 11: a fact that a later step needs. Line 09 of part 11: a fact that a later step needs. Line 10 of part 11: a fact that a later step needs. Line 11 of part 11: a fact that a later step needs. Line 12 of part 11: a fact that a later step needs. Line 13 of part 11: a fact that a later step needs."
+          "text": "Notes on part 11. Line 01 of part 11: a fact that a later step needs. Line 02 of part 11: a fact that a later step needs. Line 03 of part 11: a fact that a later step needs. Line 04 of part 11: a fact that a later step needs. Line 05 of part 11: a fact that a later step needs. Line 06 of part 11: a fact that a later step needs. Line 07 of part 11: a fact that a later step needs. Line 08 of part 11: a fact that a later step needs. Line 09 of part 11: a fact that a later step needs. Line 10 of part 11: a fact that a later step needs."
         },
         {
           "type": "tool_use",
@@ -172,7 +172,7 @@
       "content": [
         {
           "type": "text",
-          "text": "Notes on part 12. Line 01 of part 12: a fact that a later step needs. Line 02 of part 12: a fact that a later step needs. Line 03 of part 12: a fact that a later step needs. Line 04 of part 12: a fact that a later step needs. Line 05 of part 12: a fact that a later step needs. Line 06 of part 12: a fact that a later step needs. Line 07 of part 12: a fact that a later step needs. Line 08 of part 12: a fact that a later step needs. Line 09 of part 12: a fact that a later step needs. Line 10 of part 12: a fact that a later step needs. Line 11 of part 12: a fact that a later step needs. Line 12 of part 12: a fact that a later step needs. Line 13 of part 12: a fact that a later step needs."
+          "text": "Notes on part 12. Line 01 of part 12: a fact that a later step needs. Line 02 of part 12: a fact that a later step needs. Line 03 of part 12: a fact that a later step needs. Line 04 of part 12: a fact that a later step needs. Line 05 of part 12: a fact that a later step needs. Line 06 of part 12: a fact that a later step needs. Line 07 of part 12: a fact that a later step needs. Line 08 of part 12: a fact that a later step needs. Line 09 of part 12: a fact that a later step needs. Line 10 of part 12: a fact that a later step needs."
         },
         {
           "type": "tool_use",
@@ -239,7 +239,7 @@
           "name": "create_issue",
           "input": {
             "title": "Finding in part 16",
-            "body": "Part 16 needs a look."
+            "body": "Part 16 needs work."
           }
         }
       ]
@@ -405,7 +405,7 @@
           "name": "create_issue",
           "input": {
             "title": "Finding in part 27",
-            "body": "Part 27 needs a look."
+            "body": "Part 27 needs work."
           }
         }
       ]
@@ -571,7 +571,7 @@
           "name": "create_issue",
           "input": {
             "title": "Finding in part 38",
-            "body": "Part 38 needs a look."
+            "body": "Part 38 needs work."
           }
         }
       ]
