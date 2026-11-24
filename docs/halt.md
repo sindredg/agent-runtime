@@ -27,6 +27,7 @@ The code is `worker/halt.py`.
 - On a halt the worker checks once more right before a tool's intent, so no
   new call starts.
 - Killing a sandboxed command removes its containers.
+- A summary request is a model call, and a halt gives it up the same way.
 - A tool in the worker process runs on in its thread. Its result is dropped.
 
 ## A job no worker holds
@@ -83,7 +84,9 @@ The bound is the sum of:
 - The bytes of the messages added since, a token for each byte.
 - 1024, for what the provider adds around messages and tool definitions.
 
-For the first call it is the bytes of the whole request plus 1024.
+For the first call it is the bytes of the whole request plus 1024. So it is
+for the first call after a [summary step](adr/0033-summarise-a-long-conversation-as-a-step.md),
+and a summary request counts its instruction.
 
 - `tokens_used` counts the usage of each response that was received in full.
 - A call that fails or is given up part way is not counted. It may still be

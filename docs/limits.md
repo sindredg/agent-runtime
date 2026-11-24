@@ -34,10 +34,10 @@ refused, but the tool ran. An idempotency key on the other side closes this.
   reasons that have nothing to do with the job. The limit is a constant.
 - A 429 or 529 and, up to a cap, an error that may pass are waited out.
   Other failed calls fail the job. Workers share no limit ([Backoff](backoff.md#limits)).
-- A response cut off at `max_tokens`, or a refusal, fails the job. It is not
-  continued.
-- The whole conversation is sent with every model call. A job that outgrows
-  the model's context window fails.
+- A response cut off at `max_tokens`, or a refusal, fails the job. It is not continued.
+- Without `SUMMARY_TRIGGER` a job that outgrows the model's context window
+  fails. With it, a summary can drop what a later step needs, and no older
+  worker may run ([Settings](settings.md#worker-job-and-provider)).
 - All workers have to see the same workspace directory. The stack does that
   with one volume on one host.
 - A workspace left behind waits up to `SWEEP_INTERVAL_SECONDS` for the sweep.

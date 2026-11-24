@@ -68,6 +68,10 @@ flowchart LR
 | `STOP_GRACE_SECONDS` | 75 | Time the worker gets after SIGTERM. Also the stack's `stop_grace_period`. |
 | `WORKER_ID` | host name and process id | Stored as `lease_owner` |
 | `WORKER_ALIVE_FILE` | `/tmp/worker.alive` | Touched every 5 seconds. The compose health check reads its age. |
+| `SUMMARY_TRIGGER` | unset | Input plus output tokens of a response at which the job's conversation is summarised. Unset, a job this worker starts never is. |
+
+- A job's first model call pins its trigger ([ADR 0033](adr/0033-summarise-a-long-conversation-as-a-step.md)).
+  While any worker has `SUMMARY_TRIGGER` set, no worker older than the `summary` step may run: each claim burns a takeover.
 
 ## Worker: the issue tracker and notifications
 

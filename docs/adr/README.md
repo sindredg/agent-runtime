@@ -41,11 +41,12 @@ Read [the queue](0002-postgres-as-the-job-queue.md),
 | [0025](0025-a-tool-in-the-worker-names-how-long-its-request-can-arrive.md) | A tool in the worker names how long its request can still arrive, and a takeover waits that long | [Yes](../interrupted-calls.md#before-the-decision-a-tool-in-the-worker), for `create_issue` |
 | [0026](0026-python-on-asyncio-with-the-sql-written-out.md) | Write the runtime in Python on asyncio, with the SQL written out | Yes |
 | [0027](0027-an-api-without-authentication-on-localhost.md) | The API has no authentication and answers on localhost only | Yes |
-| [0028](0028-send-the-whole-conversation-and-fail-past-the-context-window.md) | Send the whole conversation every time, and fail a job that outgrows the context window | Yes |
+| [0028](0028-send-the-whole-conversation-and-fail-past-the-context-window.md) | Send the whole conversation every time, and fail a job that outgrows the context window | Yes. Amended by [0033](0033-summarise-a-long-conversation-as-a-step.md). |
 | [0029](0029-notify-from-a-row-the-park-writes.md) | A parked job notifies from a row its park writes, at least once | Yes |
 | [0030](0030-wait-out-a-provider-error-up-to-a-cap.md) | Wait out a provider error that may pass, up to a cap | [Yes](../backoff.md#the-caps) |
 | [0031](0031-stop-a-job-that-repeats-one-call-with-the-same-result.md) | Stop a job that repeats one call with the same result five times in a row | [Yes](../halt.md#a-job-that-repeats-itself) |
 | [0032](0032-seed-files-up-to-8-mib.md) | Seed a job's workspace with up to 8 MiB of files, the same limit for every job | Yes |
+| [0033](0033-summarise-a-long-conversation-as-a-step.md) | Summarise a long conversation as a step and start the next context window from it. Amends 0028. | Yes, migration 0012. Off unless `SUMMARY_TRIGGER` is set. |
 
 There is no record 0024: it was withdrawn before anything was built.
 

@@ -101,8 +101,9 @@ the WHERE clauses of the partial indexes.
 
 | Kind | Written | Main fields |
 |---|---|---|
-| `model_request` | Before each model call | `model`, `max_tokens`, `messages` (a count), `input_bound`, `tokens_used` |
+| `model_request` | Before each model call | `model`, `max_tokens`, `messages` (a count), `input_bound`, `tokens_used`, `summary_trigger`, `tools` (names) |
 | `model_response` | After each model call, with the `tokens_used` update | `id`, `content`, `stop_reason`, `usage`. A refused call adds `refusal`. |
+| `summary` | After a summary request, with the `tokens_used` update ([ADR 0033](adr/0033-summarise-a-long-conversation-as-a-step.md)) | As `model_response`, plus `message`: the user message the next window starts from |
 | `tool_intent` | Before every run of a tool. A call that runs again gets a new one. | `tool_use_id`, `name`, `input` |
 | `tool_result` | After a tool ran, could not run, or was denied | `tool_use_id`, `content`, `is_error` |
 | `approval_requested` | When a person has to decide about a call | `tool_use_id`, `name`, `input`, `operation_id`, `reason` |
@@ -118,10 +119,11 @@ Fields that are present only in some steps:
 
 | Field | On | Means |
 |---|---|---|
-| `problem` | `model_response` | The response cannot be used |
-| `content_dropped` | `model_response` | The content could not be stored and was replaced by an empty list |
-| `refusal` | `model_response` | Why the model declined: `category` and `explanation`, each null when not sent or not usable |
-| `usage.thinking_tokens` | `model_response` | Output tokens spent on thinking, when reported. Already inside `output_tokens`. |
+| `summary` | `model_request` | The call asks for a summary, with `tool_choice: none` |
+| `problem` | `model_response`, `summary` | The response cannot be used. A `summary` with one has no `message`. |
+| `content_dropped` | `model_response`, `summary` | The content could not be stored and was replaced by an empty list |
+| `refusal` | `model_response`, `summary` | Why the model declined: `category` and `explanation`, each null when not sent or not usable |
+| `usage.thinking_tokens` | `model_response`, `summary` | Output tokens spent on thinking, when reported. Already inside `output_tokens`. |
 | `needs_approval` | `tool_intent` | The run has a person's approval behind it |
 | `ends_within` | `tool_intent` | Seconds by which a sandboxed call's container has ended, or a tool's own request |
 | `scope` | `tool_intent` | Each target of a scoped call, with its resolved addresses and ports |

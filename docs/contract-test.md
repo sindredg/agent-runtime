@@ -16,7 +16,7 @@ make up
 ANTHROPIC_API_KEY=<key> CONTRACT_MODEL=<model id> uv run pytest tests/contract
 ```
 
-It sends five small requests to the API, one of which is refused on purpose.
+It sends seven small requests to the API, one of which is refused on purpose.
 
 ```mermaid
 flowchart LR
@@ -26,6 +26,16 @@ flowchart LR
     X --> D2[check: everything only the API returns<br/>is declared below]
     X --> R[.contract/time/:<br/>fake.json, api.json, api-only.txt]
 ```
+
+## The summary request
+
+One entry sends the request a worker makes for a summary
+([ADR 0033](adr/0033-summarise-a-long-conversation-as-a-step.md)): one tool
+call answered, then `tool_choice: none` with the tools kept and the
+instruction as a text block after the last `tool_result`. It passes when the
+provider accepts it and the answer is a usable summary.
+
+Status: written, not run. No run in the table below includes it.
 
 ## Both directions
 
