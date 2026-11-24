@@ -25,10 +25,17 @@ bytes per token that is about 4.6 MiB.
 `MAX_FILES_BYTES` is 8 MiB, for every job. It still counts paths and
 contents. The size does not depend on a token count.
 
+The seed is also capped at 10,000 entries (files plus the directories their
+paths make) and 32 levels. Without these, 8 MiB of short or deep paths makes
+millions of directories before the watcher first looks.
+
 ## Consequences
 
 - A job row can hold about 8 MiB of spec, and `GET /jobs/{id}` returns it whole.
 - The body of `POST /jobs` is still not capped ([API](../api.md#refusals)).
-- A workspace can start at 8 MiB, inside the watcher's default limit of
-  1024 MiB ([Sandbox](../sandbox.md#workspace-size)).
+- A seed takes at most a tenth of the watcher's default limits of 1024 MiB,
+  100,000 entries and 256 levels
+  ([Sandbox](../sandbox.md#workspace-size)). A test measures one at the caps.
+- The validator checks counts and sizes before it walks paths, so its work
+  is bounded.
 - Text at more than 4 bytes per token may still fall short of 1.2M tokens.
