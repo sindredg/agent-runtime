@@ -145,6 +145,6 @@ shell, and the scenarios of `LONG_SCENARIO_DIR`, by default the packaged ones.
 | `uv run ruff check .` and `uv run ruff format --check .` | Lint and check formatting |
 | `uv run mypy` | Type check (strict) |
 | `uv run yamllint --strict .` | Lint YAML |
-| `uv run python scripts/lint_json.py <files>`, `lint_svg.py`, `lint_docs.py` | Check JSON syntax, SVG syntax, and the limits of the Markdown pages |
+| `uv run pre-commit run --all-files` | Run every check above, plus JSON syntax, SVG syntax and the limits of the Markdown pages |
 | `uv run pre-commit install` | Run the checks above before each commit. It does not run tests. |
 | `uv run alembic upgrade head --sql` | Print the schema's SQL from `migrations/`. Needs `DATABASE_URL` set, not a database. |
