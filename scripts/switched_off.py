@@ -41,6 +41,8 @@ from pathlib import Path, PurePosixPath
 from types import ModuleType
 from typing import Any, Literal
 
+from runtime.logs import text_safe
+
 ROOT = Path(__file__).resolve().parents[1]
 JUNIT = Path(".switched-off/junit.xml")
 WORKFLOW = ".github/workflows/manual-runs.yml"
@@ -1688,6 +1690,11 @@ def _sh(*args: str, env: Mapping[str, str]) -> None:
     subprocess.run(args, cwd=ROOT, check=True, env=dict(env))  # noqa: S603 - fixed commands
 
 
+def _say(text: str) -> None:
+    """Print a line of the run's report, with its workflow-command markers escaped."""
+    print(text_safe(text), flush=True)
+
+
 def _git(*args: str) -> str:
     done = subprocess.run(  # noqa: S603 - fixed commands
         ["git", *args],  # noqa: S607
@@ -1713,14 +1720,14 @@ def run(name: str, *, rehearsal: bool = False) -> int:
         return 2
     provider = "fake" if rehearsal else entry.provider
     if rehearsal:
-        print(f"rehearsal of {name} on the fake provider: not a result", flush=True)
-    print(f"switched off: {name} (issue {entry.issue}): {entry.what}", flush=True)
+        _say(f"rehearsal of {name} on the fake provider: not a result")
+    _say(f"switched off: {name} (issue {entry.issue}): {entry.what}")
     changed = _git("status", "--porcelain", "--untracked-files=no")
     if changed:
-        print(f"WRONG: the checkout has changes; the run would not be HEAD's code:\n{changed}")
+        _say(f"WRONG: the checkout has changes; the run would not be HEAD's code:\n{changed}")
         return 1
     head = _git("rev-parse", "HEAD").strip()
-    print(f"commit {head}", flush=True)
+    _say(f"commit {head}")
     env = child_environment(entry, provider, os.environ)
     quiet = without_keys(env)
     starts = stack_commands(entry.stack, provider)
@@ -1743,21 +1750,21 @@ def run(name: str, *, rehearsal: bool = False) -> int:
     command = [*pytest, f"--junitxml={JUNIT}", *nodes]
     # A fixed command; the node ids come from the list above.
     tests = subprocess.run(command, cwd=ROOT, check=False, env=env)  # noqa: S603
-    print(f"pytest exit {tests.returncode}", flush=True)
+    _say(f"pytest exit {tests.returncode}")
     found = outcomes(ROOT / JUNIT) if (ROOT / JUNIT).is_file() else {}
     lines = judge(entry, found) if found else ["WRONG: pytest wrote no results"]
     if entry.record is None:
-        print("\n".join(lines), flush=True)
+        _say("\n".join(lines))
         return 1 if any(line.startswith("WRONG") for line in lines) else 0
     records, trouble = new_records(kept, before, entry.record.test)
     rules = kill_rules()
     if rehearsal:
         verdict, reasons = judge_rehearsal(entry, found, records, trouble, head=head, rules=rules)
     else:
-        print("\n".join(lines), flush=True)
+        _say("\n".join(lines))
         verdict, reasons = judge_record(entry, lines, records, trouble, head=head, rules=rules)
-    print("\n".join(reasons), flush=True)
-    print(f"{verdict}: {name}", flush=True)
+    _say("\n".join(reasons))
+    _say(f"{verdict}: {name}")
     return 0 if verdict in ("PASS", "REHEARSAL OK") else 1
 
 

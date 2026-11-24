@@ -12,6 +12,7 @@ import uuid
 
 import pytest
 
+from runtime.logs import text_safe
 from runtime.sandbox.runner import SandboxSettings
 
 from .conftest import Host
@@ -71,7 +72,7 @@ def test_an_escape_attempt_is_stopped_and_is_a_failed_tool_result(host: Host, na
     before = host.canary.read_text(), host.canary.stat().st_mtime_ns
 
     result = host.shell(ATTEMPTS[name])
-    print(f"\n{name}: {result.content!r}")
+    print(text_safe(f"\n{name}: {result.content!r}"))
 
     assert "ESCAPED" not in result.content
     assert result.is_error
@@ -88,7 +89,7 @@ def test_files_outside_the_jobs_workspace_cannot_be_found(host: Host, target: st
     own.write_text("mine\n")
 
     result = host.shell(f"{found(path.name)}; {found(own.name)}; ls -a /workspace/..")
-    print(f"\n{target}: {result.content!r}")
+    print(text_safe(f"\n{target}: {result.content!r}"))
 
     assert f"/workspace/{own.name}" in result.content
     assert path.name not in result.content

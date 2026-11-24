@@ -12,6 +12,10 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Every step with a `run` stops workflow commands while it runs, with a
+# token made in the step, unless it prints nothing from the stack or the
+# tests. setup-uv runs without its problem matchers.
+# tests/unit/test_workflow_commands.py checks both.
 jobs:
   python:
     name: Python lint, types and tests
@@ -24,12 +28,23 @@ jobs:
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
         with:
           version: "0.13.8"
+          add-problem-matchers: false
       # --locked, not --frozen: a pin edited in pyproject.toml without a relock fails here.
-      - run: uv sync --locked
-      - run: uv run --frozen ruff check .
-      - run: uv run --frozen ruff format --check .
-      - run: uv run --frozen mypy
-      - run: uv run --frozen pytest -v tests/unit
+      - name: Sync the environment
+        run: uv sync --locked
+      - name: ruff check
+        run: uv run --frozen ruff check .
+      - name: ruff format
+        run: uv run --frozen ruff format --check .
+      - name: mypy
+        run: uv run --frozen mypy
+      - name: Unit tests
+        run: |
+          exec 2>&1
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
+          uv run --frozen pytest -v tests/unit
+          echo "::$token::"
 
   yaml:
     name: YAML and workflow lint
@@ -46,8 +61,11 @@ jobs:
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
         with:
           version: "0.13.8"
-      - run: uv sync --locked
-      - run: uv run --frozen yamllint --strict .
+          add-problem-matchers: false
+      - name: Sync the environment
+        run: uv sync --locked
+      - name: yamllint
+        run: uv run --frozen yamllint --strict .
       - name: JSON syntax
         run: git ls-files -z '*.json' | xargs -0 uv run --frozen python scripts/lint_json.py
       - name: SVG syntax
@@ -113,12 +131,22 @@ jobs:
       # Builds the image and fails unless every service becomes healthy and
       # the one-shot migrate service exits 0.
       - name: Start the stack
-        run: make up
+        run: |
+          exec 2>&1
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
+          make up
+          echo "::$token::"
       - name: Call the API from the host
         run: curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8000/healthz
       - name: Service logs
         if: failure()
-        run: docker compose logs --no-color
+        run: |
+          exec 2>&1
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
+          docker compose logs --no-color
+          echo "::$token::"
       - name: Stop the stack
         if: always()
         run: make clean
@@ -133,7 +161,9 @@ jobs:
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
         with:
           version: "0.13.8"
-      - run: uv sync --locked
+          add-problem-matchers: false
+      - name: Sync the environment
+        run: uv sync --locked
       # Every compose command needs the group of the Docker socket, which the
       # worker joins to start tool containers. `make` sets it; the steps that
       # call compose directly read it from here.
@@ -142,12 +172,27 @@ jobs:
       # Postgres with the migrations applied. The tests run on the host and
       # reach it on 127.0.0.1:5432.
       - name: Start the stack
-        run: make up
+        run: |
+          exec 2>&1
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
+          make up
+          echo "::$token::"
       - name: Integration tests
-        run: uv run --frozen pytest -v tests/integration
+        run: |
+          exec 2>&1
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
+          uv run --frozen pytest -v tests/integration
+          echo "::$token::"
       - name: Service logs
         if: failure()
-        run: docker compose logs --no-color
+        run: |
+          exec 2>&1
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
+          docker compose logs --no-color
+          echo "::$token::"
       - name: Stop the stack
         if: always()
         run: make clean
@@ -162,11 +207,18 @@ jobs:
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
         with:
           version: "0.13.8"
-      - run: uv sync --locked
+          add-problem-matchers: false
+      - name: Sync the environment
+        run: uv sync --locked
       # Builds the sandbox image and runs the escape attempts against it. No
       # stack: the tests start the tool containers themselves.
       - name: Escape tests
-        run: make escape
+        run: |
+          exec 2>&1
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
+          make escape
+          echo "::$token::"
 
   chaos:
     name: Chaos tests (short run)
@@ -182,7 +234,9 @@ jobs:
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
         with:
           version: "0.13.8"
-      - run: uv sync --locked
+          add-problem-matchers: false
+      - name: Sync the environment
+        run: uv sync --locked
       # Every compose command needs the group of the Docker socket, which the
       # worker joins to start tool containers. `make` sets it; the steps that
       # call compose directly read it from here.
@@ -191,13 +245,28 @@ jobs:
       # Starts the stack with three workers and a short lease, then kills,
       # pauses and crashes workers and checks what is left.
       - name: Chaos tests
-        run: make chaos
+        run: |
+          exec 2>&1
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
+          make chaos
+          echo "::$token::"
       - name: Results
         if: always()
-        run: cat .chaos/results.jsonl
+        run: |
+          exec 2>&1
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
+          cat .chaos/results.jsonl
+          echo "::$token::"
       - name: Service logs
         if: failure()
-        run: docker compose logs --no-color
+        run: |
+          exec 2>&1
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
+          docker compose logs --no-color
+          echo "::$token::"
       - name: Stop the stack
         if: always()
         run: make clean
@@ -213,7 +282,9 @@ jobs:
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
         with:
           version: "0.13.8"
-      - run: uv sync --locked
+          add-problem-matchers: false
+      - name: Sync the environment
+        run: uv sync --locked
       # Every compose command needs the group of the Docker socket, which the
       # worker joins to start tool containers. `make` sets it; the steps that
       # call compose directly read it from here.
@@ -222,7 +293,12 @@ jobs:
       # Sets Gitea up in a container, stops a worker in the middle of a
       # create_issue call to it, and counts the issues in Gitea.
       - name: Lab demo
-        run: make lab
+        run: |
+          exec 2>&1
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
+          make lab
+          echo "::$token::"
       # The demo's end stops Gitea and puts the worker back on the fake
       # tracker. Nothing of the lab may stay running.
       - name: Gitea is stopped after the demo
@@ -237,7 +313,12 @@ jobs:
             | grep -qx 'http://fake-receiver:8000/notifications'
       - name: Service logs
         if: failure()
-        run: docker compose -f docker-compose.yml -f docker-compose.lab.yml logs --no-color
+        run: |
+          exec 2>&1
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
+          docker compose -f docker-compose.yml -f docker-compose.lab.yml logs --no-color
+          echo "::$token::"
       - name: Stop the stack
         if: always()
         run: make clean
@@ -253,7 +334,9 @@ jobs:
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
         with:
           version: "0.13.8"
-      - run: uv sync --locked
+          add-problem-matchers: false
+      - name: Sync the environment
+        run: uv sync --locked
       # Every compose command needs the group of the Docker socket, which the
       # worker joins to start tool containers. `make` sets it; the steps that
       # call compose directly read it from here.
@@ -264,13 +347,28 @@ jobs:
       # the fake provider here: the Claude API needs a key, and no secret is
       # given to this workflow.
       - name: Kill runs
-        run: make kills
+        run: |
+          exec 2>&1
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
+          make kills
+          echo "::$token::"
       - name: Results
         if: always()
-        run: cat .kills/*/results.jsonl 2>/dev/null || echo "No results, stopped before a test."
+        run: |
+          exec 2>&1
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
+          cat .kills/*/results.jsonl 2>/dev/null || echo "No results, stopped before a test."
+          echo "::$token::"
       - name: Service logs
         if: failure()
-        run: docker compose -f docker-compose.yml -f docker-compose.kills.yml logs --no-color
+        run: |
+          exec 2>&1
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
+          docker compose -f docker-compose.yml -f docker-compose.kills.yml logs --no-color
+          echo "::$token::"
       - name: Stop the stack
         if: always()
         run: make clean

@@ -24,6 +24,8 @@ from typing import Any
 
 import pytest
 
+from runtime.logs import text_safe
+
 from .conftest import (
     FAILPOINT_LEASE,
     FINAL,
@@ -160,7 +162,7 @@ def test_a_gated_call_never_runs_before_its_approval_under_random_kills(chaos: C
         denied = sum(len(times) for times in gated.answered("approval_denied").values())
         ran = sum(len(runs) for runs in gated.runs.values())
         if gated.job["status"] != "succeeded":
-            problems.append(f"status is {gated.job['status']} ({gated.job['error']})")
+            problems.append(text_safe(f"status is {gated.job['status']} ({gated.job['error']})"))
         if answer == "approve" and (ran != 1 or given < 1):
             problems.append(f"an approved job has {ran} issues for {given} approvals, not one")
         if answer == "deny" and (ran != 0 or denied < 1 or given != 0):

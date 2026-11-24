@@ -20,6 +20,8 @@ from typing import Any
 import httpx2
 import pytest
 
+from runtime.logs import text_safe
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 COMPOSE = ["docker", "compose", "-f", "docker-compose.yml", "-f", "docker-compose.lab.yml"]
 GITEA_URL = f"http://127.0.0.1:{os.environ.get('LAB_GITEA_PORT', '3000')}"
@@ -57,8 +59,13 @@ def run(*args: str, env: dict[str, str] | None = None, check: bool = True) -> st
     return done.stdout + done.stderr
 
 
+def show(text: str) -> None:
+    """Print text of the demo, with its workflow-command markers escaped."""
+    print(text_safe(text), flush=True)
+
+
 def say(text: str) -> None:
-    print(f"  {text}", flush=True)
+    show(f"  {text}")
 
 
 class Lab:
@@ -193,7 +200,7 @@ def lab(request: pytest.FixtureRequest) -> Iterator[Lab]:
         lab.gitea.close()
         if request.session.testsfailed:
             # The lab workers are replaced below, and their logs with them.
-            print(f"\nLab worker logs:\n{lab.worker_logs(started)}", flush=True)
+            show(f"\nLab worker logs:\n{lab.worker_logs(started)}")
         try:
             # Gitea stops, with its data kept for a restart (docs/lab-demo.md).
             run(*COMPOSE, "stop", "gitea")

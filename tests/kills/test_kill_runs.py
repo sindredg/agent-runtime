@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from .conftest import FIRED, WORKERS, Stack, docker, record, totals
+from .conftest import FIRED, WORKERS, Stack, docker, failure, record, show, totals
 from .rules import (
     FAILPOINTS,
     UNINTERRUPTED,
@@ -43,9 +43,9 @@ def test_the_job_passes_when_nobody_interrupts_it(stack: Stack) -> None:
         run = stack.finish(stack.submit(), submitted=submitted, note="not interrupted")
         runs.append(run)
         wrong = uninterrupted_problems(run)
-        print(f"{index:>3} {'FAIL' if wrong else 'ok  '} {run.summary()}")
+        show(f"{index:>3} {'FAIL' if wrong else 'ok  '} {run.summary()}")
         failed_runs += bool(wrong)
-        failures += [f"job {index}: {p} :: {run.summary()}" for p in wrong]
+        failures += [failure(f"job {index}", p, run) for p in wrong]
     longest = max(run.seconds for run in runs)
     record(
         stack,
@@ -97,12 +97,10 @@ def test_jobs_survive_a_kill_at_a_random_time(stack: Stack) -> None:
         stack.start_stopped_workers()
         runs.append(run)
         wrong = problems(run)
-        print(f"{index:>3} {'FAIL' if wrong else 'ok  '} {run.summary()}")
+        show(f"{index:>3} {'FAIL' if wrong else 'ok  '} {run.summary()}")
         failed_runs += bool(wrong)
-        failures += [
-            f"run {index} (seed {chosen.seed}:{index}, window {window:.2f}): {p} :: {run.summary()}"
-            for p in wrong
-        ]
+        where = f"run {index} (seed {chosen.seed}:{index}, window {window:.2f})"
+        failures += [failure(where, p, run) for p in wrong]
 
     counted = totals(runs)
     record(
@@ -144,9 +142,9 @@ def test_jobs_survive_their_worker_stopping_inside_the_call(stack: Stack, failpo
             fired_in_all += fired
             runs.append(run)
             wrong = failpoint_problems(run, failpoint, fired)
-            print(f"{index:>3} {'FAIL' if wrong else 'ok  '} {run.summary()} fired={fired}")
+            show(f"{index:>3} {'FAIL' if wrong else 'ok  '} {run.summary()} fired={fired}")
             failed_runs += bool(wrong)
-            failures += [f"{failpoint} run {index}: {p} :: {run.summary()}" for p in wrong]
+            failures += [failure(f"{failpoint} run {index}", p, run) for p in wrong]
             # The worker that stopped comes back by itself, after a wait that
             # grows each time. The next job should find all of them.
             _wait_for_workers(stack)

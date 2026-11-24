@@ -13,6 +13,8 @@ from typing import Any
 import asyncpg
 import httpx2
 
+from runtime.logs import text_safe
+
 TIMEOUT_SECONDS = 60
 FINAL = {"succeeded", "failed", "cancelled"}
 
@@ -50,7 +52,7 @@ def test_a_scope_that_names_the_stacks_postgres_starts_no_call(
     steps = steps_of(stack_database_url, job_id)
     kinds = [step["kind"] for step in steps]
     results = [step["payload"] for step in steps if step["kind"] == "tool_result"]
-    print(f"\n{job['status']} {kinds} {results}")
+    print(text_safe(f"\n{job['status']} {kinds} {results}"))
 
     # No command ran: no intent was written, so no container was started.
     assert "tool_intent" not in kinds
