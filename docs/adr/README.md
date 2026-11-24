@@ -45,6 +45,7 @@ Read [the queue](0002-postgres-as-the-job-queue.md),
 | [0029](0029-notify-from-a-row-the-park-writes.md) | A parked job notifies from a row its park writes, at least once | Yes |
 | [0030](0030-wait-out-a-provider-error-up-to-a-cap.md) | Wait out a provider error that may pass, up to a cap | [Yes](../backoff.md#the-caps) |
 | [0031](0031-stop-a-job-that-repeats-one-call-with-the-same-result.md) | Stop a job that repeats one call with the same result five times in a row | [Yes](../halt.md#a-job-that-repeats-itself) |
+| [0032](0032-seed-files-up-to-8-mib.md) | Seed a job's workspace with up to 8 MiB of files, the same limit for every job | Yes |
 
 There is no record 0024: it was withdrawn before anything was built.
 
