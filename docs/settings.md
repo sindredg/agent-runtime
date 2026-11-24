@@ -51,7 +51,6 @@ flowchart LR
   A result from that stack names both.
 - `scripts/check_fake_provider.py` does the refusing: it reads each
   worker's `ANTHROPIC_BASE_URL`, and never the whole environment.
-- `make up` puts the worker back on the fake provider.
 
 ## Worker: job and provider
 
@@ -124,7 +123,8 @@ random one each run) from the shell. Compose reads the port from `.env` too.
 | `APP_DATABASE_PASSWORD` | migrate | required; the stack sets `runtime-app-dev` | Sets the login of `runtime_app`, the role of the API and the worker. In the stack's URLs too, so URL-safe characters only. |
 | `RUNTIME_API_URL` | CLI | `http://127.0.0.1:8000` | Where the CLI finds the API |
 | `RUNTIME_DATABASE_URL` | `runtime verify` | the stack's `runtime_app` on `127.0.0.1:5432` | The database whose step log it checks. The app role is enough. |
-| `FAKE_SCENARIO_DIR` | fake-provider | scenarios in the package | Directory of scenario files |
+| `FAKE_SCENARIO_DIR` | fake-provider | scenarios in the package | Directory of scenario files. The long stack mounts the host's `LONG_SCENARIO_DIR` there. |
+| `FAKE_TRACKER_FIRST_ISSUE` | fake-tracker | 1 | The first issue number. Set, it must have the width of the 100,000th, or the tracker does not start. |
 
 ## The kill runs
 

@@ -38,8 +38,8 @@ flowchart LR
 - They stop before the first test unless every worker is on the fake
   provider ([The Claude API](settings.md#the-claude-api)). The kill runs
   stop unless every worker is on the provider they were started for.
-- `make chaos` and `make kills` replace the normal stack: run `make up`
-  afterwards. `make lab` puts it back itself.
+- `make chaos`, `make kills` and `make long-up` replace the normal stack:
+  run `make up` afterwards. `make lab` puts it back itself.
 - `CHAOS_RUNS` and `CHAOS_SEED` set the number and times of random kills.
   `CHAOS_NOTIFY_JOBS` sets the jobs of each G12 run (default 20).
 - `NOTIFY_TIMING_JOBS` sets the jobs of the timed run (default 50).
@@ -55,13 +55,11 @@ flowchart LR
 A test that checks what happened outside a job does not read the job's own
 step log. It reads:
 
-- The fake provider's request log, and the fake tracker's or Gitea's list
-  of issues.
-- The fake receiver's log of every POST it was sent.
+- The request logs of the fake provider and the fake receiver, and the
+  fake tracker's or Gitea's list of issues.
 - The `crash_worker` tool's log file, and a worker's container log.
-- The records of a stand-in provider or tool.
-- Docker's list of containers, and the Postgres log.
-- A canary file on the host, in the escape suite.
+- The records of a stand-in provider or tool, and Docker's list of containers.
+- The Postgres log, and a canary file on the host in the escape suite.
 
 ## Must-fail runs
 
@@ -84,7 +82,7 @@ holds the key, and is [judged by its record](kill-runs.md#a-switched-off-run-on-
 `suite: switched-off-all` runs every entry of the fake provider from `main`,
 one job and one verdict each. The names come from `main`'s list, and no job
 of that start holds a secret. An entry names its stack: the normal one, the
-chaos, kill runs' or lab stack, or none for unit tests.
+chaos, kill runs', lab or long stack, or none for unit tests.
 
 ## Failure switches
 
@@ -109,7 +107,6 @@ unless switched on.
 |---|---|
 | Workers | Three, restarted when they end themselves |
 | Lease | 2 s, renewed every 0.5 s. The failpoint tests use 6 s and 2 s. |
-| Poll | 0.2 s |
 | Sandbox timeout | 10 s, so a takeover during a sandboxed call waits 40 s, not 60 s |
 | `CHAOS_LOG_DIR` | `/chaos` in the worker, mounted from `./.chaos` on the host |
 
@@ -117,12 +114,20 @@ The tests that pause or stop a worker use the default 30 s lease. Each chaos
 test writes its result to `.chaos/results.jsonl` with a `verdict`: `passed`,
 `failed`, or `void` when the machine's clock was set during the run.
 
+`docker-compose.long.yml` (`make long-up`) sets up the long stack, for a job
+longer than its context window: two workers, no sandbox, `MAX_TOKENS` 32000,
+issue numbers from 100000, and `SUMMARY_TRIGGER` and `LONG_SCENARIO_DIR` from the shell.
+
 ## The fakes
 
-- The fake provider picks a scenario by the request's `model` and a turn by
-  the number of assistant messages. It keeps the newest 10,000 requests.
+- The fake provider keeps the newest 10,000 requests. It picks a scenario by
+  `model` and a turn by the assistant messages, counted on from a summary's
+  `[turn N]` marker. Ids carry that job-wide turn, so none repeats across
+  windows: `msg_fake_<scenario>_<turn>`, `toolu_fake_<scenario>_<turn>_<block>`.
 - It counts tokens as a quarter of the characters of JSON, at least 1: input
   from `system`, `tools` and `messages`, output from the answer's content.
+- A request over the scenario's `context_window` gets 400 before any turn is
+  picked: `prompt is too long: <n> tokens > <w> maximum`.
 - It never answers with more output tokens than `max_tokens`. A longer turn
   is cut, with stop reason `max_tokens`.
 - `PUT /_fake/busy` makes it answer 429 or 529 for a time, for one model or
@@ -130,7 +135,7 @@ test writes its result to `.chaos/results.jsonl` with a `verdict`: `passed`,
 - `PUT /_fake/fault` fails the next N requests for one model in one named
   way. Each stays in the request log with what it was answered.
 - The fake tracker stores up to 100,000 issues in memory and never merges
-  two.
+  two. `FAKE_TRACKER_FIRST_ISSUE` sets its first number ([Settings](settings.md#api-cli-and-the-fakes)).
 
 ## Commands
 
@@ -140,8 +145,6 @@ test writes its result to `.chaos/results.jsonl` with a `verdict`: `passed`,
 | `uv run ruff check .` and `uv run ruff format --check .` | Lint and check formatting |
 | `uv run mypy` | Type check (strict) |
 | `uv run yamllint --strict .` | Lint YAML |
-| `uv run python scripts/lint_json.py <files>` | Check JSON syntax |
-| `uv run python scripts/lint_svg.py <files>` | Check SVG syntax |
-| `uv run python scripts/lint_docs.py <files>` | Check the limits of the Markdown pages |
+| `uv run python scripts/lint_json.py <files>`, `lint_svg.py`, `lint_docs.py` | Check JSON syntax, SVG syntax, and the limits of the Markdown pages |
 | `uv run pre-commit install` | Run the checks above before each commit. It does not run tests. |
 | `uv run alembic upgrade head --sql` | Print the schema's SQL from `migrations/`. Needs `DATABASE_URL` set, not a database. |
