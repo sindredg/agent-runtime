@@ -1,6 +1,7 @@
 """The job spec's validation and the workspace it seeds."""
 
 import os
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -9,7 +10,17 @@ from uuid import UUID
 import pytest
 from pydantic import ValidationError
 
-from runtime.spec import MAX_FILES_BYTES, MAX_NAME_BYTES, MAX_TEXT_LENGTH, JobSpec
+from runtime.sandbox.runner import DEFAULT_WORKSPACE_ENTRIES, DEFAULT_WORKSPACE_LIMIT_MIB
+from runtime.sandbox.workspace import MAX_DEPTH, Bounds, workspace_size
+from runtime.spec import (
+    MAX_FILES_BYTES,
+    MAX_FILES_DEPTH,
+    MAX_FILES_ENTRIES,
+    MAX_NAME_BYTES,
+    MAX_PATH_BYTES,
+    MAX_TEXT_LENGTH,
+    JobSpec,
+)
 from runtime.tools.paths import PathNotAllowed
 from runtime.worker.workspace import prepare_workspace, remove_workspace
 
@@ -46,6 +57,18 @@ def test_minimal_spec() -> None:
         {"prompt": "go", "files": {"a/b/c": "x", "a": "y"}},
         {"prompt": "go", "files": {"n" * (MAX_NAME_BYTES + 1): "x"}},
         {"prompt": "go", "files": {"/".join(["d" * 200] * 6): "x"}},
+        # Bytes, not characters: "é" is 2 bytes.
+        {"prompt": "go", "files": {"a": "é" * (MAX_FILES_BYTES // 2)}},
+        # Too many paths, too deep, or too many directories under few files.
+        {"prompt": "go", "files": {f"f{i}": "" for i in range(MAX_FILES_ENTRIES + 1)}},
+        {"prompt": "go", "files": {"/".join("d" * (MAX_FILES_DEPTH + 1)): "x"}},
+        {
+            "prompt": "go",
+            "files": {
+                "/".join([f"t{i}", *"d" * (MAX_FILES_DEPTH - 2)]): ""
+                for i in range(MAX_FILES_ENTRIES // (MAX_FILES_DEPTH - 1) + 1)
+            },
+        },
         {"prompt": "x" * (MAX_TEXT_LENGTH + 1)},
         {"prompt": "go", "system": "x" * (MAX_TEXT_LENGTH + 1)},
         {"prompt": "go", "model": "m" * 201},
@@ -61,6 +84,57 @@ def test_files_at_the_size_limit_are_accepted() -> None:
     JobSpec.model_validate({"prompt": "go", "files": {"a": "x" * (MAX_FILES_BYTES - 1)}})
     JobSpec.model_validate({"prompt": "go", "files": {"n" * MAX_NAME_BYTES: "x"}})
     JobSpec.model_validate({"prompt": "x" * MAX_TEXT_LENGTH})
+    JobSpec.model_validate({"prompt": "go", "files": {"a": "é" * ((MAX_FILES_BYTES - 1) // 2)}})
+
+
+def at_the_entry_and_depth_limits() -> dict[str, str]:
+    """Files under directories as deep as allowed, with as many entries as allowed."""
+    per_tree = MAX_FILES_DEPTH  # MAX_FILES_DEPTH - 1 directories and one file
+    trees = MAX_FILES_ENTRIES // per_tree
+    files = {"/".join([f"t{i}", *"d" * (MAX_FILES_DEPTH - 2), "f"]): "x" for i in range(trees)}
+    files |= {f"e{i}": "x" for i in range(MAX_FILES_ENTRIES - trees * per_tree)}
+    return files
+
+
+def test_files_at_the_entry_and_depth_limits_are_accepted() -> None:
+    files = at_the_entry_and_depth_limits()
+    JobSpec.model_validate({"prompt": "go", "files": files})
+    JobSpec.model_validate({"prompt": "go", "files": {"/".join("d" * MAX_FILES_DEPTH): "x"}})
+    with pytest.raises(ValidationError):
+        JobSpec.model_validate({"prompt": "go", "files": {**files, "one-more": "x"}})
+
+
+def test_a_seed_at_the_limits_leaves_the_watcher_room(tmp_path: Path) -> None:
+    """The watcher measures it, and it takes a small part of the default limits."""
+    files = at_the_entry_and_depth_limits()
+    workspace = prepare_workspace(tmp_path, JOB, files)
+    bounds = Bounds(DEFAULT_WORKSPACE_LIMIT_MIB * 1024 * 1024, DEFAULT_WORKSPACE_ENTRIES, 10**12)
+    size = workspace_size(workspace, bounds)
+    entries = sum(len(dirs) + len(names) for _, dirs, names in os.walk(workspace))
+    assert entries == MAX_FILES_ENTRIES
+    assert entries <= DEFAULT_WORKSPACE_ENTRIES // 10
+    assert MAX_FILES_DEPTH <= MAX_DEPTH // 8
+    assert size <= DEFAULT_WORKSPACE_LIMIT_MIB * 1024 * 1024 // 10
+
+
+def test_a_refused_seed_is_refused_fast_and_quotes_no_long_path() -> None:
+    """A seed of very deep paths is refused before its directories are walked."""
+    deep = {f"{i:04}" + "/a" * 509: "" for i in range(8_000)}
+    started = time.monotonic()
+    with pytest.raises(ValidationError) as refused:
+        JobSpec.model_validate({"prompt": "go", "files": deep})
+    assert time.monotonic() - started < 1
+    assert "levels deep" in str(refused.value)
+    # Too many paths is refused by their count, before any path is read.
+    many = {f"f{i}": "" for i in range(MAX_FILES_ENTRIES + 1)}
+    with pytest.raises(ValidationError) as refused:
+        JobSpec.model_validate({"prompt": "go", "files": many})
+    assert f"files name more than {MAX_FILES_ENTRIES:,} paths" in str(refused.value)
+    long = "/" + "x" * (MAX_PATH_BYTES * 4)
+    with pytest.raises(ValidationError) as refused:
+        JobSpec.model_validate({"prompt": "go", "files": {long: "x"}})
+    assert long not in str(refused.value)
+    assert f"longer than {MAX_PATH_BYTES} bytes" in str(refused.value)
 
 
 def test_sibling_files_and_nested_directories_are_accepted() -> None:

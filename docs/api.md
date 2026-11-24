@@ -86,7 +86,9 @@ steps. It takes the list's parameters and loads again every 5 s.
 - The answers of the cancel route are in
   [Cancel, deadline and budget](halt.md#what-the-cancel-route-answers).
 - `prompt` and `system` are limited to 1,000,000 characters each, `files` to
-  1 MiB. The size of a request body is not capped.
+  8 MiB of paths and contents, 10,000 entries and 32 levels
+  ([ADR 0032](adr/0032-seed-files-up-to-8-mib.md)).
+  The size of a request body is not capped.
 
 ## The event stream
 

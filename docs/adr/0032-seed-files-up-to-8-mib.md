@@ -1,0 +1,41 @@
+# 0032: Seed a job's workspace with up to 8 MiB of files
+
+Status: accepted, 2026-11-24.
+
+![1.2M tokens of distinct file text at 4 bytes per token is about 4.6 MiB. A 4 MiB limit falls short, the 8 MiB limit holds it, and the workspace watcher's 1024 MiB is far above both.](../diagrams/seed-cap.svg)
+
+## Context
+
+A spec's `files` seed the job's workspace and were capped at 1 MiB, paths
+and contents. A job that has to work through more text than one context
+window holds needs at least 1.2M tokens of distinct file text. At about 4
+bytes per token that is about 4.6 MiB.
+
+## Options
+
+| Option | For | Against |
+|---|---|---|
+| 4 MiB | A smaller row. | Can fall short of 1.2M tokens. |
+| 8 MiB for every job | Covers the need without counting tokens. One constant. | A larger row and a larger `GET /jobs/{id}`. |
+| A limit set per job or per operator | Fits each job. | A new API or settings surface for one need. |
+| A read-only data set the operator mounts into the workspace | No size in the row. | More to build. The later route for larger input. |
+
+## Decision
+
+`MAX_FILES_BYTES` is 8 MiB, for every job. It still counts paths and
+contents. The size does not depend on a token count.
+
+The seed is also capped at 10,000 entries (files plus the directories their
+paths make) and 32 levels. Without these, 8 MiB of short or deep paths makes
+millions of directories before the watcher first looks.
+
+## Consequences
+
+- A job row can hold about 8 MiB of spec, and `GET /jobs/{id}` returns it whole.
+- The body of `POST /jobs` is still not capped ([API](../api.md#refusals)).
+- A seed takes at most a tenth of the watcher's default limits of 1024 MiB,
+  100,000 entries and 256 levels
+  ([Sandbox](../sandbox.md#workspace-size)). A test measures one at the caps.
+- The validator checks counts and sizes before it walks paths, so its work
+  is bounded.
+- Text at more than 4 bytes per token may still fall short of 1.2M tokens.

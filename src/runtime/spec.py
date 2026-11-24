@@ -9,8 +9,13 @@ from runtime.scope import MAX_TARGETS, Target
 from runtime.tools.paths import check_relative
 
 # The spec is one database row. Files that seed the workspace are part of it,
-# so they are kept small. The limit counts paths and contents.
-MAX_FILES_BYTES = 1024 * 1024
+# so they are bounded. The limit counts paths and contents (ADR 0032).
+MAX_FILES_BYTES = 8 * 1024 * 1024
+# Files plus the directories their paths make, and levels of directories.
+# Both stay far under the workspace watcher's 100,000 entries and 256 levels,
+# so a seed leaves the job room and the watcher can measure it (ADR 0032).
+MAX_FILES_ENTRIES = 10_000
+MAX_FILES_DEPTH = 32
 # Limits most file systems have: one name, and a whole path.
 MAX_NAME_BYTES = 255
 MAX_PATH_BYTES = 1024
@@ -56,21 +61,34 @@ class JobSpec(BaseModel):
 
         Each path has to be in its plain form, so two spellings of one path
         (`a` and `./a`) cannot both be given. No path may be a directory of
-        another (`a` and `a/b`).
+        another (`a` and `a/b`). The counts and sizes are checked first, so
+        the work is bounded and no error quotes a path longer than
+        MAX_PATH_BYTES.
         """
-        for path in files:
-            plain = check_relative(path)
-            if str(plain) != path:
-                raise ValueError(f"{path!r} is not a plain path; write it as {str(plain)!r}")
-            if _size(path) > MAX_PATH_BYTES:
-                raise ValueError(f"a path is longer than {MAX_PATH_BYTES} bytes")
-            if any(_size(part) > MAX_NAME_BYTES for part in plain.parts):
-                raise ValueError(f"a name in a path is longer than {MAX_NAME_BYTES} bytes")
-        for path in files:
-            for parent in PurePosixPath(path).parents:
-                if str(parent) in files:
-                    raise ValueError(f"{str(parent)!r} is given as a file and as a directory")
+        if len(files) > MAX_FILES_ENTRIES:
+            raise ValueError(f"files name more than {MAX_FILES_ENTRIES:,} paths")
         size = sum(_size(path) + _size(content) for path, content in files.items())
         if size > MAX_FILES_BYTES:
             raise ValueError(f"files hold {size} bytes; the limit is {MAX_FILES_BYTES}")
+        for path in files:
+            if _size(path) > MAX_PATH_BYTES:
+                raise ValueError(f"a path is longer than {MAX_PATH_BYTES} bytes")
+            plain = check_relative(path)
+            if str(plain) != path:
+                raise ValueError(f"{path!r} is not a plain path; write it as {str(plain)!r}")
+            if any(_size(part) > MAX_NAME_BYTES for part in plain.parts):
+                raise ValueError(f"a name in a path is longer than {MAX_NAME_BYTES} bytes")
+            if len(plain.parts) > MAX_FILES_DEPTH:
+                raise ValueError(f"a path is more than {MAX_FILES_DEPTH} levels deep")
+        directories: set[str] = set()
+        for path in files:
+            # parents ends with `.`, the workspace itself.
+            for parent in PurePosixPath(path).parents[:-1]:
+                if str(parent) in files:
+                    raise ValueError(f"{str(parent)!r} is given as a file and as a directory")
+                directories.add(str(parent))
+        if len(files) + len(directories) > MAX_FILES_ENTRIES:
+            raise ValueError(
+                f"files and their directories are more than {MAX_FILES_ENTRIES:,} entries"
+            )
         return files
