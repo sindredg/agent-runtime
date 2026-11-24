@@ -1,7 +1,9 @@
 """The fake provider: scripted answers in the Anthropic Messages format.
 
 `POST /v1/messages` picks a scenario by the request's `model` and a turn by
-the number of assistant messages in the request. It answers as a stream of
+the number of assistant messages in the request, counted on from a summary's
+marker. A request with `tool_choice` `none` gets the scenario's summary
+(`fake_provider.summary`). It answers as a stream of
 server-sent events when the request sets `stream`, otherwise as one JSON
 message. Every request is kept in a log that tests read back as the record
 of what the provider was really asked.
@@ -36,6 +38,7 @@ from fake_provider.faults import SPEND_CAP_DETAILS, BrokenStream, Fault
 from fake_provider.messages import build_message, encode_sse, estimate_tokens, stream_events
 from fake_provider.requests import RequestError, check_request, turn_index
 from fake_provider.scenario import Scenario, load_scenarios
+from fake_provider.summary import build_summary, place
 
 # The log keeps the newest entries and drops older ones. The cap is on the
 # number of requests, not on their size.
@@ -182,8 +185,8 @@ def create_app(
 
         return StreamingResponse(events(), media_type="text/event-stream", headers=headers)
 
-    def answer(body: Any, headers: Any) -> tuple[str, int, dict[str, Any], float]:
-        """The scenario name, turn, message and delay for a request, or RequestError."""
+    def answer(body: Any, headers: Any) -> tuple[str, dict[str, Any], dict[str, Any], float]:
+        """The scenario name, what to log, the message and the delay, or RequestError."""
         if "x-api-key" not in headers and "authorization" not in headers:
             raise RequestError(401, "authentication_error", "x-api-key header is required")
         if "anthropic-version" not in headers:
@@ -193,7 +196,28 @@ def create_app(
         scenario = known.get(name)
         if scenario is None:
             raise RequestError(404, "not_found_error", f"model: {name}")
-        turn = turn_index(messages)
+        summaries, start = place(messages)
+        turn = start + turn_index(messages)
+        prompt = {key: body.get(key) for key in ("system", "tools", "messages")}
+        if body.get("tool_choice") == {"type": "none"}:
+            if scenario.summary is None:
+                # So that a test cannot pass on a summary request it did not expect.
+                raise RequestError(
+                    400,
+                    "invalid_request_error",
+                    f"scenario {name} has no summary; the request sets tool_choice none",
+                )
+            number = summaries + 1
+            message = build_summary(
+                name,
+                scenario.summary,
+                number,
+                turn,
+                model=name,
+                input_tokens=estimate_tokens(prompt),
+                max_tokens=body["max_tokens"],
+            )
+            return name, {"turn": turn, "summary": number}, message, scenario.summary.delay_seconds
         if turn >= len(scenario.turns):
             raise RequestError(
                 400,
@@ -201,7 +225,6 @@ def create_app(
                 f"scenario {name} has {len(scenario.turns)} turns;"
                 f" the request asks for turn {turn + 1}",
             )
-        prompt = {key: body.get(key) for key in ("system", "tools", "messages")}
         message = build_message(
             name,
             scenario,
@@ -210,7 +233,7 @@ def create_app(
             input_tokens=estimate_tokens(prompt),
             max_tokens=body["max_tokens"],
         )
-        return name, turn, message, scenario.turns[turn].delay_seconds
+        return name, {"turn": turn}, message, scenario.turns[turn].delay_seconds
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
@@ -234,6 +257,7 @@ def create_app(
             "received_at": datetime.now(UTC).isoformat(),
             "user_id": metadata.get("user_id") if isinstance(metadata, dict) else None,
             "anthropic_version": request.headers.get("anthropic-version"),
+            "tool_choice": body.get("tool_choice") if isinstance(body, dict) else None,
             "body": body,
             # The hash of the bytes received, so a test can show that a request
             # sent again is the same to the byte.
@@ -252,7 +276,7 @@ def create_app(
                 refused.headers["retry-after"] = str(window.retry_after)
             return refused
         try:
-            name, turn, message, delay = answer(body, request.headers)
+            name, place_of, message, delay = answer(body, request.headers)
         except RequestError as refused:
             entry.update(status=refused.status, error=refused.message)
             return error(refused.status, refused.kind, refused.message, request_id)
@@ -261,7 +285,7 @@ def create_app(
         entry.update(
             status=200,
             scenario=name,
-            turn=turn,
+            **place_of,
             response_id=message["id"],
             usage={key: message["usage"][key] for key in ("input_tokens", "output_tokens")},
         )

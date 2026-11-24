@@ -2,7 +2,11 @@
 
 A scenario is a list of turns. Turn N is the assistant message the provider
 returns when the request already holds N assistant messages, so sending the
-same conversation again always gets the same answer.
+same conversation again always gets the same answer. After a summary, turns
+are counted on from the turn its marker names (`fake_provider.summary`).
+
+A scenario with a `summary` section answers a request with `tool_choice`
+`none` with a summary. Without one, such a request is refused.
 """
 
 import math
@@ -99,9 +103,26 @@ class Turn(_Strict):
         return self
 
 
+# The bad answers a summary can be scripted to give: a tool call, a refusal,
+# empty text, text that is only white space, or a stop other than end_turn.
+SummaryFault = Literal["tool_use", "refusal", "empty", "whitespace", "max_tokens", "stop_sequence"]
+
+
+class Summary(_Strict):
+    """The answer to a summary request: the request with `tool_choice` `none`."""
+
+    # The text of every summary. The fake adds its markers after it.
+    text: str = Field(min_length=1)
+    # Seconds to wait before the answer's content is sent, as for a turn.
+    delay_seconds: float = Field(default=0, ge=0, le=MAX_DELAY_SECONDS, allow_inf_nan=False)
+    # A bad answer for a summary, by its number in the job, from 1.
+    bad: dict[Annotated[int, Field(ge=1)], SummaryFault] = Field(default_factory=dict)
+
+
 class Scenario(_Strict):
     description: str = ""
     turns: list[Turn] = Field(min_length=1)
+    summary: Summary | None = None
 
 
 def parse_scenario(text: str) -> Scenario:

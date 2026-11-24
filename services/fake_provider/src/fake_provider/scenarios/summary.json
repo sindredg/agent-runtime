@@ -1,0 +1,137 @@
+{
+  "description": "Reads eight files, one per turn, then ends. Answers a summary request with a fixed text after a second.",
+  "turns": [
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Reading a.txt next."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "a.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Reading b.txt next."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "b.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Reading c.txt next."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "c.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Reading d.txt next."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "d.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Reading e.txt next."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "e.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Reading f.txt next."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "f.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Reading g.txt next."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "g.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Reading h.txt next."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "h.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Done: all eight notes files are read."
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "text": "The task: read the notes files a.txt to h.txt in order, then say done. Read so far: every file before the turn named below.",
+    "delay_seconds": 2
+  }
+}
