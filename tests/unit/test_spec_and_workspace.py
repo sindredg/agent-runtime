@@ -129,7 +129,7 @@ def test_a_refused_seed_is_refused_fast_and_quotes_no_long_path() -> None:
     many = {f"f{i}": "" for i in range(MAX_FILES_ENTRIES + 1)}
     with pytest.raises(ValidationError) as refused:
         JobSpec.model_validate({"prompt": "go", "files": many})
-    assert f"files name more than {MAX_FILES_ENTRIES} paths" in str(refused.value)
+    assert f"files name more than {MAX_FILES_ENTRIES:,} paths" in str(refused.value)
     long = "/" + "x" * (MAX_PATH_BYTES * 4)
     with pytest.raises(ValidationError) as refused:
         JobSpec.model_validate({"prompt": "go", "files": {long: "x"}})

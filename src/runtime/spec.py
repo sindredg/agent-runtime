@@ -66,7 +66,7 @@ class JobSpec(BaseModel):
         MAX_PATH_BYTES.
         """
         if len(files) > MAX_FILES_ENTRIES:
-            raise ValueError(f"files name more than {MAX_FILES_ENTRIES} paths")
+            raise ValueError(f"files name more than {MAX_FILES_ENTRIES:,} paths")
         size = sum(_size(path) + _size(content) for path, content in files.items())
         if size > MAX_FILES_BYTES:
             raise ValueError(f"files hold {size} bytes; the limit is {MAX_FILES_BYTES}")
@@ -89,6 +89,6 @@ class JobSpec(BaseModel):
                 directories.add(str(parent))
         if len(files) + len(directories) > MAX_FILES_ENTRIES:
             raise ValueError(
-                f"files and their directories are more than {MAX_FILES_ENTRIES} entries"
+                f"files and their directories are more than {MAX_FILES_ENTRIES:,} entries"
             )
         return files
