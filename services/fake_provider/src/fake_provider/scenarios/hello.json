@@ -12,8 +12,5 @@
         {"type": "text", "text": "The file hello.txt holds a short greeting. The job is done."}
       ]
     }
-  ],
-  "summary": {
-    "text": "The task: read hello.txt and say what it holds. It was read; it holds a short greeting. Left to do: say so."
-  }
+  ]
 }
