@@ -25,6 +25,7 @@ from typing import Any
 import httpx2
 import pytest
 
+from runtime.logs import json_safe, text_safe
 from runtime.provider.base import ModelRequest, ModelResponse
 from runtime.provider.messages import AnthropicProvider
 from runtime.worker.budget import input_bound
@@ -289,11 +290,18 @@ def exchanges() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     fake = raw_exchange("fake")
     real = raw_exchange("claude")
     report = REPORTS / datetime.now(UTC).strftime("%Y-%m-%dT%H%M%SZ")
-    report.mkdir(parents=True)
-    (report / "fake.json").write_text(json.dumps(fake, indent=2) + "\n")
-    (report / "api.json").write_text(json.dumps(real, indent=2) + "\n")
-    (report / "api-only.txt").write_text("".join(f"{line}\n" for line in api_only(fake, real)))
+    write_report(report, fake, real)
     return fake, real
+
+
+def write_report(report: Path, fake: list[dict[str, Any]], real: list[dict[str, Any]]) -> None:
+    """Both exchanges and what only the API sent, with workflow-command markers escaped."""
+    report.mkdir(parents=True)
+    (report / "fake.json").write_text(json_safe(json.dumps(fake, indent=2)) + "\n")
+    (report / "api.json").write_text(json_safe(json.dumps(real, indent=2)) + "\n")
+    (report / "api-only.txt").write_text(
+        text_safe("".join(f"{line}\n" for line in api_only(fake, real)))
+    )
 
 
 def test_everything_the_fake_returns_is_also_in_the_real_responses(

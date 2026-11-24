@@ -28,6 +28,8 @@ from typing import Any
 
 import httpx2
 
+from runtime.logs import text_safe
+
 from .conftest import FINAL, SHORT_LEASE, WORKERS, WORKLOAD, Chaos, docker, record
 
 JOBS = int(os.environ.get("CHAOS_NOTIFY_JOBS", "20"))
@@ -173,7 +175,7 @@ def judge(
     for job_id in jobs:
         job = chaos.job(job_id)
         if job["status"] != "succeeded":
-            problems.append(f"{job_id} is {job['status']} ({job['error']})")
+            problems.append(text_safe(f"{job_id} is {job['status']} ({job['error']})"))
     return problems, counts
 
 

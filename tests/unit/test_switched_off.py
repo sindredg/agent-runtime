@@ -777,13 +777,13 @@ def test_the_key_reaches_a_step_only_after_the_refusals() -> None:
     run = index(claude, "SWITCHED_OFF_PROVIDER: claude")
     assert run in with_key
     assert "if: inputs.suite == 'switched-off'\n" in claude[run]
-    assert "run: make switched-off\n" in claude[run]
+    assert "\n          make switched-off\n" in claude[run]
 
 
 def test_the_job_on_the_fake_provider_checks_the_entry_before_it_runs_it() -> None:
     fake = steps("fake")
     entry = index(fake, 'switched_off.py dispatch "$SWITCHED_OFF" fake')
-    assert entry < index(fake, "run: make switched-off\n")
+    assert entry < index(fake, "\n          make switched-off\n")
     assert "if: inputs.suite == 'switched-off' && github.ref != 'refs/heads/main'" in "".join(fake)
 
 
@@ -1057,7 +1057,7 @@ def test_each_entry_is_refused_off_main_and_checked_before_it_runs() -> None:
     assert "if: github.ref != 'refs/heads/main'" in each[0]
     entry = index(each, 'switched_off.py dispatch "$SWITCHED_OFF" fake')
     assert "rehears" not in job("fake-entries")
-    assert entry < index(each, "run: make switched-off")
+    assert entry < index(each, "\n          make switched-off\n")
 
 
 @pytest.mark.parametrize(
