@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from runtime.store.steps import Step, StepKind
+from runtime.store.steps import StatusCause, Step, StepKind
 
 
 @dataclass(slots=True)
@@ -53,11 +53,17 @@ class Replay:
     # The id of every tool call the model has made in this job. A call's
     # operation id is built from its id, so no later call may use one again.
     used_ids: set[str] = field(default_factory=set)
-    # Busy answers from the provider since the last response: the waits
-    # recorded as `status_changed` steps to `waiting` (ADR 0018). The next
-    # wait grows with it. A request a stopped worker left without an answer
-    # is not counted: it was not refused.
-    busy_in_a_row: int = 0
+    # Waits for the provider since the last response, of either cause: the
+    # `status_changed` steps to `waiting` (ADR 0018). The next wait grows
+    # with it. A request a stopped worker left without an answer is not
+    # counted: it was not refused.
+    waits_in_a_row: int = 0
+    # Of those, the waits for a provider error. A busy wait leaves this
+    # count alone, so a provider alternating 429 and 500 still reaches the
+    # cap (ADR 0030).
+    errors_in_a_row: int = 0
+    # Waits for a provider error over the job's life. No response resets it.
+    errors_in_job: int = 0
 
     @property
     def needs_model_call(self) -> bool:
@@ -79,7 +85,7 @@ class Replay:
         and an `error` changes nothing: a request without a response is
         simply sent again. A question to a person and its answer are kept
         for the worker and are not part of the conversation, and so is a
-        wait for a busy provider.
+        wait for the provider.
         """
         self.last_seq = step.seq
         payload = step.payload
@@ -103,9 +109,13 @@ class Replay:
             self.stop_reason = payload["stop_reason"]
             self.interrupted, self.interrupted_at = None, None
             self._forget_question()
-            self.busy_in_a_row = 0
+            self.waits_in_a_row = 0
+            self.errors_in_a_row = 0
         elif step.kind is StepKind.STATUS_CHANGED and payload.get("to") == "waiting":
-            self.busy_in_a_row += 1
+            self.waits_in_a_row += 1
+            if payload.get("cause") == StatusCause.PROVIDER_ERROR:
+                self.errors_in_a_row += 1
+                self.errors_in_job += 1
         elif step.kind is StepKind.TOOL_INTENT:
             # Every run of a tool has its own intent, and an approval covers
             # one run. The intent uses it up: if this run is interrupted

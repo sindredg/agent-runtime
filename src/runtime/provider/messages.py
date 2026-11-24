@@ -18,10 +18,11 @@ _RETRYABLE_STATUSES = frozenset({408, 409, 429})
 _RETRYABLE_ERROR_TYPES = frozenset(
     {"overloaded_error", "api_error", "rate_limit_error", "timeout_error"}
 )
-# The provider is busy: rate limited (429) or overloaded (529, or the same
-# error type inside a stream). The job waits and tries again (ADR 0018).
+# The provider is busy: it refused the call with a 429 or 529. The job waits
+# and tries again (ADR 0018). An error inside a stream is not counted as busy,
+# whatever its type: output may have begun, so the call can be billed, and it
+# falls under the caps on provider errors (ADR 0030).
 _BUSY_STATUSES = frozenset({429, 529})
-_BUSY_ERROR_TYPES = frozenset({"rate_limit_error", "overloaded_error"})
 # A 429 for a spend cap. It has the rate limit's type and no `retry-after`,
 # and waiting does not lift it.
 _SPEND_CAP = "enforced_spend_limit_reached"
@@ -66,6 +67,14 @@ def retry_after(value: str | None) -> float | None:
     return min(seconds, MAX_RETRY_AFTER)
 
 
+def _not_a_stream(error: Exception) -> ProviderError:
+    return ProviderError(
+        f"the provider's answer is not a message stream: {error!r}",
+        status=None,
+        retryable=True,
+    )
+
+
 class AnthropicProvider:
     def __init__(
         self,
@@ -100,14 +109,20 @@ class AnthropicProvider:
                 messages=request.messages,  # type: ignore[arg-type]
                 **optional,
             ) as stream:
-                if request.mid_stream is not None:
-                    # Read event by event up to the first content block, tell
-                    # the caller, and let the SDK collect the rest as usual.
-                    async for event in stream:
-                        if event.type == "content_block_start":
-                            request.mid_stream()
-                            break
-                message = await stream.get_final_message()
+                try:
+                    if request.mid_stream is not None:
+                        # Read event by event up to the first content block, tell
+                        # the caller, and let the SDK collect the rest as usual.
+                        async for event in stream:
+                            if event.type == "content_block_start":
+                                request.mid_stream()
+                                break
+                    message = await stream.get_final_message()
+                except (IndexError, AttributeError) as error:
+                    # Events the SDK cannot put together. Caught only here, so
+                    # a fault in building the request is not taken for a bad
+                    # answer and sent again.
+                    raise _not_a_stream(error) from error
         except anthropic.APIStatusError as error:
             status = error.status_code
             if status < 400:
@@ -120,7 +135,6 @@ class AnthropicProvider:
                     f"provider sent an error during the stream: {kind}: {error.message}",
                     status=None,
                     retryable=not capped and kind in _RETRYABLE_ERROR_TYPES,
-                    busy=not capped and kind in _BUSY_ERROR_TYPES,
                 ) from error
             capped = status == 429 and _spend_cap(error)
             raise ProviderError(
@@ -140,11 +154,7 @@ class AnthropicProvider:
             # What the SDK raises for a 200 that is not a message stream: an
             # empty body, other content, or a line that is not JSON. The
             # answer was bad, not the request, so it may be sent again.
-            raise ProviderError(
-                f"the provider's answer is not a message stream: {error!r}",
-                status=None,
-                retryable=True,
-            ) from error
+            raise _not_a_stream(error) from error
         except (ValueError, TypeError, RuntimeError) as error:
             # The SDK refused the request or could not use the response for
             # a reason that will not change on a second try.

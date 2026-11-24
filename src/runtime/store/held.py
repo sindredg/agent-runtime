@@ -169,18 +169,21 @@ _RECORDED = frozenset({JobStatus.NEEDS_APPROVAL, JobStatus.CANCELLED, JobStatus.
 # Moves a requested cancel turns into `cancelled`: nobody else would stop
 # such a job before its deadline or its `not_before`.
 _CANCELLED_INSTEAD = frozenset({JobStatus.NEEDS_APPROVAL, JobStatus.WAITING})
+# Why a job can wait.
+_WAIT_CAUSES = frozenset({StatusCause.PROVIDER_BUSY, StatusCause.PROVIDER_ERROR})
 
 
 @dataclass(frozen=True, slots=True)
 class Wait:
-    """Why and how long a job waits after a busy provider (ADR 0018)."""
+    """Why and how long a job waits for the provider (ADR 0018, ADR 0030)."""
 
     seconds: float
-    # The busy answers in a row, this one included.
+    # The waits since the last response, of either cause, this one included.
     attempt: int
     # The provider's `retry-after`, None without one.
     retry_after: float | None
     error: str
+    cause: StatusCause = StatusCause.PROVIDER_BUSY
 
 
 class QuestionReason(StrEnum):
@@ -216,7 +219,7 @@ async def leave_running(
     """Move the held job from `running` to `new_status` and give up the lease.
 
     This is how a worker finishes a job, parks it for an approval, makes it
-    wait for a busy provider, and releases it back to `queued`. A stored
+    wait for the provider, and releases it back to `queued`. A stored
     error is cleared. A job that would be parked for an approval or made to
     wait while its cancel is requested is `cancelled` instead: nobody else
     would stop it before its deadline or its `not_before`. A released job
@@ -251,7 +254,11 @@ async def leave_running(
         raise ValueError(f"not a question: {question!r}")
     waiting: dict[str, Any] = {}
     if wait is not None:
-        if not 0 <= wait.seconds < float("inf") or wait.attempt < 1:
+        if (
+            not 0 <= wait.seconds < float("inf")
+            or wait.attempt < 1
+            or wait.cause not in _WAIT_CAUSES
+        ):
             raise ValueError(f"not a wait: {wait!r}")
         waiting = {
             "attempt": wait.attempt,
@@ -289,7 +296,10 @@ async def leave_running(
     held = moved.cte("held")
     cause = case(
         (held.c.status == JobStatus.CANCELLED.value, StatusCause.CANCEL_REQUESTED.value),
-        (held.c.status == JobStatus.WAITING.value, StatusCause.PROVIDER_BUSY.value),
+        (
+            held.c.status == JobStatus.WAITING.value,
+            (wait.cause if wait is not None else StatusCause.PROVIDER_BUSY).value,
+        ),
         else_=StatusCause.APPROVAL_REQUESTED.value,
     )
     change: ColumnElement[Any] = func.jsonb_build_object(

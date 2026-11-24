@@ -109,7 +109,7 @@ the WHERE clauses of the partial indexes.
 | `approval_given` | By `POST /jobs/{id}/approve` | `tool_use_id`, `operation_id`, `question` |
 | `approval_denied` | By `POST /jobs/{id}/deny` | `tool_use_id`, `operation_id`, `question` |
 | `error` | When the job fails, whoever fails it | `message` |
-| `status_changed` | With a cancel, a park for approval and a wait for a busy provider, in the same statement or transaction | `from`, `to`, `cause` (`cancel_requested`, `approval_requested` or `provider_busy`). A wait adds [its details](backoff.md#the-step). |
+| `status_changed` | With a cancel, a park for approval and a wait for the provider, in the same statement or transaction | `from`, `to`, `cause` (`cancel_requested`, `approval_requested`, `provider_busy` or `provider_error`). A wait adds [its details](backoff.md#the-step). |
 | `notification_sent` | When the receiver answered 2xx and the job still waits on that question. Once per question. | `question` |
 
 A new kind needs a migration: the kinds are a CHECK constraint.

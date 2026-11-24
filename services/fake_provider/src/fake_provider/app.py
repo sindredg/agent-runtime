@@ -9,9 +9,13 @@ of what the provider was really asked.
 `PUT /_fake/busy` makes it answer every request for one model, or for all,
 with 429 `rate_limit_error` or 529 `overloaded_error` for a number of seconds,
 the way the Claude API does when it is rate limited or overloaded.
+
+`PUT /_fake/fault` makes the next N requests for one model fail in one named
+way (`fake_provider.faults`). Each stays in the log with what it was answered.
 """
 
 import asyncio
+import hashlib
 import json
 import os
 import time
@@ -27,6 +31,8 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from allowed_hosts import AllowedHosts
+from fake_provider import faults
+from fake_provider.faults import SPEND_CAP_DETAILS, BrokenStream, Fault
 from fake_provider.messages import build_message, encode_sse, estimate_tokens, stream_events
 from fake_provider.requests import RequestError, check_request, turn_index
 from fake_provider.scenario import Scenario, load_scenarios
@@ -106,6 +112,20 @@ def create_app(
     counter = iter(range(1, 2**62))
     # The busy window: its settings, and when it ends on the monotonic clock.
     busy: list[tuple[Busy, float]] = []
+    # The faults still to answer with, per model: the fault and how many are left.
+    pending_faults: dict[str, tuple[Fault, int]] = {}
+
+    def next_fault(body: Any) -> Fault | None:
+        """The fault this request gets, counted off. None for a request without one."""
+        model = body.get("model") if isinstance(body, dict) else None
+        if not isinstance(model, str) or model not in pending_faults:
+            return None
+        fault, left = pending_faults[model]
+        if left > 1:
+            pending_faults[model] = (fault, left - 1)
+        else:
+            del pending_faults[model]
+        return fault
 
     def busy_now(body: Any) -> Busy | None:
         """The busy window this request falls into, or None."""
@@ -118,15 +138,49 @@ def create_app(
         model = body.get("model") if isinstance(body, dict) else None
         return window if window.model in (None, model) else None
 
-    def error(status: int, kind: str, message: str, request_id: str) -> Response:
+    def error(
+        status: int,
+        kind: str,
+        message: str,
+        request_id: str,
+        details: dict[str, str] | None = None,
+    ) -> Response:
+        detail: dict[str, Any] = {"type": kind, "message": message}
+        if details is not None:
+            detail["details"] = details
         return _json(
-            {
-                "type": "error",
-                "error": {"type": kind, "message": message},
-                "request_id": request_id,
-            },
+            {"type": "error", "error": detail, "request_id": request_id},
             status,
         )
+
+    async def answer_fault(fault: Fault, entry: dict[str, Any], model: str) -> Response:
+        """The faulted answer. The log entry says what was answered before it is sent."""
+        request_id, seq = entry["request_id"], entry["seq"]
+        status, kind = fault.answered()
+        entry.update(fault=fault.kind, status=status, error=kind, retry_after=fault.retry_after)
+        headers = {"request-id": request_id}
+        if fault.kind == "hold":
+            assert fault.seconds is not None  # noqa: S101 - the validator requires it
+            await asyncio.sleep(fault.seconds)
+        if fault.kind in ("status", "hold", "spend_cap"):
+            assert kind is not None  # noqa: S101 - these kinds all have an error type
+            details = SPEND_CAP_DETAILS if fault.kind == "spend_cap" else None
+            refused = error(status, kind, "the fake provider's fault", request_id, details)
+            refused.headers.update(headers)
+            if fault.retry_after is not None:
+                refused.headers["retry-after"] = str(fault.retry_after)
+            return refused
+        if fault.kind == "not_a_stream":
+            return Response(faults.NOT_A_STREAM, media_type="text/html", headers=headers)
+        parts = faults.stream_parts(fault, model, seq)
+
+        async def events() -> AsyncIterator[bytes]:
+            for part in parts:
+                yield part
+            if fault.kind == "broken_stream":
+                raise BrokenStream
+
+        return StreamingResponse(events(), media_type="text/event-stream", headers=headers)
 
     def answer(body: Any, headers: Any) -> tuple[str, int, dict[str, Any], float]:
         """The scenario name, turn, message and delay for a request, or RequestError."""
@@ -164,11 +218,12 @@ def create_app(
 
     @app.post("/v1/messages")
     async def create_message(request: Request) -> Response:
-        """A scripted answer, or the busy window's error while one is set."""
+        """A scripted answer, a counted fault, or the busy window's error while one is set."""
         seq = next(counter)
         request_id = f"req_fake_{seq:08d}"
+        raw = await request.body()
         try:
-            body = json.loads(await request.body())
+            body = json.loads(raw)
         # RecursionError: JSON nested deeper than the parser's limit.
         except ValueError, RecursionError:
             body = None
@@ -180,8 +235,14 @@ def create_app(
             "user_id": metadata.get("user_id") if isinstance(metadata, dict) else None,
             "anthropic_version": request.headers.get("anthropic-version"),
             "body": body,
+            # The hash of the bytes received, so a test can show that a request
+            # sent again is the same to the byte.
+            "body_sha256": hashlib.sha256(raw).hexdigest(),
         }
         log.append(entry)
+        # Before the busy window, so that a count of faults stays exact.
+        if (fault := next_fault(body)) is not None:
+            return await answer_fault(fault, entry, body["model"])
         if (window := busy_now(body)) is not None:
             kind = BUSY_ERRORS[window.status]
             entry.update(status=window.status, error=kind, retry_after=window.retry_after)
@@ -239,6 +300,15 @@ def create_app(
     @app.delete("/_fake/busy", status_code=204)
     async def clear_busy() -> None:
         busy.clear()
+
+    @app.put("/_fake/fault", status_code=204)
+    async def set_fault(fault: Annotated[Fault, Body()]) -> None:
+        """Answer the next `count` requests for `model` with this fault. Replaces its last one."""
+        pending_faults[fault.model] = (fault, fault.count)
+
+    @app.delete("/_fake/fault", status_code=204)
+    async def clear_faults() -> None:
+        pending_faults.clear()
 
     return app
 

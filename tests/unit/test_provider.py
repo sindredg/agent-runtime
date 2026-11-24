@@ -215,9 +215,10 @@ def test_a_spend_cap_inside_a_stream_is_not_waited_out() -> None:
 @pytest.mark.parametrize(
     ("kind", "retryable", "busy"),
     [
-        ("overloaded_error", True, True),
+        # Output may have begun, so the call can be billed: it falls under the caps.
+        ("overloaded_error", True, False),
         ("api_error", True, False),
-        ("rate_limit_error", True, True),
+        ("rate_limit_error", True, False),
         ("invalid_request_error", False, False),
     ],
 )
@@ -242,14 +243,63 @@ def test_an_error_event_inside_a_started_stream_is_classified_by_its_type(
         httpx2.Response(200, json={"hello": "not a stream"}),
         httpx2.Response(200, text="<html>a proxy's page</html>"),
         httpx2.Response(204),
+        sse(
+            [
+                STREAM[0],
+                encode_sse(
+                    "content_block_delta",
+                    {
+                        "type": "content_block_delta",
+                        "index": 5,
+                        "delta": {"type": "text_delta", "text": "x"},
+                    },
+                ),
+            ]
+        ),
+        sse([encode_sse("message_start", {"type": "message_start", "message": "text"})]),
     ],
-    ids=["empty", "ping-only", "bad-json-line", "json-body", "html-body", "no-content"],
+    ids=[
+        "empty",
+        "ping-only",
+        "bad-json-line",
+        "json-body",
+        "html-body",
+        "no-content",
+        "delta-out-of-range",
+        "message-is-a-string",
+    ],
 )
 def test_a_200_that_is_not_a_message_stream_is_a_provider_error(response: httpx2.Response) -> None:
     with pytest.raises(ProviderError) as raised:
         complete(lambda request: response)
     assert raised.value.retryable is True
     assert raised.value.status is None
+
+
+@pytest.mark.parametrize("fault", [AttributeError, IndexError])
+def test_a_fault_in_building_the_request_is_not_taken_for_a_bad_answer(
+    monkeypatch: pytest.MonkeyPatch, fault: type[Exception]
+) -> None:
+    """It would only fail again, so it is not sent again as a provider error."""
+
+    def broken(**_: object) -> None:
+        raise fault("a fault before anything was sent")
+
+    async def run() -> None:
+        http_client = httpx2.AsyncClient(
+            transport=httpx2.MockTransport(lambda request: httpx2.Response(500))
+        )
+        provider = AnthropicProvider(
+            api_key="k", base_url="http://provider", http_client=http_client
+        )
+        monkeypatch.setattr(provider._client.messages, "stream", broken)
+        try:
+            await provider.complete(REQUEST)
+        finally:
+            await provider.aclose()
+
+    with pytest.raises(fault):
+        asyncio.run(run())
 
 
 def test_the_base_url_never_comes_from_the_process_environment(

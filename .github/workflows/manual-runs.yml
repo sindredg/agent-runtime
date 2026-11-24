@@ -60,6 +60,8 @@ on:
           - busy-answer-fails
           - retry-after-ignored
           - claim-ignores-not-before
+          - provider-error-fails
+          - provider-error-cap-off
           - stream-cut-off
           - result-cut-off
           - tool-timeout-off

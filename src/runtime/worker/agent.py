@@ -45,7 +45,7 @@ from runtime.store.held import LeaseLost, Wait
 from runtime.store.jobs import DEADLINE_ERROR, Job
 from runtime.store.payload import InvalidPayload, check_json
 from runtime.store.status import FINAL_STATUSES, JobStatus
-from runtime.store.steps import Step, StepKind, read_steps
+from runtime.store.steps import StatusCause, Step, StepKind, read_steps
 from runtime.tools.base import AnyTool, Tool, ToolCall, ToolRegistry, ToolResult, operation_id
 from runtime.tools.sandboxed import SandboxTool
 from runtime.worker import backoff
@@ -90,32 +90,56 @@ class _StoreUnreachable(Exception):
     """A read or write of the job could not be sent to the database."""
 
 
-class _ProviderBusy(Exception):
-    """The provider is rate limited or overloaded. The job waits (ADR 0018)."""
+class _ProviderWait(Exception):
+    """The job waits for the provider, then sends its request again."""
+
+    cause: StatusCause
+    # Stored when the provider's error text cannot be.
+    instead: str
 
     def __init__(self, error: ProviderError, attempt: int) -> None:
         super().__init__(str(error))
         self.error = error
-        # Busy answers in a row, this one included.
+        # Waits since the last response, of either cause, this one included.
         self.attempt = attempt
 
 
-# The longest provider error text a wait keeps in its step. The step log is
-# append-only and a job can wait thousands of times; a longer text is cut.
-WAIT_ERROR_LENGTH = 1000
+class _ProviderBusy(_ProviderWait):
+    """The provider is rate limited or overloaded (ADR 0018)."""
+
+    cause = StatusCause.PROVIDER_BUSY
+    instead = "the provider was busy"
+
+
+class _ProviderFault(_ProviderWait):
+    """The provider failed in a way that may pass (ADR 0030)."""
+
+    cause = StatusCause.PROVIDER_ERROR
+    instead = "the provider failed"
+
+
+# The longest error text a step keeps, for a wait and for a failed job. The
+# step log is append-only and the text can be a proxy's whole error page.
+ERROR_TEXT_LENGTH = 1000
 _CUT = " [cut]"
 
 
-def _wait(busy: _ProviderBusy, rng: random.Random) -> Wait:
-    """The wait after a busy answer, with the provider's error text cut to length."""
-    text = str(busy.error)
-    if len(text) > WAIT_ERROR_LENGTH:
-        text = text[: WAIT_ERROR_LENGTH - len(_CUT)] + _CUT
+def _cut(text: str) -> str:
+    """`text`, cut to the length a step keeps."""
+    if len(text) <= ERROR_TEXT_LENGTH:
+        return text
+    return text[: ERROR_TEXT_LENGTH - len(_CUT)] + _CUT
+
+
+def _wait(waiting: _ProviderWait, rng: random.Random) -> Wait:
+    """The wait for the provider, with its error text cut to length."""
+    text = _cut(str(waiting.error))
     return Wait(
-        seconds=backoff.delay(busy.attempt, busy.error.retry_after, rng),
-        attempt=busy.attempt,
-        retry_after=busy.error.retry_after,
-        error=_storable(text, "the provider was busy"),
+        seconds=backoff.delay(waiting.attempt, waiting.error.retry_after, rng),
+        attempt=waiting.attempt,
+        retry_after=waiting.error.retry_after,
+        error=_storable(text, waiting.instead),
+        cause=waiting.cause,
     )
 
 
@@ -652,7 +676,7 @@ async def _loop(
     Returns the status to leave the job in: `succeeded`, `needs_approval`,
     or `queued` when `stop` was set and the job is to be given back. With
     `needs_approval` comes the question the job waits on, else None. Raises
-    _JobFailed if the job cannot finish, _ProviderBusy when it has to wait,
+    _JobFailed if the job cannot finish, _ProviderWait when it has to wait,
     LeaseLost as soon as the worker can no longer rely on its lease, and
     Halted when the job is halted.
     """
@@ -738,7 +762,14 @@ async def _loop(
                 if error.busy:
                     # The request step stays without a response. It is
                     # sent again once the wait is over.
-                    raise _ProviderBusy(error, state.busy_in_a_row + 1) from error
+                    raise _ProviderBusy(error, state.waits_in_a_row + 1) from error
+                if error.retryable:
+                    # The same wait, up to a cap (ADR 0030). The counts come
+                    # from the log, so any worker continues them.
+                    cap = backoff.error_cap(state.errors_in_a_row, state.errors_in_job)
+                    if cap is not None:
+                        raise _JobFailed(f"model call failed: {cap}: {error}") from error
+                    raise _ProviderFault(error, state.waits_in_a_row + 1) from error
                 raise _JobFailed(f"model call failed: {error}") from error
             if response is None:
                 continue
@@ -828,7 +859,7 @@ async def _run(
 ) -> JobStatus:
     """Run the job and record its outcome. Returns the status it was left in:
     `succeeded`, `failed`, `cancelled`, `needs_approval` when a person has
-    to decide about a tool call, `waiting` when the provider was busy, or
+    to decide about a tool call, `waiting` when the provider has to be waited for, or
     `queued` when the worker was stopped and released the job.
 
     The job is halted at its deadline, by the database clock: the time left
@@ -869,9 +900,9 @@ async def _run(
             failure = DEADLINE_ERROR
     except _JobFailed as error:
         failure = str(error)
-    except _ProviderBusy as busy:
+    except _ProviderWait as waiting:
         status = JobStatus.WAITING
-        wait = _wait(busy, settings.rng)
+        wait = _wait(waiting, settings.rng)
     except LeaseLost, _StoreUnreachable:
         raise
     except Exception as error:
@@ -881,7 +912,9 @@ async def _run(
         deadline.cancel()
 
     if failure is not None:
-        failure = _storable(failure, "the job failed with an error that cannot be stored as text")
+        failure = _storable(
+            _cut(failure), "the job failed with an error that cannot be stored as text"
+        )
         # One statement for the `error` step and the status: a worker that
         # stops here leaves the job failed, or not failed at all. The step
         # takes the next free seq by itself, also when the failure was a
@@ -901,16 +934,17 @@ async def _run(
                 question=question,
             )
         )
-        # A job that would wait for a person or a busy provider is
+        # A job that would wait for a person or the provider is
         # cancelled instead if its cancel was requested meanwhile.
         status = left_as.status
         if status is JobStatus.WAITING:
             log.info(
-                "provider busy, job waits",
+                "job waits for the provider",
                 extra={
                     "job_id": job.id,
                     "not_before": left_as.not_before,
                     "attempt": wait.attempt if wait else None,
+                    "cause": wait.cause.value if wait else None,
                 },
             )
     log.info(
@@ -945,8 +979,9 @@ async def run_job(
     (ADR 0010): a model call in flight is abandoned, a running sandboxed
     command is killed, and the job ends `cancelled` or `failed`.
 
-    A failure of the job (a bad spec, a provider error, a response that
-    cannot be used) is recorded as an `error` step and the status `failed`.
+    A failure of the job (a bad spec, a provider error that will not pass or
+    is over its cap, a response that cannot be used) is recorded as an
+    `error` step and the status `failed`.
 
     Returns None when the worker dropped the job: its lease was gone, or the
     database could not be reached. Nothing is written then. The job stays
