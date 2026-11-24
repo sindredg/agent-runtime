@@ -5,12 +5,13 @@ base URL differs, and that comes from configuration.
 """
 
 import json
+import re
 from typing import Any
 
 import anthropic
 import httpx2
 
-from runtime.provider.base import ModelRequest, ModelResponse, ProviderError
+from runtime.provider.base import ModelRequest, ModelResponse, ProviderError, Refusal
 
 # Statuses worth sending again later. Everything else is a fault in the request.
 _RETRYABLE_STATUSES = frozenset({408, 409, 429})
@@ -32,6 +33,9 @@ MAX_RETRY_AFTER = 24 * 3600.0
 # Named here so that the client never falls back to ANTHROPIC_BASE_URL in the
 # process environment: the caller's configuration alone decides.
 CLAUDE_API_URL = "https://api.anthropic.com"
+# What a refusal's category looks like. A name the SDK does not list yet is
+# kept. The SDK does not enforce its list on a stream, so this check does.
+_CATEGORY = re.compile(r"[a-z0-9_-]{1,64}")
 
 
 def _error_detail(error: anthropic.APIStatusError) -> dict[str, Any]:
@@ -73,6 +77,35 @@ def _not_a_stream(error: Exception) -> ProviderError:
         status=None,
         retryable=True,
     )
+
+
+def _refusal(message: anthropic.types.Message) -> Refusal | None:
+    """Why the model declined, for a refused message. Every field is provider-written.
+
+    A value of the wrong type or form is read as None. The refusal itself
+    stands, so the job still fails as one.
+    """
+    if message.stop_reason != "refusal":
+        return None
+    category = getattr(message.stop_details, "category", None)
+    explanation = getattr(message.stop_details, "explanation", None)
+    return Refusal(
+        category=category if isinstance(category, str) and _CATEGORY.fullmatch(category) else None,
+        explanation=explanation if isinstance(explanation, str) else None,
+    )
+
+
+def _thinking_tokens(usage: Any) -> int | None:
+    """The output tokens spent on thinking, or None unless that is a plain count.
+
+    On a stream the SDK's own validation has already turned `true` into 1
+    and `"5"` into 5, and those arrive here as ints.
+    """
+    details = getattr(usage, "output_tokens_details", None)
+    count = getattr(details, "thinking_tokens", None)
+    if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
+        return count
+    return None
 
 
 class AnthropicProvider:
@@ -170,7 +203,11 @@ class AnthropicProvider:
                 status=None,
                 retryable=True,
             )
-        body = message.to_dict(mode="json")
+        # Only the content. Dumping the rest would warn about a provider-written
+        # field of the wrong type, and the warning quotes the value.
+        body = message.model_dump(
+            mode="json", by_alias=True, exclude_unset=True, include={"content"}
+        )
         content = body["content"]
         if not isinstance(content, list):
             raise ProviderError("the response has no content list", status=None, retryable=False)
@@ -181,6 +218,8 @@ class AnthropicProvider:
             stop_reason=message.stop_reason,
             input_tokens=message.usage.input_tokens,
             output_tokens=message.usage.output_tokens,
+            refusal=_refusal(message),
+            thinking_tokens=_thinking_tokens(message.usage),
         )
 
     async def aclose(self) -> None:

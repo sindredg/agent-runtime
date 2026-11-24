@@ -1,0 +1,9 @@
+{
+  "description": "An ordinary answer whose usage reports thinking tokens.",
+  "turns": [
+    {
+      "content": [{"type": "text", "text": "The answer, after some thought."}],
+      "thinking_tokens": 40
+    }
+  ]
+}

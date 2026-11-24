@@ -613,6 +613,68 @@ def test_a_step_with_an_unusual_payload_is_printed_as_json(payload: dict[str, An
         assert format_step(step(3, kind, {"odd": True})).endswith('{"odd": true}')
 
 
+MARKER = "explanation-marker"
+
+
+def refused(refusal: Any) -> dict[str, Any]:
+    return step(
+        2,
+        "model_response",
+        {
+            "id": "msg_1",
+            "content": [{"type": "text", "text": "No."}],
+            "stop_reason": "refusal",
+            "usage": {"input_tokens": 12, "output_tokens": 7},
+            "refusal": refusal,
+        },
+    )
+
+
+def test_a_refused_step_shows_its_category_and_not_its_explanation() -> None:
+    line = format_step(refused({"category": "cyber", "explanation": MARKER}))
+    assert line == "   2  model_response  stop_reason=refusal refusal=cyber tokens=12+7 No."
+
+
+def test_a_refused_step_without_a_category_prints_as_before() -> None:
+    line = format_step(refused({"category": None, "explanation": MARKER}))
+    assert line == "   2  model_response  stop_reason=refusal tokens=12+7 No."
+
+
+def test_a_category_is_shown_without_terminal_control_codes() -> None:
+    line = format_step(refused({"category": "cy\x1b[31mber\x07\u202e\nx", "explanation": MARKER}))
+    assert "refusal=cy?[31mber?? x" in line
+    assert "\x1b" not in line and "\x07" not in line and "\u202e" not in line
+    assert "\n" not in line
+
+
+@pytest.mark.parametrize("category", [7, ["cyber"], {"explanation": MARKER}, True])
+def test_a_category_that_is_not_text_is_not_shown(category: Any) -> None:
+    line = format_step(refused({"category": category, "explanation": MARKER}))
+    assert "refusal=" not in line
+    assert MARKER not in line
+
+
+def test_a_long_category_is_cut_on_its_line() -> None:
+    line = format_step(refused({"category": "c" * 500, "explanation": MARKER}))
+    assert "c" * 101 not in line
+
+
+@pytest.mark.parametrize(
+    "content",
+    [[{"type": "text"}], ["not a block"], "just a string"],
+    ids=["no text", "not a block", "not a list"],
+)
+def test_the_json_of_an_unusual_refused_step_leaves_the_explanation_out(content: Any) -> None:
+    """Such a step prints as JSON, and the first 100 characters would reach the field."""
+    payload = {
+        "content": content,
+        "refusal": {"category": "cyber", "explanation": MARKER},
+    }
+    line = format_step(step(2, "model_response", payload))
+    assert MARKER not in line
+    assert "cyber" in line
+
+
 def test_an_unknown_step_kind_is_still_printed() -> None:
     assert format_step(step(7, "approval_requested", {"why": "rerun"})).startswith(
         "   7  approval_requested"

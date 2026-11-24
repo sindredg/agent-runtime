@@ -1,0 +1,9 @@
+{
+  "description": "The model declines and the provider sends no stop_details.",
+  "turns": [
+    {
+      "content": [{"type": "text", "text": "I cannot help with this request."}],
+      "stop_reason": "refusal"
+    }
+  ]
+}

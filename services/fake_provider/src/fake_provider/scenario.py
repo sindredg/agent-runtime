@@ -54,7 +54,14 @@ class ToolUseBlock(_Strict):
 
 
 Block = Annotated[TextBlock | ToolUseBlock, Field(discriminator="type")]
-StopReason = Literal["end_turn", "tool_use", "max_tokens"]
+StopReason = Literal["end_turn", "tool_use", "max_tokens", "refusal"]
+
+
+class StopDetails(_Strict):
+    """Why the model declined, sent as the API sends `stop_details`."""
+
+    category: str | None = None
+    explanation: str | None = None
 
 
 class Turn(_Strict):
@@ -62,6 +69,11 @@ class Turn(_Strict):
     # Left out, it follows from the content: `tool_use` if the turn calls a
     # tool, otherwise `end_turn`.
     stop_reason: StopReason | None = None
+    # Only with the stop reason `refusal`.
+    stop_details: StopDetails | None = None
+    # Reported in `usage.output_tokens_details`. Added to the output tokens,
+    # which include thinking in the API too.
+    thinking_tokens: int | None = Field(default=None, ge=0, strict=True)
     # Seconds to wait before the answer's content is sent. It makes a job
     # slow enough to be interrupted in the middle of a model call.
     delay_seconds: float = Field(default=0, ge=0, le=MAX_DELAY_SECONDS, allow_inf_nan=False)
@@ -82,6 +94,8 @@ class Turn(_Strict):
             raise ValueError("stop_reason is tool_use but the turn has no tool_use block")
         if self.stop_reason == "end_turn" and self.calls_tool:
             raise ValueError("stop_reason is end_turn but the turn has a tool_use block")
+        if self.stop_details is not None and self.stop_reason != "refusal":
+            raise ValueError("stop_details needs the stop_reason refusal")
         return self
 
 
