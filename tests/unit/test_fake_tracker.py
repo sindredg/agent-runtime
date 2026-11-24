@@ -21,7 +21,7 @@ def issue(**changes: Any) -> dict[str, Any]:
 
 @pytest.fixture
 def client() -> TestClient:
-    return TestClient(create_app(), base_url=LOCAL)
+    return TestClient(create_app({}), base_url=LOCAL)
 
 
 def test_a_created_issue_gets_a_number_and_is_listed(client: TestClient) -> None:
@@ -103,7 +103,7 @@ def test_issues_can_be_cleared(client: TestClient) -> None:
 
 def test_a_full_tracker_refuses_new_issues(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("fake_tracker.app.MAX_ISSUES", 2)
-    client = TestClient(create_app(), base_url=LOCAL)
+    client = TestClient(create_app({}), base_url=LOCAL)
     assert MAX_ISSUES > 2
     assert [client.post("/issues", json=issue()).status_code for _ in range(3)] == [201, 201, 507]
     assert len(client.get("/issues").json()) == 2
@@ -130,7 +130,6 @@ def test_the_long_stacks_first_number_keeps_one_width_to_the_last() -> None:
     ids = [client.post("/issues", json=issue()).json()["id"] for _ in range(3)]
 
     assert ids == [100_000, 100_001, 100_002]
-    assert len(str(first_issue(env) + MAX_ISSUES - 1)) == 6
 
 
 def test_every_number_of_a_full_tracker_has_the_width_of_the_first(
@@ -145,13 +144,34 @@ def test_every_number_of_a_full_tracker_has_the_width_of_the_first(
     ids = [answer.json()["id"] for answer in answers[:90]]
     assert ids == list(range(10, 100))
     assert {len(str(number)) for number in ids} == {2}
+    # The last number was given: the answer says to restart, not to clear.
     assert answers[90].status_code == 507
+    assert answers[90].json()["detail"] == "the tracker has given its last number; restart it"
 
 
-@pytest.mark.parametrize("first", ["999999", "1", "99999", "910000"])
+@pytest.mark.parametrize("first", ["900000", "9223372036854675808"])
+def test_a_first_number_at_the_edge_starts_the_tracker_and_is_given_first(first: str) -> None:
+    """The last numbers: 999999, and 2**63 - 1, the largest the worker takes."""
+    client = TestClient(create_app({"FAKE_TRACKER_FIRST_ISSUE": first}), base_url=LOCAL)
+    assert client.post("/issues", json=issue()).json()["id"] == int(first)
+
+
+@pytest.mark.parametrize("first", ["999999", "1", "99999", "910000", "900001"])
 def test_a_first_number_whose_width_would_change_stops_the_tracker(first: str) -> None:
     """The last number a full tracker gives, first + MAX_ISSUES - 1, has more digits."""
     with pytest.raises(ValueError, match="would not have one width"):
+        create_app({"FAKE_TRACKER_FIRST_ISSUE": first})
+
+
+@pytest.mark.parametrize(
+    "first",
+    ["9223372036854675809", "9223372036854775000", "10000000000000000000", "1" + "0" * 5000],
+)
+def test_a_first_number_whose_last_is_past_the_workers_bound_stops_the_tracker(
+    first: str,
+) -> None:
+    """The worker takes issue numbers up to 2**63 - 1. The last is a value too long for int()."""
+    with pytest.raises(ValueError, match="too large"):
         create_app({"FAKE_TRACKER_FIRST_ISSUE": first})
 
 
@@ -178,6 +198,7 @@ def test_a_set_first_number_caps_the_numbers_also_after_a_clear(
 
     assert given == list(range(10, 100))
     assert refused.status_code == 507
+    assert refused.json()["detail"] == "the tracker has given its last number; restart it"
     assert client.get("/issues").json() == []
     assert {len(str(number)) for number in given} == {2}
 
