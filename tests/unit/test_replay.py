@@ -11,7 +11,7 @@ from hypothesis import strategies as st
 
 from fake_provider.requests import check_request
 from runtime.store.steps import Step, StepKind
-from runtime.worker.replay import replay
+from runtime.worker.replay import MAX_REPEATS, replay
 
 JOB = UUID("00000000-0000-7000-8000-000000000001")
 PROMPT = {"role": "user", "content": "go"}
@@ -637,6 +637,128 @@ def test_a_job_cancelled_instead_of_waiting_counts_no_error() -> None:
     )
     state = replay("go", log(request(), cancelled))
     assert (state.waits_in_a_row, state.errors_in_a_row, state.errors_in_job) == (0, 0, 0)
+
+
+# The repeat stop (ADR 0031)
+
+
+def tool_call(tool_use_id: str, name: str = "read_file", **tool_input: Any) -> dict[str, Any]:
+    return {
+        "type": "tool_use",
+        "id": tool_use_id,
+        "name": name,
+        "input": tool_input or {"path": "a"},
+    }
+
+
+def round_trip(
+    tool_use_id: str,
+    *,
+    name: str = "read_file",
+    content: str = "ok",
+    is_error: bool = False,
+    **tool_input: Any,
+) -> list[tuple[StepKind, dict[str, Any]]]:
+    """One model call that makes one tool call, and its result."""
+    return [
+        request(),
+        response(tool_call(tool_use_id, name, **tool_input)),
+        intent(tool_use_id),
+        result(tool_use_id, content, is_error),
+    ]
+
+
+def same_rounds(
+    count: int, prefix: str = "same", **changes: Any
+) -> list[tuple[StepKind, dict[str, Any]]]:
+    return [step for n in range(count) for step in round_trip(f"{prefix}-{n}", **changes)]
+
+
+def test_five_identical_results_in_a_row_across_responses_stop_the_job() -> None:
+    assert MAX_REPEATS == 5
+    state = replay("go", log(*same_rounds(5)))
+    assert state.repeats == 5
+    assert state.stuck_on == "read_file"
+
+
+def test_four_identical_results_do_not() -> None:
+    state = replay("go", log(*same_rounds(4)))
+    assert state.repeats == 4
+    assert state.stuck_on is None
+
+
+@pytest.mark.parametrize(
+    "different",
+    [
+        {"name": "list_dir"},
+        {"path": "b"},
+        {"path": "a", "limit": 10},
+        {"content": "changed"},
+        {"is_error": True},
+    ],
+    ids=["name", "input", "more-input", "content", "is_error"],
+)
+def test_a_different_call_or_result_starts_the_count_again(different: dict[str, Any]) -> None:
+    state = replay("go", log(*same_rounds(4), *round_trip("other", **different)))
+    assert state.repeats == 1
+    state = replay(
+        "go",
+        log(*same_rounds(4), *round_trip("other", **different), *same_rounds(4, prefix="again")),
+    )
+    assert state.repeats == 4
+    assert state.stuck_on is None
+
+
+def test_the_order_of_the_input_keys_does_not_matter() -> None:
+    first = round_trip("first", path="a", limit=10)
+    second = [
+        request(),
+        response(tool_call("second", path="a", limit=10) | {"input": {"limit": 10, "path": "a"}}),
+        intent("second"),
+        result("second"),
+    ]
+    assert replay("go", log(*first, *second)).repeats == 2
+
+
+def test_text_in_a_response_between_the_calls_does_not_reset_the_count() -> None:
+    steps = []
+    for n in range(5):
+        steps += [
+            request(),
+            response(text(f"round {n}"), tool_call(f"t{n}")),
+            intent(f"t{n}"),
+            result(f"t{n}"),
+        ]
+    assert replay("go", log(*steps)).stuck_on == "read_file"
+
+
+def test_two_identical_calls_of_one_response_count_as_two() -> None:
+    steps = [
+        request(),
+        response(tool_call("a1"), tool_call("a2")),
+        intent("a1"),
+        result("a1"),
+        intent("a2"),
+        result("a2"),
+    ]
+    assert replay("go", log(*steps)).repeats == 2
+
+
+def test_a_result_that_answers_no_open_call_starts_no_count() -> None:
+    state = replay("go", log(*same_rounds(4), result("nobody-asked")))
+    assert (state.repeats, state.repeated) == (0, None)
+
+
+def test_the_count_folded_step_by_step_is_the_count_of_a_full_replay() -> None:
+    """A worker that takes the job over continues the count it reads from the log."""
+    steps = log(
+        *same_rounds(3), *round_trip("x", content="changed"), *same_rounds(5, prefix="again")
+    )
+    folded = replay("go", [])
+    for step in steps:
+        folded.apply(step)
+    full = replay("go", steps)
+    assert (folded.repeats, folded.stuck_on) == (full.repeats, full.stuck_on) == (5, "read_file")
 
 
 # A refusal

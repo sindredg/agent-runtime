@@ -58,8 +58,9 @@ sequenceDiagram
 ```
 
 The loop ends when the model ends its turn, when a call needs a person, when
-the provider is busy or failed, when the worker is told to stop, or when the
-job is halted.
+the provider is busy or failed, when the worker is told to stop, when the job
+is halted, or when it [repeats one call](halt.md#a-job-that-repeats-itself)
+with the same result five times.
 
 Rules of one turn:
 

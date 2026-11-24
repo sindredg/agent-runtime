@@ -22,7 +22,10 @@ BUDGET = 20_000
 SPEC: dict[str, Any] = {
     "prompt": "Read notes.txt until you are done.",
     "model": "loop",
-    "files": {"notes.txt": "a line of notes to read again and again\n" * 50},
+    "files": {
+        "notes.txt": "a line of notes to read again and again\n" * 50,
+        "more-notes.txt": "a line of notes to read again and again\n" * 50,
+    },
 }
 
 

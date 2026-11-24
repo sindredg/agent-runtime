@@ -1,0 +1,133 @@
+{
+  "description": "A job that is stuck: the same read_file call every turn, eight times. For the stop after five identical results in a row.",
+  "turns": [
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "I read the notes again."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "I read the notes again."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "I read the notes again."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "I read the notes again."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "I read the notes again."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "I read the notes again."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "I read the notes again."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "I read the notes again."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "notes.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Eight reads. The job is done."
+        }
+      ]
+    }
+  ]
+}
