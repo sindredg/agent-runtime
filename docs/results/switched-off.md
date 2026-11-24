@@ -9,7 +9,7 @@ The list can also say that a test passes, with the reason. Three tests of
 `resume-off` kill the worker before any step is complete, so starting over
 is the same as resuming.
 
-Status: tested for the 40 entries of the run below. The two added since it
+Status: tested for the 40 entries of the run below. The three added since it
 have [not run from `main`](#added-since-this-run).
 
 ```mermaid
@@ -81,6 +81,7 @@ Configured, not tested from `main`.
 |---|---|---|---|
 | `provider-error-fails` | The wait on a provider error that may pass: it fails the job | Normal | 19 |
 | `provider-error-cap-off` | The caps on waits for a provider error, in a row and in the job | Normal | 4 |
+| `repeat-stop-off` | The stop of a job that repeats one call with the same result (ADR 0031) | Normal | 2 |
 
 ### Earlier outcomes
 

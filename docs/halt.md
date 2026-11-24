@@ -93,3 +93,17 @@ For the first call it is the bytes of the whole request plus 1024.
 
 The bound stops a job early when its tool results are large, and a lost call
 is not counted. Both are in [Known limits](limits.md#halt-and-budget).
+
+## A job that repeats itself
+
+A job fails when it makes the same tool call and gets the same result 5
+times in a row: the model got nothing new four times
+([ADR 0031](adr/0031-stop-a-job-that-repeats-one-call-with-the-same-result.md)).
+The check comes before each model call, so the call after the fifth is not sent.
+
+- Same call: the tool name and the input, as canonical JSON. Same result:
+  the content and `is_error`. A response in between does not reset the count.
+- Replay counts it from the step log, so a worker that takes over continues it.
+- The `error` step names the tool and the limit, for example "the job
+  repeated the same call to read_file with the same result 5 times in a row".
+- What it does not see is in [Known limits](limits.md#halt-and-budget).
