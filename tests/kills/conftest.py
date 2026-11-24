@@ -212,7 +212,7 @@ class Stack:
                     approvals[operation] = approvals.get(operation, 0) + 1
                     tools[tool] = tools.get(tool, 0) + 1
             if time.monotonic() > deadline:
-                raise AssertionError(f"job {job_id} was not final in time: {job}")
+                raise AssertionError(text_safe(f"job {job_id} was not final in time: {job}"))
             time.sleep(0.1)
         issues: dict[str, list[int]] = {}
         # The tracker's own list, not the job's step log.

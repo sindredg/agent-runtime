@@ -434,7 +434,7 @@ def steps_of(text: str) -> list[Step]:
         if not text or text.startswith("#"):
             i += 1
         elif at == 0:
-            in_jobs, job_at, steps_at, dash_at = text == "jobs:", -1, -1, -1
+            in_jobs, job_at, steps_at, dash_at = scalar(text) == "jobs:", -1, -1, -1
             i += 1
         elif not in_jobs:
             i += 1
@@ -464,8 +464,21 @@ def steps_of(text: str) -> list[Step]:
     return found
 
 
+# A `run` or `uses` key, as a plain search sees it, whatever the reader makes of the file.
+KEYS = re.compile(r"""^\s*(?:-\s+)?["']?(run|uses)["']?\s*:""", re.MULTILINE)
+
+
 def every_step() -> list[tuple[str, Step]]:
-    found = [(path.name, step) for path in WORKFLOWS for step in steps_of(path.read_text())]
+    found = []
+    for path in WORKFLOWS:
+        text = path.read_text()
+        steps = steps_of(text)
+        # The reader missed no step: it found as many as a plain search does.
+        assert steps, f"{path.name}: no step was read"
+        counted = [found.group(1) for found in KEYS.finditer(text)]
+        assert sum(step.run is not None for step in steps) == counted.count("run"), path.name
+        assert sum(bool(step.uses) for step in steps) == counted.count("uses"), path.name
+        found += [(path.name, step) for step in steps]
     assert len(found) > 100, "the workflows were not read"
     return found
 
@@ -506,7 +519,7 @@ def test_every_step_with_a_run_stops_workflow_commands_unless_it_prints_nothing_
 def test_the_reader_takes_any_indentation() -> None:
     text = (
         "on: push\n"
-        "jobs:\n"
+        "jobs:  # every job\n"
         "    build:\n"
         "        runs-on: x\n"
         "        steps:\n"
@@ -546,6 +559,16 @@ def test_the_reader_takes_any_indentation() -> None:
         ("x.yaml", "other", ""),
         ("x.yaml", "other", "Stop the stack"),
     ]
+
+
+def test_the_workflows_use_only_actions_whose_problem_matchers_are_known() -> None:
+    """checkout removes its own matcher in its step; setup-uv's is turned off below.
+
+    A new action may add matchers that stop-commands does not stop: read its
+    action before adding it here.
+    """
+    used = {step.uses.split("@")[0] for _, step in every_step() if step.uses}
+    assert used == {"actions/checkout", "astral-sh/setup-uv"}
 
 
 def test_setup_uv_runs_without_its_problem_matchers() -> None:

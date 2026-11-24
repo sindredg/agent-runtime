@@ -13,6 +13,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from runtime.logs import text_safe
+
 from .conftest import DEFAULT_LEASE, Chaos, docker, record
 
 SCENARIO = "ci-triage-stall"
@@ -86,7 +88,7 @@ def test_a_worker_paused_past_its_lease_writes_nothing_when_it_wakes(default_lea
     # The step log: the stale worker's only step is the request it wrote
     # before the pause. Everything after it carries the second worker's epoch.
     stale_steps = [s for s in run.steps[1:] if s["lease_epoch"] != 2]
-    assert stale_steps == [], f"steps written with a lost lease: {stale_steps}"
+    assert stale_steps == [], text_safe(f"steps written with a lost lease: {stale_steps}")
     assert [(s["kind"], s["lease_epoch"]) for s in run.steps][:2] == [
         ("model_request", 1),
         ("model_request", 2),
