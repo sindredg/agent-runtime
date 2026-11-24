@@ -127,8 +127,15 @@ def test_a_summary_request_sent_again_gets_the_same_answer() -> None:
 def test_markers_are_read_from_the_first_user_message_only() -> None:
     assert place([{"role": "user", "content": "go"}]) == (0, 0)
     assert place(
-        [{"role": "user", "content": [{"type": "text", "text": "x [summary 3] [turn 12]"}]}]
+        [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "x\n\n[summary 3] [turn 12]\n\nGo on."}],
+            }
+        ]
     ) == (3, 12)
+    # A prompt that mentions a turn, or a marker inside a line, moves nothing.
+    assert place([{"role": "user", "content": "see [turn 3] and x [summary 2] [turn 4]"}]) == (0, 0)
     later = [{"role": "user", "content": "go"}, {"role": "user", "content": "[turn 9]"}]
     assert place(later) == (0, 0)
 

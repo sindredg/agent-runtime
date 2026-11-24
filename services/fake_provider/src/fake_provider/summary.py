@@ -14,8 +14,9 @@ from typing import Any
 from fake_provider.messages import cut_to_max_tokens, estimate_tokens
 from fake_provider.scenario import Summary
 
-_SUMMARY = re.compile(r"\[summary (\d+)\]")
-_TURN = re.compile(r"\[turn (\d+)\]")
+# The line the fake writes at the end of each summary, on a line of its own.
+# Only that exact line counts, so a prompt that mentions a turn moves nothing.
+_MARKERS = re.compile(r"^\[summary (\d+)\] \[turn (\d+)\]$", re.MULTILINE)
 # What a scripted refusal of a summary says.
 REFUSAL_DETAILS = {
     "type": "refusal",
@@ -43,12 +44,11 @@ def place(messages: list[dict[str, Any]]) -> tuple[int, int]:
 
     (0, 0) without markers: the first window of a job.
     """
-    text = _first_text(messages)
-    summaries, turn = _SUMMARY.search(text), _TURN.search(text)
-    return (
-        int(summaries.group(1)) if summaries else 0,
-        int(turn.group(1)) if turn else 0,
-    )
+    found = _MARKERS.findall(_first_text(messages))
+    if not found:
+        return 0, 0
+    summaries, turn = found[-1]
+    return int(summaries), int(turn)
 
 
 def summary_text(section: Summary, number: int, turn: int) -> str:
