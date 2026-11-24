@@ -475,6 +475,8 @@ def every_step() -> list[tuple[str, Step]]:
         steps = steps_of(text)
         # The reader missed no step: it found as many as a plain search does.
         assert steps, f"{path.name}: no step was read"
+        # A step in flow style, `- {run: ...}`, is not read: write it as a block.
+        assert not re.search(r"^\s*-\s*\{", text, re.MULTILINE), f"{path.name}: a flow-style item"
         counted = [found.group(1) for found in KEYS.finditer(text)]
         assert sum(step.run is not None for step in steps) == counted.count("run"), path.name
         assert sum(bool(step.uses) for step in steps) == counted.count("uses"), path.name
