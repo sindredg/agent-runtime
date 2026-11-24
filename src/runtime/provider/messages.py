@@ -67,6 +67,14 @@ def retry_after(value: str | None) -> float | None:
     return min(seconds, MAX_RETRY_AFTER)
 
 
+def _not_a_stream(error: Exception) -> ProviderError:
+    return ProviderError(
+        f"the provider's answer is not a message stream: {error!r}",
+        status=None,
+        retryable=True,
+    )
+
+
 class AnthropicProvider:
     def __init__(
         self,
@@ -101,14 +109,20 @@ class AnthropicProvider:
                 messages=request.messages,  # type: ignore[arg-type]
                 **optional,
             ) as stream:
-                if request.mid_stream is not None:
-                    # Read event by event up to the first content block, tell
-                    # the caller, and let the SDK collect the rest as usual.
-                    async for event in stream:
-                        if event.type == "content_block_start":
-                            request.mid_stream()
-                            break
-                message = await stream.get_final_message()
+                try:
+                    if request.mid_stream is not None:
+                        # Read event by event up to the first content block, tell
+                        # the caller, and let the SDK collect the rest as usual.
+                        async for event in stream:
+                            if event.type == "content_block_start":
+                                request.mid_stream()
+                                break
+                    message = await stream.get_final_message()
+                except (IndexError, AttributeError) as error:
+                    # Events the SDK cannot put together. Caught only here, so
+                    # a fault in building the request is not taken for a bad
+                    # answer and sent again.
+                    raise _not_a_stream(error) from error
         except anthropic.APIStatusError as error:
             status = error.status_code
             if status < 400:
@@ -136,16 +150,11 @@ class AnthropicProvider:
             raise ProviderError(
                 f"no complete response from the provider: {error!r}", status=None, retryable=True
             ) from error
-        except (AssertionError, json.JSONDecodeError, IndexError, AttributeError) as error:
+        except (AssertionError, json.JSONDecodeError) as error:
             # What the SDK raises for a 200 that is not a message stream: an
-            # empty body, other content, a line that is not JSON, or events
-            # it cannot put together. The answer was bad, not the request, so
-            # it may be sent again.
-            raise ProviderError(
-                f"the provider's answer is not a message stream: {error!r}",
-                status=None,
-                retryable=True,
-            ) from error
+            # empty body, other content, or a line that is not JSON. The
+            # answer was bad, not the request, so it may be sent again.
+            raise _not_a_stream(error) from error
         except (ValueError, TypeError, RuntimeError) as error:
             # The SDK refused the request or could not use the response for
             # a reason that will not change on a second try.

@@ -276,6 +276,32 @@ def test_a_200_that_is_not_a_message_stream_is_a_provider_error(response: httpx2
     assert raised.value.status is None
 
 
+@pytest.mark.parametrize("fault", [AttributeError, IndexError])
+def test_a_fault_in_building_the_request_is_not_taken_for_a_bad_answer(
+    monkeypatch: pytest.MonkeyPatch, fault: type[Exception]
+) -> None:
+    """It would only fail again, so it is not sent again as a provider error."""
+
+    def broken(**_: object) -> None:
+        raise fault("a fault before anything was sent")
+
+    async def run() -> None:
+        http_client = httpx2.AsyncClient(
+            transport=httpx2.MockTransport(lambda request: httpx2.Response(500))
+        )
+        provider = AnthropicProvider(
+            api_key="k", base_url="http://provider", http_client=http_client
+        )
+        monkeypatch.setattr(provider._client.messages, "stream", broken)
+        try:
+            await provider.complete(REQUEST)
+        finally:
+            await provider.aclose()
+
+    with pytest.raises(fault):
+        asyncio.run(run())
+
+
 def test_the_base_url_never_comes_from_the_process_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
