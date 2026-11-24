@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from fake_provider.app import default_scenarios
 from fake_provider.scenario import load_scenarios, parse_scenario
 
 TEXT = {"type": "text", "text": "hi"}
@@ -172,3 +173,36 @@ def test_a_context_window_that_is_not_a_positive_whole_number_is_refused(window:
     expected = r"context_window\s+Input should be (greater than or equal to 1|a valid integer)"
     with pytest.raises(ValueError, match=expected):
         parse_scenario(scenario({"content": [TEXT]}, context_window=window))
+
+
+# FAKE_SCENARIO_DIR
+
+
+def test_a_scenario_directory_that_is_set_is_the_only_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "only.json").write_text(scenario({"content": [TEXT]}))
+    monkeypatch.setenv("FAKE_SCENARIO_DIR", str(tmp_path))
+    assert list(default_scenarios()) == ["only"]
+
+
+@pytest.mark.parametrize("other_file", [False, True])
+def test_a_scenario_directory_with_no_scenario_stops_the_fake(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, other_file: bool
+) -> None:
+    """An empty directory, and one with a file that is not a scenario."""
+    if other_file:
+        (tmp_path / "notes.txt").write_text("not a scenario")
+    monkeypatch.setenv("FAKE_SCENARIO_DIR", str(tmp_path))
+    with pytest.raises(ValueError, match="holds no scenario file"):
+        default_scenarios()
+
+
+def test_a_scenario_directory_that_is_a_file_stops_the_fake(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "one.json"
+    path.write_text(scenario({"content": [TEXT]}))
+    monkeypatch.setenv("FAKE_SCENARIO_DIR", str(path))
+    with pytest.raises(NotADirectoryError):
+        default_scenarios()

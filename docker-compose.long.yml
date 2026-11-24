@@ -30,7 +30,8 @@ services:
         source: ${LONG_SCENARIO_DIR:-./services/fake_provider/src/fake_provider/scenarios}
         target: /scenarios
         read_only: true
-        # A misspelt directory stops the start instead of being created empty.
+        # A missing directory is not created: the start stops. The fake also
+        # stops when it cannot list the directory or finds no scenario in it.
         bind:
           create_host_path: false
 

@@ -97,10 +97,20 @@ def stream_parts(message: dict[str, Any], delay: float) -> Iterator[bytes | floa
 
 
 def default_scenarios() -> dict[str, Scenario]:
-    """Scenarios from FAKE_SCENARIO_DIR if set, otherwise the ones in the package."""
+    """Scenarios from FAKE_SCENARIO_DIR if set, otherwise the ones in the package.
+
+    A set directory that is not a directory, cannot be listed, or holds no
+    scenario raises, so the fake does not start with nothing to answer.
+    """
     directory = os.environ.get("FAKE_SCENARIO_DIR")
     if directory:
-        return load_scenarios(Path(directory))
+        # Listed first: a glob of a file or of a directory it cannot read
+        # finds nothing and raises nothing.
+        os.listdir(directory)
+        found = load_scenarios(Path(directory))
+        if not found:
+            raise ValueError(f"FAKE_SCENARIO_DIR {directory} holds no scenario file")
+        return found
     with resources.as_file(resources.files("fake_provider") / "scenarios") as packaged:
         return load_scenarios(packaged)
 
