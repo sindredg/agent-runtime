@@ -8,16 +8,17 @@ outside the runtime, independent of the runtime's own step log.
 Everything is kept in memory and is gone when the service stops.
 
 FAKE_TRACKER_FIRST_ISSUE sets the first issue number. Set, it must have as
-many digits as the MAX_ISSUES-th number, so every number up to a full tracker
-has one width, and a number in a tool result does not change the length of
-the text. A clear does not restart the numbering: numbers after it can be wider.
+many digits as the MAX_ISSUES-th number, which is the last the tracker gives:
+a post past it is refused with 507, also after a clear, since a clear does
+not restart the numbering. So every number has one width, and a number in a
+tool result does not change the length of the text. Unset, numbering starts
+at 1 and goes on after a clear.
 """
 
 import json
 import os
 from collections.abc import Mapping
 from datetime import UTC, datetime
-from itertools import count
 from typing import Annotated, Any
 
 from fastapi import FastAPI, Query, Request
@@ -75,11 +76,14 @@ def first_issue(env: Mapping[str, str]) -> int:
 
 def create_app(env: Mapping[str, str] | None = None) -> FastAPI:
     """The app. Reads FAKE_TRACKER_FIRST_ISSUE from `env`, or from the environment."""
-    first = first_issue(os.environ if env is None else env)
+    env = os.environ if env is None else env
+    first = first_issue(env)
+    # Set, the last number the tracker gives. Unset, there is none.
+    last = first + MAX_ISSUES - 1 if env.get("FAKE_TRACKER_FIRST_ISSUE") else None
     app = FastAPI(title="fake-tracker")
     app.add_middleware(AllowedHosts, hosts=HOSTS)
     issues: list[dict[str, Any]] = []
-    numbers = count(first)
+    next_number = first
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(request: Request, error: RequestValidationError) -> Response:
@@ -100,16 +104,22 @@ def create_app(env: Mapping[str, str] | None = None) -> FastAPI:
 
     @app.post("/issues", status_code=201)
     async def create_issue(new: NewIssue) -> Response:
+        nonlocal next_number
         if len(issues) >= MAX_ISSUES:
             return _json({"detail": "the tracker is full; clear it with DELETE /issues"}, 507)
+        if last is not None and next_number > last:
+            # The next number would be wider than the first. A clear does not
+            # help, so the answer says to restart the tracker instead.
+            return _json({"detail": "the tracker has given its last number; restart it"}, 507)
         entry = {
-            "id": next(numbers),
+            "id": next_number,
             "title": new.title,
             "body": new.body,
             "operation_id": new.operation_id,
             "created_at": datetime.now(UTC).isoformat(),
         }
         issues.append(entry)
+        next_number += 1
         return _json(entry, 201)
 
     @app.get("/issues")

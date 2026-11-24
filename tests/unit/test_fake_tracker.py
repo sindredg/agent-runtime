@@ -163,3 +163,34 @@ ARABIC_INDIC = "\u0661\u0660\u0660\u0660\u0660\u0660"
 def test_a_first_number_that_is_not_a_positive_whole_number_stops_the_tracker(first: str) -> None:
     with pytest.raises(ValueError, match="positive whole number"):
         create_app({"FAKE_TRACKER_FIRST_ISSUE": first})
+
+
+def test_a_set_first_number_caps_the_numbers_also_after_a_clear(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The MAX_ISSUES-th number is the last: a clear does not let a wider one through."""
+    monkeypatch.setattr("fake_tracker.app.MAX_ISSUES", 90)
+    client = TestClient(create_app({"FAKE_TRACKER_FIRST_ISSUE": "10"}), base_url=LOCAL)
+    given = [client.post("/issues", json=issue()).json()["id"] for _ in range(90)]
+
+    assert client.delete("/issues").status_code == 204
+    refused = client.post("/issues", json=issue())
+
+    assert given == list(range(10, 100))
+    assert refused.status_code == 507
+    assert client.get("/issues").json() == []
+    assert {len(str(number)) for number in given} == {2}
+
+
+def test_without_a_first_number_numbering_goes_on_after_a_full_tracker_is_cleared(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("fake_tracker.app.MAX_ISSUES", 3)
+    client = TestClient(create_app({}), base_url=LOCAL)
+    for _ in range(3):
+        client.post("/issues", json=issue())
+    assert client.post("/issues", json=issue()).status_code == 507
+
+    client.delete("/issues")
+
+    assert client.post("/issues", json=issue()).json()["id"] == 4
