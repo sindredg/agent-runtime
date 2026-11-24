@@ -1,7 +1,7 @@
 """What the runtime needs from a model provider, independent of any SDK."""
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 
@@ -27,7 +27,9 @@ class Refusal:
     """Why the model declined, as far as the provider said. Either field can be None."""
 
     category: str | None
-    explanation: str | None
+    # Left out of the repr, so an exception or a log line that shows the
+    # object does not carry the provider's words.
+    explanation: str | None = field(repr=False)
 
 
 @dataclass(frozen=True, slots=True)

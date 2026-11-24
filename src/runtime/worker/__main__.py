@@ -4,6 +4,7 @@ import asyncio
 import dataclasses
 import logging
 import signal
+import warnings
 from datetime import timedelta
 
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -126,8 +127,16 @@ async def run(config: WorkerConfig) -> None:
         await engine.dispose()
 
 
+def quiet_serializer_warnings() -> None:
+    """Drop pydantic's serializer warnings. The SDK dumps each message it reads
+    with warnings on, and such a warning quotes a provider-written value of the
+    wrong type, a refusal's explanation included, on stderr."""
+    warnings.filterwarnings("ignore", message="Pydantic serializer warnings", category=UserWarning)
+
+
 def main() -> None:
     configure_logging()
+    quiet_serializer_warnings()
     asyncio.run(run(WorkerConfig.from_env()))
 
 

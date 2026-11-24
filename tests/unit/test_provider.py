@@ -6,6 +6,7 @@ tests/integration.
 
 import asyncio
 import json
+import warnings
 from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any
@@ -22,6 +23,7 @@ from runtime.provider.messages import (
     _thinking_tokens,
     retry_after,
 )
+from runtime.worker.__main__ import quiet_serializer_warnings
 
 REQUEST = ModelRequest(
     model="m", max_tokens=100, messages=[{"role": "user", "content": "hi"}], user_id="job-1"
@@ -303,6 +305,30 @@ def test_a_fault_in_building_the_request_is_not_taken_for_a_bad_answer(
 
     with pytest.raises(fault):
         asyncio.run(run())
+
+
+def test_the_worker_keeps_a_serializer_warning_off_stderr(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The SDK dumps `message_start` with warnings on. A field of the wrong type is quoted."""
+    marker = "explanation-quoted-by-a-warning"
+    events = list(stream_events(MESSAGE))
+    name, start = events[0]
+    start["message"]["stop_details"] = {
+        "type": "refusal",
+        "category": "cyber",
+        "explanation": [marker],
+    }
+    chunks = [encode_sse(name, start), *(encode_sse(n, d) for n, d in events[1:])]
+    with warnings.catch_warnings():
+        quiet_serializer_warnings()
+        response = complete(lambda request: sse(chunks))
+    assert response.stop_reason == MESSAGE["stop_reason"]
+    assert marker not in capsys.readouterr().err
+
+
+def test_a_refusal_shows_no_explanation_in_its_repr() -> None:
+    assert "secret words" not in repr(Refusal(category="cyber", explanation="secret words"))
 
 
 def test_the_base_url_never_comes_from_the_process_environment(
