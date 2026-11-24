@@ -23,9 +23,8 @@ import inspect
 import logging
 import math
 import random
-import re
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Container
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -63,8 +62,6 @@ log = logging.getLogger("runtime.worker")
 
 # Stop reasons that end a job well. Any other reason without tool calls
 # to run is a failure.
-# What a tool name looks like, as the API allows it.
-_TOOL_NAME = re.compile(r"[A-Za-z0-9_-]{1,64}")
 _FINISHED = frozenset({"end_turn", "stop_sequence"})
 _FAILURES = {
     "max_tokens": "the model's response was cut off at max_tokens",
@@ -717,7 +714,7 @@ async def _loop(
             # Before the request step, like the budget: the call is not made.
             # The count comes from the log, so any worker continues it (ADR 0031).
             if (stuck := state.stuck_on) is not None:
-                raise _JobFailed(_repeat_error(stuck))
+                raise _JobFailed(_repeat_error(stuck, tools))
             definitions = tools.definitions()
             used = job.tokens_used + writer.tokens_added
             bound = input_bound(
@@ -859,13 +856,13 @@ async def _loop(
         raise _JobFailed(failure)
 
 
-def _repeat_error(tool: str) -> str:
+def _repeat_error(tool: str, offered: Container[str]) -> str:
     """The error of a job stopped for repeating itself (ADR 0031).
 
-    The name is the model's. Only a plain tool name goes into the error,
-    which `runtime status` prints.
+    The name is the model's. It goes into the error, which `runtime status`
+    prints, only when it is a tool this worker offers.
     """
-    shown = tool if _TOOL_NAME.fullmatch(tool) else "a tool"
+    shown = tool if tool in offered else "a tool"
     return (
         f"the job repeated the same call to {shown} with the same result"
         f" {MAX_REPEATS} times in a row"

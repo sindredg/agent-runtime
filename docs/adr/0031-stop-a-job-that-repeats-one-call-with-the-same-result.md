@@ -33,7 +33,7 @@ times in a row.
 - Replay counts it from the step log, so a worker that takes over continues
   it. The worker checks it before it writes the next `model_request`.
 - At five the job ends `failed`, and its `error` step names the limit, and
-  the tool when its name is plain. The call after the fifth result is never sent.
+  the tool when the worker offers it. The call after the fifth result is never sent.
 - The limit is a constant, like the takeover limit. No spec field, no setting.
 
 ## Consequences
