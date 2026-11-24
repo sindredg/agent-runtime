@@ -60,16 +60,13 @@ refused, but the tool ran. An idempotency key on the other side closes this.
   lease, or when its job is halted, runs to its end. Its result is dropped.
 - `read_file`, `crash_worker` and the lookup of `create_issue` have no general
   timeout. One that outlasts the stop grace period is killed with its worker.
-- A worker told to stop while it writes a `tool_intent` still runs that tool:
-  the intent is already in the log.
+- A worker told to stop while it writes a `tool_intent` still runs the tool.
 - A worker that takes over an interrupted call of a tool it does not offer
   stores "unknown tool". The call may have run. Run every worker of a
   deployment with the same tools.
 - The wait before a decision about an interrupted sandboxed call assumes the
   worker was not paused before the start request, and that Docker does not
   act on a request late. A container that starts later can still be running.
-- A takeover during a sandboxed call costs up to `ends_within` (60 s with the
-  defaults) before the job goes on.
 
 ## Sandbox and scope
 
@@ -111,6 +108,9 @@ refused, but the tool ran. An idempotency key on the other side closes this.
   reports under other names, such as prompt cache reads, are not counted.
 - A worker with more tools than the one before it relies on the 1024
   allowance to cover the difference in tool definitions.
+- The [repeat stop](halt.md#a-job-that-repeats-itself) misses a loop over two or more calls, an input
+  that changes a little each time, and a result that changes on its own, such
+  as a time stamp. A poll that sees the same answer 5 times is stopped too.
 - A halt waits for what it cannot race: container removals and the fenced
   write that ends the job. A slow Docker daemon can push a cancel or a
   deadline past 5 s.

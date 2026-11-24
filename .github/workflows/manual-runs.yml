@@ -58,6 +58,7 @@ on:
           - refusal-triggers-off
           - chain-check-off
           - budget-check-off
+          - repeat-stop-off
           - claim-deadline-off
           - approval-gate-off
           - approval-gate-off-chaos

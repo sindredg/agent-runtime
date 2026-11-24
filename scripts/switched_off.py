@@ -62,6 +62,7 @@ WATCHER = "tests/unit/test_workspace_watcher.py"
 APPROVAL = "tests/integration/test_approval.py"
 CHAOS_NOTIFY = "tests/chaos/test_notify.py"
 CHAOS_APPROVAL = "tests/chaos/test_approval.py"
+REPEAT_STOP = "tests/integration/test_repeat_stop.py"
 BACKOFF_WORKER = "tests/integration/test_backoff_worker.py"
 BUSY = f"{BACKOFF_WORKER}::test_a_busy_provider_makes_the_job_wait_and_then_finish"
 BUSY_CASES = ("[429-rate_limit_error]", "[529-overloaded_error]")
@@ -533,6 +534,29 @@ ENTRIES: dict[str, SwitchedOff] = {
                 "tests/integration/test_budget.py"
                 "::test_a_job_that_loops_stops_before_its_budget_by_the_providers_count",
                 'job.error.startswith("the token budget does not cover the next model call")',
+            ),
+        ),
+    ),
+    "repeat-stop-off": SwitchedOff(
+        issue=168,
+        what="the stop of a job that repeats one call with the same result (ADR 0031)",
+        edits=(
+            Edit(
+                AGENT,
+                "            if (stuck := state.stuck_on) is not None:\n",
+                "            if False:  # switched off\n",
+            ),
+        ),
+        stack="up",
+        expect=(
+            Expect(
+                f"{REPEAT_STOP}::test_a_job_stuck_on_one_call_fails_after_five_identical_results",
+                "assert len(calls) == MAX_REPEATS",
+            ),
+            Expect(
+                f"{REPEAT_STOP}"
+                "::test_a_worker_that_takes_over_after_four_results_stops_the_job_after_the_fifth",
+                "assert len(calls) == MAX_REPEATS",
             ),
         ),
     ),
