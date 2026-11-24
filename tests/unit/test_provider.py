@@ -15,6 +15,7 @@ import httpx2
 import pytest
 
 from fake_provider.messages import encode_sse, stream_events
+from runtime.config import WorkerConfig
 from runtime.provider.base import ModelRequest, ModelResponse, ProviderError, Refusal
 from runtime.provider.messages import (
     CLAUDE_API_URL,
@@ -334,7 +335,7 @@ def test_the_worker_process_drops_serializer_warnings(monkeypatch: pytest.Monkey
 
     monkeypatch.setattr(worker_main, "run", nothing)
     monkeypatch.setattr(worker_main, "configure_logging", lambda: None)
-    monkeypatch.setattr(worker_main.WorkerConfig, "from_env", staticmethod(lambda: None))
+    monkeypatch.setattr(WorkerConfig, "from_env", staticmethod(lambda: None))
     with warnings.catch_warnings():
         worker_main.main()
         installed = [
