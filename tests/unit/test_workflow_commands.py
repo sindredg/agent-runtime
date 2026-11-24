@@ -202,6 +202,21 @@ def test_a_chaos_result_line_holds_no_marker(
     assert printed.strip() == f"RESULT {file.strip()}"
 
 
+def test_a_chaos_runs_problem_and_lease_lines_hold_no_marker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.syspath_prepend(str(ROOT / "tests"))
+    conftest = importlib.import_module("chaos.conftest")
+    random_kills = importlib.import_module("chaos.test_kills")
+    run = conftest.Run({"status": "failed", "error": HOSTILE}, [], [], {}, note=HOSTILE)
+    problems = random_kills.verdict(run, [])
+    entry = {"job_id": "a job", "message": "lease lost", "time": HOSTILE, "exception": HOSTILE}
+    lease = conftest.lease_trouble(json.dumps(entry), "a job")
+    assert len(problems) == len(lease) == 1
+    assert commands("\n".join(problems + lease)) == []
+    assert "#\\u0023[error]four" in problems[0]
+
+
 @pytest.fixture
 def kills(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     """The kill runs' conftest, imported as pytest imports it. Nothing in it starts the stack."""
@@ -402,7 +417,8 @@ def steps_of(text: str) -> list[Step]:
             cut = min((indent(line) for line in body), default=0)
             step.run = [line[cut:] for line in body]
         elif name == "run":
-            step.run = [rest]
+            # A plain or quoted value may go on over the next, deeper lines.
+            step.run = [rest, *(line.strip() for line in inner if line.strip())]
         elif name == "with":
             for line in inner:
                 if line.strip() and not line.strip().startswith("#"):
@@ -512,6 +528,9 @@ def test_the_reader_takes_any_indentation() -> None:
         "    other:\n"
         "      steps:\n"
         "        - run: make up\n"
+        "        - name: Stop the stack\n"
+        "          run: make clean &&\n"
+        "            make chaos\n"
     )
     steps = steps_of(text)
     assert [(s.job, s.name, s.uses, s.run, s.given) for s in steps] == [
@@ -519,11 +538,13 @@ def test_the_reader_takes_any_indentation() -> None:
         ("build", "Worker logs", "", ["docker logs worker-1"], {}),
         ("build", "Quiet", "", ["exec 2>&1", "echo done"], {}),
         ("other", "", "", ["make up"], {}),
+        ("other", "Stop the stack", "", ["make clean &&", "make chaos"], {}),
     ]
     assert unwrapped([("x.yaml", step) for step in steps]) == [
         ("x.yaml", "build", "Worker logs"),
         ("x.yaml", "build", "Quiet"),
         ("x.yaml", "other", ""),
+        ("x.yaml", "other", "Stop the stack"),
     ]
 
 
