@@ -255,13 +255,31 @@ def test_the_lab_demo_prints_no_marker(capsys: pytest.CaptureFixture[str]) -> No
 # The workflows
 
 WORKFLOWS = sorted((ROOT / ".github" / "workflows").glob("*.yml"))
-# What prints stored text: a service's logs, a record file, or a suite or
-# script that prints job records.
+# The make targets that run tests, start the stack or print its logs. A
+# test below keeps the list equal to the Makefile's.
+TARGETS = (
+    "all",
+    "up",
+    "up-claude",
+    "logs",
+    "test",
+    "integration",
+    "escape",
+    "chaos",
+    "notify-timing",
+    "switched-off",
+    "switched-off-rehearsal",
+    "lab",
+    "kills",
+    "kills-claude",
+)
+# What runs tests or the stack, or prints stored text: pytest, one of the
+# targets, a service's logs, or a record file.
 PRINTS = re.compile(
-    r"docker compose .*\blogs\b"
+    r"\bpytest\b"
+    rf"|\bmake ({'|'.join(map(re.escape, TARGETS))})(?![\w-])"
+    r"|docker compose .*\blogs\b"
     r"|\.(chaos|kills|notify-timing|contract)/"
-    r"|\bmake (chaos|lab|kills|kills-claude|notify-timing|switched-off|switched-off-rehearsal)\b"
-    r"|pytest .*tests/(chaos|lab|kills|notify_timing|contract)\b"
 )
 STOP = ["token=$(openssl rand -hex 16)", 'echo "::stop-commands::$token"']
 RESUME = 'echo "::$token::"'
@@ -299,7 +317,7 @@ def printing_steps() -> dict[tuple[str, str, str], list[str]]:
     }
 
 
-def test_every_step_that_prints_stored_text_stops_workflow_commands_with_a_new_token() -> None:
+def test_every_step_that_runs_tests_or_prints_stored_text_stops_workflow_commands() -> None:
     steps = printing_steps()
     unwrapped = [
         step
@@ -310,8 +328,13 @@ def test_every_step_that_prints_stored_text_stops_workflow_commands_with_a_new_t
     ]
     assert unwrapped == []
     assert set(steps) == {
+        ("ci.yml", "python", "Unit tests"),
+        ("ci.yml", "stack", "Start the stack"),
         ("ci.yml", "stack", "Service logs"),
+        ("ci.yml", "integration", "Start the stack"),
+        ("ci.yml", "integration", "Integration tests"),
         ("ci.yml", "integration", "Service logs"),
+        ("ci.yml", "escape", "Escape tests"),
         ("ci.yml", "chaos", "Chaos tests"),
         ("ci.yml", "chaos", "Results"),
         ("ci.yml", "chaos", "Service logs"),
@@ -335,6 +358,25 @@ def test_every_step_that_prints_stored_text_stops_workflow_commands_with_a_new_t
         ("manual-runs.yml", "claude", "Results"),
         ("manual-runs.yml", "claude", "Service logs"),
     }
+
+
+def test_the_targets_are_every_make_target_that_runs_tests_or_the_stack() -> None:
+    """A target that runs pytest, starts the stack, prints its logs, or needs one that does."""
+    found: dict[str, tuple[list[str], list[str]]] = {}
+    target = ""
+    for line in (ROOT / "Makefile").read_text().splitlines():
+        if match := re.match(r"([a-z][\w-]*):(?!=)(.*)", line):
+            target = match[1]
+            found[target] = (match[2].split(), [])
+        elif line.startswith("\t") and target:
+            found[target][1].append(line)
+    runs_tests = {
+        name
+        for name, (_, recipe) in found.items()
+        if any(re.search(r"\bpytest\b|compose .*\b(up|logs)\b|switched_off\.py", r) for r in recipe)
+    }
+    runs_tests |= {name for name, (needs, _) in found.items() if set(needs) & runs_tests}
+    assert runs_tests == set(TARGETS)
 
 
 def test_the_wrapper_stops_and_resumes_with_one_new_token_each_time() -> None:

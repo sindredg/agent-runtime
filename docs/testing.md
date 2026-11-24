@@ -46,8 +46,9 @@ flowchart LR
   Recorded timed runs start from the Manual runs workflow, `suite: notify-timing`.
 - CI runs unit, integration, escape, the short chaos run, the lab demo and
   the kill runs on the fake provider on every pull request.
-- A workflow step that prints stored text, such as service logs or results,
-  stops workflow commands while it prints. Its printers escape command markers too.
+- A workflow step that runs tests or the stack, or prints service logs or
+  results, stops workflow commands while it runs. Printers of stored text
+  also escape command markers.
 
 ## Records a test trusts
 

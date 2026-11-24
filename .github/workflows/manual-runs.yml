@@ -11,9 +11,9 @@
 # environment secret. The environment's branch rule decides which branches
 # get that far. This file cannot: a branch runs its own copy of it.
 #
-# A step that prints stored text (service logs, results, a suite's output)
-# stops workflow commands while it prints, with a token made in the step.
-# tests/unit/test_workflow_commands.py checks every such step.
+# A step that runs tests or starts the stack, or prints stored text such as
+# service logs or results, stops workflow commands while it prints, with a
+# token made in the step. tests/unit/test_workflow_commands.py checks each.
 name: Manual runs
 
 on:

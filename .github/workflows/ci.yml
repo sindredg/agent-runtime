@@ -12,9 +12,9 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# A step that prints stored text (service logs, results, a suite's output)
-# stops workflow commands while it prints, with a token made in the step.
-# tests/unit/test_workflow_commands.py checks every such step.
+# A step that runs tests or starts the stack, or prints stored text such as
+# service logs or results, stops workflow commands while it prints, with a
+# token made in the step. tests/unit/test_workflow_commands.py checks each.
 jobs:
   python:
     name: Python lint, types and tests
@@ -32,7 +32,12 @@ jobs:
       - run: uv run --frozen ruff check .
       - run: uv run --frozen ruff format --check .
       - run: uv run --frozen mypy
-      - run: uv run --frozen pytest -v tests/unit
+      - name: Unit tests
+        run: |
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
+          uv run --frozen pytest -v tests/unit
+          echo "::$token::"
 
   yaml:
     name: YAML and workflow lint
@@ -116,7 +121,11 @@ jobs:
       # Builds the image and fails unless every service becomes healthy and
       # the one-shot migrate service exits 0.
       - name: Start the stack
-        run: make up
+        run: |
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
+          make up
+          echo "::$token::"
       - name: Call the API from the host
         run: curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8000/healthz
       - name: Service logs
@@ -149,9 +158,17 @@ jobs:
       # Postgres with the migrations applied. The tests run on the host and
       # reach it on 127.0.0.1:5432.
       - name: Start the stack
-        run: make up
+        run: |
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
+          make up
+          echo "::$token::"
       - name: Integration tests
-        run: uv run --frozen pytest -v tests/integration
+        run: |
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
+          uv run --frozen pytest -v tests/integration
+          echo "::$token::"
       - name: Service logs
         if: failure()
         run: |
@@ -177,7 +194,11 @@ jobs:
       # Builds the sandbox image and runs the escape attempts against it. No
       # stack: the tests start the tool containers themselves.
       - name: Escape tests
-        run: make escape
+        run: |
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
+          make escape
+          echo "::$token::"
 
   chaos:
     name: Chaos tests (short run)
