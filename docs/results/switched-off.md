@@ -11,7 +11,8 @@ is the same as resuming.
 
 Status: tested. The 40 entries of the run below ran from `main` at
 `4ed43c0`. Three entries ran again at `96172b5`, after the provider-error
-change ([below](#run-at-96172b5)). `repeat-stop-off` is [not run from `main`](#added-since-these-runs).
+change ([below](#run-at-96172b5)). `repeat-stop-off` ran at `377304c`
+([below](#run-at-377304c)).
 
 ```mermaid
 flowchart LR
@@ -85,13 +86,14 @@ One run each, from `main`, on the fake provider, on GitHub-hosted
 | `provider-error-cap-off` | The caps on waits for a provider error, in a row and in the job | Normal | 6 of 6 | [45296393483](https://github.com/sindredg/agent-runtime/actions/runs/45296393483) |
 | `busy-answer-fails` | The wait on a 429 or 529. Its edit now fails the job itself | Normal | 5 of 5 | [45296384558](https://github.com/sindredg/agent-runtime/actions/runs/45296384558) |
 
-### Added since these runs
+### Run at `377304c`
 
-Configured, not tested from `main`.
+One run, from `main`, on the fake provider, on a GitHub-hosted `ubuntu-26.04`
+runner. Every test ended as the list says.
 
-| Entry | Mechanism switched off | Stack | Tests |
-|---|---|---|---|
-| `repeat-stop-off` | The stop of a job that repeats one call with the same result (ADR 0031) | Normal | 2 |
+| Entry | Mechanism switched off | Stack | Tests | Run |
+|---|---|---|---|---|
+| `repeat-stop-off` | The stop of a job that repeats one call with the same result (ADR 0031) | Normal | 2 of 2 | [45343453661](https://github.com/sindredg/agent-runtime/actions/runs/45343453661) |
 
 ### Earlier outcomes
 
