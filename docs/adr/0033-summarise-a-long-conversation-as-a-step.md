@@ -70,6 +70,11 @@ The continuation line:
   burns a takeover on every claim.
 - A summary can drop what a later step needs. The fake provider cannot show
   that, and no real-model run has.
+- Text a job read can come back in its summary, inside a user message instead
+  of a tool result. Scope and approvals still hold per call. What a tool
+  result can change is stated and tested under issue 160.
+- Replay rebuilds the opening message from the stored text. A step whose
+  message differs fails the job.
 - That the Claude API accepts the request's shape rests on its documentation.
   An entry in the [contract test](../contract-test.md) checks it; it has not been run.
 - The summary call costs tokens and counts in `tokens_used`.

@@ -286,6 +286,25 @@ def test_a_summary_with_a_problem_opens_no_window() -> None:
     assert not state.needs_model_call
 
 
+@pytest.mark.parametrize(
+    "message",
+    [
+        {"role": "user", "content": [{"type": "text", "text": "other text"}]},
+        {"role": "assistant", "content": OPENING["content"]},
+        None,
+    ],
+)
+def test_a_summary_whose_message_does_not_match_its_text_opens_no_window(message: Any) -> None:
+    """The model is never sent a message that differs from the summary `runtime logs` shows."""
+    log = [*one_window()[:-1], summary_step(5, message=message)]
+
+    state = replay("go", log)
+
+    assert state.problem == "its message does not match its text"
+    assert state.problem_in_summary
+    assert state.messages[0] == {"role": "user", "content": "go"}
+
+
 def test_a_refused_summary_keeps_its_category() -> None:
     log = [
         *one_window()[:-1],

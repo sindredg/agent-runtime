@@ -36,8 +36,9 @@ refused, but the tool ran. An idempotency key on the other side closes this.
   Other failed calls fail the job. Workers share no limit ([Backoff](backoff.md#limits)).
 - A response cut off at `max_tokens`, or a refusal, fails the job. It is not continued.
 - Without `SUMMARY_TRIGGER` a job that outgrows the model's context window
-  fails. With it, a summary can drop what a later step needs, and no older
-  worker may run ([Settings](settings.md#worker-job-and-provider)).
+  fails. With it, a summary can drop what a later step needs or bring back
+  text the job read as part of a user message, and no older worker may run
+  ([ADR 0033](adr/0033-summarise-a-long-conversation-as-a-step.md#consequences)).
 - All workers have to see the same workspace directory. The stack does that
   with one volume on one host.
 - A workspace left behind waits up to `SWEEP_INTERVAL_SECONDS` for the sweep.
@@ -88,8 +89,7 @@ refused, but the tool ran. An idempotency key on the other side closes this.
   can create a hard link out of a workspace. It checks the file it opened,
   so a link swapped in after the path check is refused too.
 - Before a workspace is removed, its directories get mode 700. A link swapped
-  in during that walk is followed. Its target is the worker's own, and gets
-  the same mode.
+  in during that walk is followed to the worker's own target, which gets it too.
 
 ## Secrets
 

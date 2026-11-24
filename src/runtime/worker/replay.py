@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Any
 
 from runtime.store.steps import StatusCause, Step, StepKind
+from runtime.worker.summary import opening_message, summary_text
 
 # Tool results in a row with the same call and the same result that stop a
 # job (ADR 0031). By the fifth, the model got nothing new four times.
@@ -239,6 +240,11 @@ class Replay:
             self.problem, self.problem_in_summary = problem, True
             self.stop_reason = payload.get("stop_reason")
             self.refusal_category = refusal.get("category") if isinstance(refusal, dict) else None
+            return
+        # The message is rebuilt from the answer's text and must match: the
+        # model is never sent text that `runtime logs` does not show.
+        if payload.get("message") != opening_message(summary_text(payload["content"])):
+            self.problem, self.problem_in_summary = "its message does not match its text", True
             return
         self.messages = [payload["message"]]
         self.counted, self.counted_messages = None, 0

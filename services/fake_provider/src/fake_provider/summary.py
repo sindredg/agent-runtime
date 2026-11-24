@@ -16,7 +16,7 @@ from fake_provider.scenario import Summary
 
 # The line the fake writes at the end of each summary, on a line of its own.
 # Only that exact line counts, so a prompt that mentions a turn moves nothing.
-_MARKERS = re.compile(r"^\[summary (\d+)\] \[turn (\d+)\]$", re.MULTILINE)
+_MARKERS = re.compile(r"^\[summary (\d{1,6})\] \[turn (\d{1,6})\]$", re.MULTILINE)
 # What a scripted refusal of a summary says.
 REFUSAL_DETAILS = {
     "type": "refusal",
