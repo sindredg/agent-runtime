@@ -104,6 +104,7 @@ The check comes before each model call, so the call after the fifth is not sent.
 - Same call: the tool name and the input, as canonical JSON. Same result:
   the content and `is_error`. A response in between does not reset the count.
 - Replay counts it from the step log, so a worker that takes over continues it.
-- The `error` step names the tool and the limit, for example "the job
-  repeated the same call to read_file with the same result 5 times in a row".
+- The `error` step names the limit, and the tool when its name is plain, for
+  example "the job repeated the same call to read_file with the same result 5
+  times in a row".
 - What it does not see is in [Known limits](limits.md#halt-and-budget).
