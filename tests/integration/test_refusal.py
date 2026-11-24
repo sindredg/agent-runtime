@@ -370,16 +370,17 @@ def test_a_hostile_thinking_count_is_left_out(stack: Stack, thinking: Any) -> No
     assert job.tokens_used == 12
 
 
-@pytest.mark.parametrize("thinking", [True, "5"], ids=str)
+@pytest.mark.parametrize(("thinking", "count"), [(True, 1), ("5", 5)], ids=["true", "string"])
 def test_a_count_the_sdk_turned_into_an_int_is_stored_as_a_plain_count(
-    stack: Stack, thinking: Any
+    stack: Stack, thinking: Any, count: int
 ) -> None:
     """The SDK's validation of a stream turns `true` into 1 and `"5"` into 5."""
     job, steps, _ = run_hostile(stack, details=refusal(), thinking=thinking)
 
     assert job.error == WITH_CATEGORY
-    stored = response_of(steps)["usage"].get("thinking_tokens")
-    assert stored is None or (type(stored) is int and stored >= 0)
+    stored = response_of(steps)["usage"]["thinking_tokens"]
+    assert type(stored) is int
+    assert stored == count
     assert job.tokens_used == 12
 
 
