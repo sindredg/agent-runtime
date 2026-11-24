@@ -4,7 +4,10 @@ import asyncio
 import dataclasses
 import logging
 import signal
+import warnings
 from datetime import timedelta
+
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 from runtime.config import WorkerConfig
 from runtime.failpoints import Failpoints
@@ -24,6 +27,12 @@ from runtime.worker.sweep import keep_sweeping
 ALIVE_INTERVAL_SECONDS = 5.0
 
 log = logging.getLogger("runtime.worker")
+
+
+def worker_engine(database_url: str) -> AsyncEngine:
+    """The worker's engine. Its bound values are step payloads, and a refusal's
+    explanation in one must reach no log, so SQLAlchemy's errors leave them out."""
+    return create_engine(database_url, application_name="runtime-worker", hide_parameters=True)
 
 
 async def run(config: WorkerConfig) -> None:
@@ -46,7 +55,7 @@ async def run(config: WorkerConfig) -> None:
         # Before anything starts: on a host where a command could stop its
         # own timeout, the worker does not run at all.
         check_host()
-    engine = create_engine(config.database_url, application_name="runtime-worker")
+    engine = worker_engine(config.database_url)
     # Before the first claim: a worker connected as the owner could change
     # or delete steps (ADR 0013).
     try:
@@ -118,8 +127,16 @@ async def run(config: WorkerConfig) -> None:
         await engine.dispose()
 
 
+def quiet_serializer_warnings() -> None:
+    """Drop pydantic's serializer warnings. The SDK dumps each message it reads
+    with warnings on, and such a warning quotes a provider-written value of the
+    wrong type, a refusal's explanation included, on stderr."""
+    warnings.filterwarnings("ignore", message="Pydantic serializer warnings", category=UserWarning)
+
+
 def main() -> None:
     configure_logging()
+    quiet_serializer_warnings()
     asyncio.run(run(WorkerConfig.from_env()))
 
 

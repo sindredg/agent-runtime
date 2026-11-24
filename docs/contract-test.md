@@ -53,16 +53,16 @@ list below and `NOT_MODELLED` in the test hold the same entries.
 | `more than one tool_use block in a response` | No packaged scenario has two calls in one turn. The worker's handling of two calls is tested with a scripted provider in `tests/integration/test_resume.py`. |
 | `message field container` | The worker does not read it. It was `null` in the run of 2026-11-19. |
 | `message field diagnostics` | The worker does not read it. It was `null` in that run. |
-| `message field stop_details` | The worker does not read it. It was `null` in that run. |
+| `message field stop_details` | Read on a refusal. A run cannot provoke one, so the field is not compared. |
 | `usage field cache_creation` | The worker does not read it. It splits `cache_creation_input_tokens`, which was 0. |
 | `usage field inference_geo` | The worker does not read it. It was `global`. |
-| `usage field output_tokens_details` | The worker counts `output_tokens` only. `thinking_tokens` was 0. |
+| `usage field output_tokens_details` | Its `thinking_tokens` is stored when reported. It was 0, and the budget counts `output_tokens`. |
 | `usage field service_tier` | The worker does not read it. It was `standard`. |
 | `usage field speed` | The worker does not read it. It was `standard`. |
 
 From a response the worker reads the id, the model, the content blocks, the
-stop reason, `input_tokens` and `output_tokens`
-(`src/runtime/provider/messages.py`).
+stop reason, `input_tokens`, `output_tokens`, `thinking_tokens` and, on a
+refusal, `stop_details` (`src/runtime/provider/messages.py`).
 
 ## Runs
 
@@ -93,6 +93,6 @@ field caller`. It did not bring out a `thinking` block or a second
 - The fake was not broken and then compared with the API.
 - It is one exchange of two turns with one model. A field or stop reason
   that this exchange does not bring out is not compared. `refusal` is one:
-  the worker handles it, and no run has shown it.
+  the worker handles it and the fake can script it, and no run has shown it.
 - Whole jobs against the API are a separate record:
   [Runs against the Claude API](results/api.md).

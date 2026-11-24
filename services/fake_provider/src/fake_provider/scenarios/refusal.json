@@ -1,0 +1,13 @@
+{
+  "description": "The model declines, with a category and an explanation.",
+  "turns": [
+    {
+      "content": [{"type": "text", "text": "I cannot help with this request."}],
+      "stop_reason": "refusal",
+      "stop_details": {
+        "category": "cyber",
+        "explanation": "refusal-explanation-marker: the reason the provider gave for this refusal."
+      }
+    }
+  ]
+}

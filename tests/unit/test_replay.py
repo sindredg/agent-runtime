@@ -759,3 +759,25 @@ def test_the_count_folded_step_by_step_is_the_count_of_a_full_replay() -> None:
         folded.apply(step)
     full = replay("go", steps)
     assert (folded.repeats, folded.stuck_on) == (full.repeats, full.stuck_on) == (5, "read_file")
+
+
+# A refusal
+
+
+def test_replay_keeps_the_category_of_a_refusal() -> None:
+    kind, payload = response(text("no"), stop="refusal")
+    refused = {**payload, "refusal": {"category": "cyber", "explanation": "why"}}
+    state = replay("go", log(request(), (kind, refused)))
+    assert state.stop_reason == "refusal"
+    assert state.refusal_category == "cyber"
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [{}, {"refusal": {"category": None, "explanation": None}}],
+    ids=["no field", "null category"],
+)
+def test_replay_has_no_category_without_one(extra: dict[str, Any]) -> None:
+    kind, payload = response(text("no"), stop="refusal")
+    state = replay("go", log(request(), (kind, {**payload, **extra})))
+    assert state.refusal_category is None

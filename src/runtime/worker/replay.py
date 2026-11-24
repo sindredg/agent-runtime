@@ -46,6 +46,9 @@ class Replay:
     # Why the last assistant message cannot be used, as its `model_response`
     # step recorded it. None when it is fine.
     problem: str | None = None
+    # The category of a refusal, as its `model_response` step recorded it. A
+    # worker that takes the job over writes the same error from it.
+    refusal_category: str | None = None
     # Input plus output tokens of the last response, and the length of the
     # conversation then, its own message included. The budget's bound of
     # the next call starts from them (`runtime.worker.budget`).
@@ -116,6 +119,8 @@ class Replay:
             self.counted = int(usage.get("input_tokens", 0)) + int(usage.get("output_tokens", 0))
             self.counted_messages = len(self.messages)
             self.problem = payload.get("problem")
+            refusal = payload.get("refusal")
+            self.refusal_category = refusal.get("category") if isinstance(refusal, dict) else None
             # A response with a problem is stored as it came and may not have
             # the shape of a message. No call is taken from it.
             self.pending = (

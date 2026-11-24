@@ -6,19 +6,26 @@ tests/integration.
 
 import asyncio
 import json
+import warnings
 from collections.abc import Callable
+from types import SimpleNamespace
+from typing import Any
 
 import httpx2
 import pytest
 
 from fake_provider.messages import encode_sse, stream_events
-from runtime.provider.base import ModelRequest, ModelResponse, ProviderError
+from runtime.config import WorkerConfig
+from runtime.provider.base import ModelRequest, ModelResponse, ProviderError, Refusal
 from runtime.provider.messages import (
     CLAUDE_API_URL,
     MAX_RETRY_AFTER,
     AnthropicProvider,
+    _thinking_tokens,
     retry_after,
 )
+from runtime.worker import __main__ as worker_main
+from runtime.worker.__main__ import quiet_serializer_warnings
 
 REQUEST = ModelRequest(
     model="m", max_tokens=100, messages=[{"role": "user", "content": "hi"}], user_id="job-1"
@@ -302,6 +309,46 @@ def test_a_fault_in_building_the_request_is_not_taken_for_a_bad_answer(
         asyncio.run(run())
 
 
+def test_the_worker_keeps_a_serializer_warning_off_stderr(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The SDK dumps `message_start` with warnings on. A field of the wrong type is quoted."""
+    marker = "explanation-quoted-by-a-warning"
+    events = list(stream_events(MESSAGE))
+    name, start = events[0]
+    start["message"]["stop_details"] = {
+        "type": "refusal",
+        "category": "cyber",
+        "explanation": [marker],
+    }
+    chunks = [encode_sse(name, start), *(encode_sse(n, d) for n, d in events[1:])]
+    with warnings.catch_warnings():
+        quiet_serializer_warnings()
+        response = complete(lambda request: sse(chunks))
+    assert response.stop_reason == MESSAGE["stop_reason"]
+    assert marker not in capsys.readouterr().err
+
+
+def test_the_worker_process_drops_serializer_warnings(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def nothing(config: object) -> None:
+        return None
+
+    monkeypatch.setattr(worker_main, "run", nothing)
+    monkeypatch.setattr(worker_main, "configure_logging", lambda: None)
+    monkeypatch.setattr(WorkerConfig, "from_env", staticmethod(lambda: None))
+    with warnings.catch_warnings():
+        worker_main.main()
+        installed = [
+            (action, message.pattern if message else None)
+            for action, message, *_ in warnings.filters
+        ]
+    assert ("ignore", "Pydantic serializer warnings") in installed
+
+
+def test_a_refusal_shows_no_explanation_in_its_repr() -> None:
+    assert "secret words" not in repr(Refusal(category="cyber", explanation="secret words"))
+
+
 def test_the_base_url_never_comes_from_the_process_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -337,3 +384,116 @@ def test_an_error_that_a_second_try_cannot_fix_is_not_retryable(
         asyncio.run(run())
     assert raised.value.retryable is False
     assert raised.value.status is None
+
+
+# A refusal's details and the thinking count, as the SDK hands them over
+
+LEFT_OUT = object()
+
+
+def answered(
+    *, stop_reason: str = "refusal", details: Any = LEFT_OUT, thinking: Any = LEFT_OUT
+) -> ModelResponse:
+    """The response to a stream whose `message_delta` carries these values as they are."""
+    chunks = []
+    for event, data in stream_events({**MESSAGE, "stop_reason": stop_reason}):
+        if event == "message_delta":
+            if details is not LEFT_OUT:
+                data["delta"]["stop_details"] = details
+            if thinking is not LEFT_OUT:
+                data["usage"]["output_tokens_details"] = {"thinking_tokens": thinking}
+        chunks.append(encode_sse(event, data))
+    return complete(lambda request: sse(chunks))
+
+
+def test_a_refusal_is_read_with_its_category_and_explanation() -> None:
+    response = answered(details={"type": "refusal", "category": "cyber", "explanation": "why"})
+    assert response.stop_reason == "refusal"
+    assert response.refusal == Refusal(category="cyber", explanation="why")
+
+
+def test_a_category_the_sdk_does_not_know_is_kept() -> None:
+    details = {"type": "refusal", "category": "new_kind-2", "explanation": None}
+    assert answered(details=details).refusal == Refusal("new_kind-2", None)
+
+
+@pytest.mark.parametrize("details", [LEFT_OUT, None], ids=["left out", "null"])
+def test_a_refusal_without_details_has_both_fields_null(details: Any) -> None:
+    assert answered(details=details).refusal == Refusal(None, None)
+
+
+def test_details_on_another_stop_reason_are_not_read() -> None:
+    details = {"type": "refusal", "category": "cyber", "explanation": "why"}
+    assert answered(stop_reason="end_turn", details=details).refusal is None
+
+
+def test_an_ordinary_answer_has_no_refusal_and_no_thinking_count() -> None:
+    response = complete(lambda request: sse(STREAM))
+    assert response.refusal is None
+    assert response.thinking_tokens is None
+
+
+@pytest.mark.parametrize(
+    "category",
+    [
+        7,
+        True,
+        ["cyber"],
+        {"a": 1},
+        "",
+        "c" * 65,
+        "CYBER",
+        "cy ber",
+        "cyber\n",
+        "cy\x1b[31mber",
+        "cy\x00ber",
+        "cy\ud800ber",
+        "cyb\u00e9r",
+    ],
+)
+def test_a_category_that_is_not_a_short_name_is_dropped(category: Any) -> None:
+    details = {"type": "refusal", "category": category, "explanation": "why"}
+    assert answered(details=details).refusal == Refusal(None, "why")
+
+
+def test_the_longest_category_is_kept() -> None:
+    details = {"type": "refusal", "category": "c" * 64}
+    assert answered(details=details).refusal == Refusal("c" * 64, None)
+
+
+@pytest.mark.parametrize("explanation", [7, True, ["why"], {"a": 1}])
+def test_an_explanation_that_is_not_text_is_dropped(explanation: Any) -> None:
+    details = {"type": "refusal", "category": "cyber", "explanation": explanation}
+    assert answered(details=details).refusal == Refusal("cyber", None)
+
+
+@pytest.mark.parametrize("details", ["nonsense", 5, [1], True, {}, {"category": None}])
+def test_details_of_another_shape_are_a_refusal_with_null_fields(details: Any) -> None:
+    assert answered(details=details).refusal == Refusal(None, None)
+
+
+def test_thinking_tokens_are_read() -> None:
+    assert answered(stop_reason="end_turn", thinking=5).thinking_tokens == 5
+    assert answered(stop_reason="end_turn", thinking=0).thinking_tokens == 0
+
+
+@pytest.mark.parametrize("thinking", [-1, 1.5, "abc", [1], {"a": 1}, None])
+def test_a_thinking_count_that_is_not_a_count_is_dropped(thinking: Any) -> None:
+    assert answered(stop_reason="end_turn", thinking=thinking).thinking_tokens is None
+
+
+@pytest.mark.parametrize("value", [True, False, -1, "5", 1.5, None, [1]])
+def test_the_thinking_check_keeps_only_a_plain_count(value: Any) -> None:
+    """Called directly: on a stream the SDK turns `true` and `"5"` into ints first."""
+    usage = SimpleNamespace(output_tokens_details=SimpleNamespace(thinking_tokens=value))
+    assert _thinking_tokens(usage) is None
+
+
+@pytest.mark.parametrize("details", ["nonsense", 5, [1], {"other": 1}])
+def test_usage_details_of_another_shape_have_no_thinking_count(details: Any) -> None:
+    chunks = []
+    for event, data in stream_events({**MESSAGE, "stop_reason": "end_turn"}):
+        if event == "message_delta":
+            data["usage"]["output_tokens_details"] = details
+        chunks.append(encode_sse(event, data))
+    assert complete(lambda request: sse(chunks)).thinking_tokens is None

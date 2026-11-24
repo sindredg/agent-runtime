@@ -44,7 +44,15 @@ def test_explicit_stop_reason_is_kept() -> None:
         scenario({"content": [{"type": "tool_use", "name": "t"}]}),
         scenario({"content": [TEXT], "stop_reason": "tool_use"}),
         scenario({"content": [TOOL], "stop_reason": "end_turn"}),
-        scenario({"content": [TEXT], "stop_reason": "refusal"}),
+        scenario({"content": [TEXT], "stop_reason": "pause_turn"}),
+        # `stop_details` belongs to a refusal, and has two known fields.
+        scenario({"content": [TEXT], "stop_details": {"category": "cyber"}}),
+        scenario({"content": [TEXT], "stop_reason": "end_turn", "stop_details": {}}),
+        scenario({"content": [TEXT], "stop_reason": "refusal", "stop_details": {"why": "x"}}),
+        scenario({"content": [TEXT], "stop_reason": "refusal", "stop_details": {"category": 7}}),
+        scenario({"content": [TEXT], "thinking_tokens": -1}),
+        scenario({"content": [TEXT], "thinking_tokens": True}),
+        scenario({"content": [TEXT], "thinking_tokens": "5"}),
         scenario({"content": [TEXT], "delay": 5}),
         scenario({"content": [{**TEXT, "txet": "typo"}]}),
         scenario({"content": [TEXT]}, turn=1),
@@ -84,6 +92,32 @@ def test_packaged_scenarios_load_and_include_hello() -> None:
         loaded = load_scenarios(directory)
     assert "hello" in loaded
     assert [turn.resolved_stop_reason for turn in loaded["hello"].turns] == ["tool_use", "end_turn"]
+
+
+# A refusal and a thinking count
+
+
+def test_a_turn_can_be_a_refusal_with_or_without_details() -> None:
+    parsed = parse_scenario(
+        scenario(
+            {
+                "content": [TEXT],
+                "stop_reason": "refusal",
+                "stop_details": {"category": "cyber", "explanation": "why"},
+            },
+            {"content": [TEXT], "stop_reason": "refusal"},
+        )
+    )
+    first, second = parsed.turns
+    assert first.resolved_stop_reason == second.resolved_stop_reason == "refusal"
+    assert first.stop_details is not None
+    assert (first.stop_details.category, first.stop_details.explanation) == ("cyber", "why")
+    assert second.stop_details is None
+
+
+def test_a_turn_can_report_thinking_tokens() -> None:
+    parsed = parse_scenario(scenario({"content": [TEXT], "thinking_tokens": 12}))
+    assert parsed.turns[0].thinking_tokens == 12
 
 
 # Delay

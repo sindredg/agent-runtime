@@ -1,9 +1,12 @@
 """The fake provider in process: messages, event streams, errors, request log."""
 
+import asyncio
 import hashlib
 import json
 from typing import Any
 
+import anthropic
+import httpx2
 import pytest
 from fastapi.testclient import TestClient
 from hypothesis import given
@@ -13,6 +16,8 @@ from fake_provider.app import create_app
 from fake_provider.faults import Fault, stream_parts
 from fake_provider.messages import build_message, estimate_tokens, stream_events
 from fake_provider.scenario import Scenario, parse_scenario
+from runtime.provider.base import ModelRequest, ModelResponse, Refusal
+from runtime.provider.messages import AnthropicProvider
 
 TWO_TURNS = parse_scenario(
     json.dumps(
@@ -704,3 +709,151 @@ def test_the_log_keeps_a_hash_of_the_bytes_received() -> None:
     first, second, third = (entry["body_sha256"] for entry in api.get("/_fake/requests").json())
     assert first == second == hashlib.sha256(raw).hexdigest()
     assert third != first
+
+
+# A refusal's details and the thinking count
+
+TEXT_BLOCK = {"type": "text", "text": "I cannot help with that."}
+REFUSING = parse_scenario(
+    json.dumps(
+        {
+            "turns": [
+                {
+                    "content": [TEXT_BLOCK],
+                    "stop_reason": "refusal",
+                    "stop_details": {"category": "cyber", "explanation": "the reason"},
+                    "thinking_tokens": 7,
+                }
+            ]
+        }
+    )
+)
+BARE_REFUSAL = parse_scenario(
+    json.dumps({"turns": [{"content": [TEXT_BLOCK], "stop_reason": "refusal"}]})
+)
+DETAILS = {"type": "refusal", "category": "cyber", "explanation": "the reason"}
+
+
+def refusing(**changes: Any) -> dict[str, Any]:
+    return {"model": "refusing", "max_tokens": 1000, "messages": [USER], **changes}
+
+
+def test_a_json_answer_carries_the_details_and_the_thinking_count() -> None:
+    body = refusing()
+
+    message = client({"refusing": REFUSING}).post("/v1/messages", json=body, headers=HEADERS).json()
+
+    assert message["stop_reason"] == "refusal"
+    assert message["stop_details"] == DETAILS
+    assert message["usage"]["output_tokens_details"] == {"thinking_tokens": 7}
+    # The count is part of the output tokens, as in the API.
+    assert message["usage"]["output_tokens"] == estimate_tokens(message["content"]) + 7
+
+
+def test_the_stream_carries_them_on_message_delta_only() -> None:
+    body = refusing(stream=True)
+    answer = client({"refusing": REFUSING}).post("/v1/messages", json=body, headers=HEADERS)
+
+    events = dict(parse_sse(answer.text))
+
+    assert "stop_details" not in events["message_start"]["message"]
+    assert "output_tokens_details" not in events["message_start"]["message"]["usage"]
+    assert events["message_delta"]["delta"]["stop_details"] == DETAILS
+    assert events["message_delta"]["usage"]["output_tokens_details"] == {"thinking_tokens": 7}
+
+
+def test_a_turn_that_sets_neither_sends_no_new_field() -> None:
+    plain = client().post("/v1/messages", json=request(), headers=HEADERS).json()
+    streamed = client().post("/v1/messages", json=request(stream=True), headers=HEADERS)
+    events = dict(parse_sse(streamed.text))
+
+    assert set(plain) == {
+        "id",
+        "type",
+        "role",
+        "model",
+        "content",
+        "stop_reason",
+        "stop_sequence",
+        "usage",
+    }
+    assert set(plain["usage"]) == {
+        "input_tokens",
+        "output_tokens",
+        "cache_creation_input_tokens",
+        "cache_read_input_tokens",
+    }
+    assert set(events["message_delta"]["delta"]) == {"stop_reason", "stop_sequence"}
+    assert set(events["message_delta"]["usage"]) == {"output_tokens"}
+
+
+def test_a_refusal_without_details_sends_no_details() -> None:
+    body = refusing()
+    message = client({"refusing": BARE_REFUSAL}).post("/v1/messages", json=body, headers=HEADERS)
+    assert message.json()["stop_reason"] == "refusal"
+    assert "stop_details" not in message.json()
+    assert "output_tokens_details" not in message.json()["usage"]
+
+
+def test_a_refusal_cut_off_at_max_tokens_is_no_refusal() -> None:
+    body = refusing(max_tokens=3)
+
+    message = client({"refusing": REFUSING}).post("/v1/messages", json=body, headers=HEADERS).json()
+
+    assert message["stop_reason"] == "max_tokens"
+    assert "stop_details" not in message
+    assert message["usage"]["output_tokens"] == 3
+    assert message["usage"]["output_tokens_details"]["thinking_tokens"] <= 3
+
+
+def fake_transport() -> httpx2.ASGITransport:
+    return httpx2.ASGITransport(app=create_app({"refusing": REFUSING, "bare": BARE_REFUSAL}))
+
+
+def test_the_real_sdk_reads_them_from_the_json_form() -> None:
+    async def run() -> anthropic.types.Message:
+        async with httpx2.AsyncClient(transport=fake_transport()) as http:
+            sdk = anthropic.AsyncAnthropic(
+                api_key="k", base_url=LOCAL, http_client=http, max_retries=0
+            )
+            return await sdk.messages.create(
+                model="refusing",
+                max_tokens=1000,
+                messages=[{"role": "user", "content": "go"}],
+            )
+
+    message = asyncio.run(run())
+
+    assert message.stop_details is not None
+    assert (message.stop_details.category, message.stop_details.explanation) == (
+        "cyber",
+        "the reason",
+    )
+    assert message.usage.output_tokens_details is not None
+    assert message.usage.output_tokens_details.thinking_tokens == 7
+
+
+@pytest.mark.parametrize(
+    ("model", "refusal", "thinking"),
+    [("refusing", Refusal("cyber", "the reason"), 7), ("bare", Refusal(None, None), None)],
+)
+def test_the_runtime_reads_them_from_the_stream_through_the_real_sdk(
+    model: str, refusal: Refusal, thinking: int | None
+) -> None:
+    async def run() -> ModelResponse:
+        http = httpx2.AsyncClient(transport=fake_transport())
+        provider = AnthropicProvider(api_key="k", base_url=LOCAL, http_client=http)
+        try:
+            return await provider.complete(
+                ModelRequest(
+                    model=model, max_tokens=1000, messages=[{"role": "user", "content": "go"}]
+                )
+            )
+        finally:
+            await provider.aclose()
+
+    response = asyncio.run(run())
+
+    assert response.stop_reason == "refusal"
+    assert response.refusal == refusal
+    assert response.thinking_tokens == thinking
