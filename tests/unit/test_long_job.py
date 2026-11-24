@@ -38,7 +38,7 @@ from runtime.worker.lease import Lease
 JOB = uuid.UUID("01a1d655-88bd-7468-afc4-5ca3a1947908")
 NOW = datetime.now(UTC)
 LOCAL = "http://localhost"
-NAME = "long-g13"
+NAME = "long-window"
 SPEC = {
     "prompt": "Read the notes of every part in order, open an issue where they ask for one,"
     " then say you are done.",
