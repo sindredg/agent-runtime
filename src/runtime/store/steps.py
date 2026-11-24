@@ -31,6 +31,9 @@ class StepKind(StrEnum):
     STATUS_CHANGED = "status_changed"
     # A receiver took the notification of a question (ADR 0029).
     NOTIFICATION_SENT = "notification_sent"
+    # The model's summary of the conversation, and the message that opens
+    # the next window (ADR 0033).
+    SUMMARY = "summary"
 
 
 class StatusCause(StrEnum):

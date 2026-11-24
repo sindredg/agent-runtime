@@ -78,6 +78,46 @@ class Replay:
     # response in between does not reset the count.
     repeats: int = 0
     repeated: tuple[str, str, Any, bool] | None = None
+    # The summary trigger of the job's first `model_request` (ADR 0033).
+    # `pinned` says that step has been read: from then on the log decides,
+    # not the setting of whichever worker holds the job. A first step
+    # without a trigger pins None.
+    pinned: bool = False
+    pinned_trigger: int | None = None
+    # True when the problem was found in a `summary` step.
+    problem_in_summary: bool = False
+    # The `input_tokens` of the first response after a summary. A window
+    # that opens at or over the trigger fails the job.
+    opening_input: int | None = None
+    # True from a usable summary until the first response after it.
+    window_opened: bool = False
+
+    def trigger(self, own: int | None) -> int | None:
+        """The summary trigger in force: the logged one, or `own` before the first request."""
+        return self.pinned_trigger if self.pinned else own
+
+    def summary_due(self, trigger: int | None) -> bool:
+        """True when the next model call is the summary request.
+
+        That is when a call is due, and the last response's input plus
+        output tokens are at or over the trigger. A response that ends the
+        turn asks for no call, so it ends the job as before.
+        """
+        return (
+            trigger is not None
+            and self.needs_model_call
+            and self.counted is not None
+            and self.counted >= trigger
+        )
+
+    def oversize(self, trigger: int | None) -> str | None:
+        """The error when the window a summary opened starts at or over the trigger."""
+        if trigger is None or self.opening_input is None or self.opening_input < trigger:
+            return None
+        return (
+            "the summary leaves the next window at or over the trigger:"
+            f" {self.opening_input} input tokens, trigger {trigger}"
+        )
 
     @property
     def stuck_on(self) -> str | None:
@@ -100,24 +140,34 @@ class Replay:
     def apply(self, step: Step) -> None:
         """Fold one more step into the state.
 
-        Only `model_response` and `tool_result` steps shape the conversation.
-        The results of one assistant message go into one user message, as
-        the API requires. A `model_request` only records its `max_tokens`,
-        and an `error` changes nothing: a request without a response is
-        simply sent again. A question to a person and its answer are kept
-        for the worker and are not part of the conversation, and so is a
-        wait for the provider.
+        Only `model_response`, `tool_result` and `summary` steps shape the
+        conversation. The results of one assistant message go into one user
+        message, as the API requires. A `summary` replaces the conversation
+        with its message. A `model_request` only records its `max_tokens`,
+        and the first one the summary trigger, and an `error` changes
+        nothing: a request without a response is simply sent again. A
+        question to a person and its answer are kept for the worker and are
+        not part of the conversation, and so is a wait for the provider.
         """
         self.last_seq = step.seq
         payload = step.payload
         if step.kind is StepKind.MODEL_REQUEST:
             self.requested_max_tokens = payload.get("max_tokens")
+            if not self.pinned:
+                self.pinned = True
+                self.pinned_trigger = _trigger(payload.get("summary_trigger"))
+        elif step.kind is StepKind.SUMMARY:
+            self._apply_summary(payload)
         elif step.kind is StepKind.MODEL_RESPONSE:
             content = payload["content"]
             self.messages.append({"role": "assistant", "content": content})
             usage = payload.get("usage") or {}
             self.counted = int(usage.get("input_tokens", 0)) + int(usage.get("output_tokens", 0))
             self.counted_messages = len(self.messages)
+            if self.window_opened:
+                self.window_opened = False
+                self.opening_input = int(usage.get("input_tokens", 0))
+            self.problem_in_summary = False
             self.problem = payload.get("problem")
             refusal = payload.get("refusal")
             self.refusal_category = refusal.get("category") if isinstance(refusal, dict) else None
@@ -170,6 +220,32 @@ class Replay:
             given = step.kind is StepKind.APPROVAL_GIVEN
             self.approval = "given" if given else "denied"
 
+    def _apply_summary(self, payload: dict[str, Any]) -> None:
+        """A `summary` step: the next window starts from its message alone.
+
+        The budget's count starts again, because the next call's input is
+        that message, the system prompt and the tools. The ids of earlier
+        calls stay used. A summary with a problem opens no window; the job
+        fails on it.
+        """
+        self.interrupted, self.interrupted_at = None, None
+        self._forget_question()
+        self.waits_in_a_row = 0
+        self.errors_in_a_row = 0
+        self.pending = []
+        problem = payload.get("problem")
+        if problem:
+            refusal = payload.get("refusal")
+            self.problem, self.problem_in_summary = problem, True
+            self.stop_reason = payload.get("stop_reason")
+            self.refusal_category = refusal.get("category") if isinstance(refusal, dict) else None
+            return
+        self.messages = [payload["message"]]
+        self.counted, self.counted_messages = None, 0
+        self.stop_reason = None
+        self.problem, self.problem_in_summary, self.refusal_category = None, False, None
+        self.window_opened, self.opening_input = True, None
+
     def _count_repeat(self, tool_use_id: str, content: Any, is_error: bool) -> None:
         """Count a result with the same call and result as the one before (ADR 0031).
 
@@ -212,6 +288,13 @@ class Replay:
             and not isinstance(question, bool)
             and question == self.approval_question
         )
+
+
+def _trigger(value: Any) -> int | None:
+    """A logged trigger: a positive int, else None. A missing field is None too."""
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return None
 
 
 def replay(prompt: str, steps: Iterable[Step]) -> Replay:

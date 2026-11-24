@@ -131,6 +131,8 @@ class AnthropicProvider:
             optional["system"] = request.system
         if request.tools:
             optional["tools"] = list(request.tools)
+        if request.tool_choice is not None:
+            optional["tool_choice"] = request.tool_choice
         if request.user_id is not None:
             optional["metadata"] = {"user_id": request.user_id}
         try:
