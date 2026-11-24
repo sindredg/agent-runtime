@@ -19,21 +19,22 @@ from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
-from hypothesis import given
+from hypothesis import example, given
 from hypothesis import strategies as st
 
 from runtime.logs import JsonFormatter, json_safe, text_safe
 
 ROOT = Path(__file__).resolve().parents[2]
 
-# Line breaks, the markers' characters, and whitespace the runner trims.
-MARKED = st.one_of(
-    st.text(alphabet=st.sampled_from([*"#[]:ab \t\n\r\v\f\\", "\x1c", "\x85", "\xa0", "\u2028"])),
-    st.text(),
-)
 HOSTILE = (
     "first line\n::error::one\r  ::warning::two\r\n\t::notice::three"
     " and ##[error]four\u2028::group::five"
+)
+# The markers whole and in parts, line breaks, and whitespace the runner trims.
+PARTS = ["::", "##[", "#", "[", ":", "a", " ", "\t", "\n", "\r", "\v", "\x1c", "\x85", "\xa0"]
+MARKED = st.one_of(
+    st.lists(st.sampled_from([*PARTS, "\u2028", "\\"]), max_size=12).map("".join),
+    st.text(),
 )
 
 
@@ -62,6 +63,7 @@ def test_the_check_finds_every_marker_of_the_hostile_text() -> None:
 # The helpers
 
 
+@example({HOSTILE: HOSTILE})
 @given(st.dictionaries(MARKED, MARKED, max_size=4))
 def test_a_json_line_keeps_its_value_and_holds_no_marker(value: dict[str, str]) -> None:
     line = json_safe(json.dumps(value))
@@ -69,6 +71,7 @@ def test_a_json_line_keeps_its_value_and_holds_no_marker(value: dict[str, str]) 
     assert json.loads(line) == value
 
 
+@example(HOSTILE)
 @given(MARKED)
 def test_plain_text_holds_no_marker_and_keeps_its_line_breaks(text: str) -> None:
     escaped = text_safe(text)
