@@ -303,4 +303,5 @@ def test_one_more_digit_in_an_issue_number_moves_the_summary(tmp_path: Path) -> 
     assert tokens(narrow[BOUNDARY]) == TRIGGER - 1
     assert tokens(wide[BOUNDARY]) == TRIGGER
     assert first_summary(wide)["turn"] == BOUNDARY + 1
-    assert first_summary(narrow)["turn"] > BOUNDARY + 1
+    # Without the seventh digit the next response reaches the trigger instead.
+    assert first_summary(narrow)["turn"] == BOUNDARY + 2
