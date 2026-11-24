@@ -2,6 +2,8 @@
 
 Status: accepted, 2026-11-24.
 
+![1.2M tokens of distinct file text at 4 bytes per token is about 4.6 MiB. A 4 MiB limit falls short, the 8 MiB limit holds it, and the workspace watcher's 1024 MiB is far above both.](../diagrams/seed-cap.svg)
+
 ## Context
 
 A spec's `files` seed the job's workspace and were capped at 1 MiB, paths
