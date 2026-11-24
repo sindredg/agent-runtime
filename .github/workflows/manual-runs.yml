@@ -10,6 +10,10 @@
 # reviewer of that environment, and only then gets the key, as an
 # environment secret. The environment's branch rule decides which branches
 # get that far. This file cannot: a branch runs its own copy of it.
+#
+# A step that prints stored text (service logs, results, a suite's output)
+# stops workflow commands while it prints, with a token made in the step.
+# tests/unit/test_workflow_commands.py checks every such step.
 name: Manual runs
 
 on:
@@ -143,29 +147,51 @@ jobs:
       - name: Kill runs
         if: inputs.suite == 'kills' || inputs.suite == 'kills-after-tool-ran'
         run: |
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
           if [ "$SUITE" = kills-after-tool-ran ]; then export KILLS_TESTS=after_tool_ran; fi
           make kills
+          echo "::$token::"
       # The script prints the edit, the commit, and one verdict per test.
       - name: Switched-off run
         if: inputs.suite == 'switched-off'
-        run: make switched-off
+        run: |
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
+          make switched-off
+          echo "::$token::"
       # G12 (b): 50 questions, each first delivery within 5 s of its park.
       - name: Timed notification run
         if: inputs.suite == 'notify-timing'
-        run: make notify-timing
+        run: |
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
+          make notify-timing
+          echo "::$token::"
       # Every step of an entry of the Claude API, on the fake provider. Not a result.
       - name: Rehearsal of a switched-off run
         if: inputs.suite == 'switched-off-rehearsal'
-        run: make switched-off-rehearsal
+        run: |
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
+          make switched-off-rehearsal
+          echo "::$token::"
       - name: Results
         if: always()
         run: |
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
           for file in .kills/*/results.jsonl .chaos/results.jsonl .notify-timing/results.jsonl; do
             if [ -f "$file" ]; then echo "== $file"; cat "$file"; fi
           done
+          echo "::$token::"
       - name: Service logs
         if: failure()
-        run: docker compose logs --no-color
+        run: |
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
+          docker compose logs --no-color
+          echo "::$token::"
       - name: Stop the stack
         if: always()
         run: make clean
@@ -236,16 +262,27 @@ jobs:
         run: git rev-parse HEAD
       # The script prints the edit, the commit, and one verdict per test.
       - name: Switched-off run
-        run: make switched-off
+        run: |
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
+          make switched-off
+          echo "::$token::"
       - name: Results
         if: always()
         run: |
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
           for file in .kills/*/results.jsonl .chaos/results.jsonl; do
             if [ -f "$file" ]; then echo "== $file"; cat "$file"; fi
           done
+          echo "::$token::"
       - name: Service logs
         if: failure()
-        run: docker compose logs --no-color
+        run: |
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
+          docker compose logs --no-color
+          echo "::$token::"
       - name: Stop the stack
         if: always()
         run: make clean
@@ -315,8 +352,11 @@ jobs:
         env:
           CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
         run: |
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
           if [ "$SUITE" = kills-after-tool-ran ]; then export KILLS_TESTS=after_tool_ran; fi
           make kills-claude KILLS_MODEL="$MODEL"
+          echo "::$token::"
       # The key is given to this step only. The script hands it to the stack
       # and the tests, runs its own git commands without it, and starts such
       # an entry only when SWITCHED_OFF_PROVIDER says so. It prints the edit,
@@ -326,7 +366,11 @@ jobs:
         env:
           CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
           SWITCHED_OFF_PROVIDER: claude
-        run: make switched-off
+        run: |
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
+          make switched-off
+          echo "::$token::"
       # The contract test runs on the host against the normal stack's fake
       # provider and the API.
       - name: Contract test
@@ -334,19 +378,29 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
         run: |
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
           make up
           CONTRACT_MODEL="$MODEL" uv run --frozen pytest -v tests/contract
+          echo "::$token::"
       - name: Results
         if: always()
         run: |
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
           cat .kills/*/results.jsonl 2>/dev/null || true
           for file in .contract/*/*; do
             if [ -f "$file" ]; then echo "== $file"; cat "$file"; fi
           done
+          echo "::$token::"
       # Worker logs hold step kinds and errors, never the key.
       - name: Service logs
         if: failure()
-        run: docker compose -f docker-compose.yml -f docker-compose.kills.yml logs --no-color worker
+        run: |
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
+          docker compose -f docker-compose.yml -f docker-compose.kills.yml logs --no-color worker
+          echo "::$token::"
       - name: Stop the stack
         if: always()
         run: make clean

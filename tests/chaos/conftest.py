@@ -25,6 +25,8 @@ from typing import Any
 import httpx2
 import pytest
 
+from runtime.logs import json_safe
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 COMPOSE = ["docker", "compose", "-f", "docker-compose.yml", "-f", "docker-compose.chaos.yml"]
 CHAOS_DIR = REPO_ROOT / ".chaos"
@@ -360,8 +362,9 @@ def _write_results(verdict: str, void: str | None = None) -> None:
             entry["verdict"] = verdict
             if void is not None:
                 entry["void"] = void
-            file.write(json.dumps(entry) + "\n")
-            print(f"\nRESULT {json.dumps(entry)}")
+            line = json_safe(json.dumps(entry))
+            file.write(line + "\n")
+            print(f"\nRESULT {line}")
     _pending.clear()
 
 

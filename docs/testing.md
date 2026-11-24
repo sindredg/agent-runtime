@@ -29,7 +29,7 @@ flowchart LR
 | `tests/lab` | `make lab` | A worker stopped in a call to Gitea ([Lab demo](lab-demo.md)) |
 | `tests/kills` | `make kills` | Killed workers, judged without a reference run ([Kill runs](kill-runs.md)) |
 | `tests/notify_timing` | `make notify-timing` | G12's timed run: each parked job's question reaches the fake receiver within 5 s |
-| `tests/contract` | the Manual runs workflow | The fake provider against the Claude API |
+| `tests/contract` | the Manual runs workflow | The fake provider against the Claude API ([The contract test](contract-test.md)) |
 
 - The integration and chaos suites never mock Postgres.
 - Integration tests run store and worker code as `runtime_app`, as the
@@ -46,6 +46,8 @@ flowchart LR
   Recorded timed runs start from the Manual runs workflow, `suite: notify-timing`.
 - CI runs unit, integration, escape, the short chaos run, the lab demo and
   the kill runs on the fake provider on every pull request.
+- A workflow step that prints stored text, such as service logs or results,
+  stops workflow commands while it prints. Its printers escape command markers too.
 
 ## Records a test trusts
 
@@ -128,11 +130,6 @@ test writes its result to `.chaos/results.jsonl` with a `verdict`: `passed`,
   way. Each stays in the request log with what it was answered.
 - The fake tracker stores up to 100,000 issues in memory and never merges
   two.
-
-## The contract test
-
-It compares the fake provider with the Claude API, both ways, and is
-started by hand with a key: [The contract test](contract-test.md).
 
 ## Commands
 

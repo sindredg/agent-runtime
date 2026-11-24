@@ -26,6 +26,8 @@ from typing import Any
 import httpx2
 import pytest
 
+from runtime.logs import json_safe, text_safe
+
 from .rules import (
     TOKEN_BUDGET,
     Run,
@@ -71,6 +73,11 @@ def commit() -> str:
     head = docker("git", "rev-parse", "--short", "HEAD").strip()
     dirty = docker("git", "status", "--porcelain").strip()
     return f"{head}{' (uncommitted changes)' if dirty else ''}"
+
+
+def show(text: str) -> None:
+    """Print a line of the run, with its workflow-command markers escaped."""
+    print(text_safe(text))
 
 
 class Stack:
@@ -273,8 +280,9 @@ def _write_results(directory: Path, verdict: str, void: str | None = None) -> No
             entry["verdict"] = verdict
             if void is not None:
                 entry["void"] = void
-            file.write(json.dumps(entry) + "\n")
-            print(f"\nRESULT {json.dumps(entry)}")
+            line = json_safe(json.dumps(entry))
+            file.write(line + "\n")
+            print(f"\nRESULT {line}")
     _pending.clear()
 
 

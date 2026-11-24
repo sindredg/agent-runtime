@@ -15,7 +15,9 @@ from datetime import UTC, datetime
 
 import pytest
 
-from .conftest import FIRED, WORKERS, Stack, docker, record, totals
+from runtime.logs import text_safe
+
+from .conftest import FIRED, WORKERS, Stack, docker, record, show, totals
 from .rules import (
     FAILPOINTS,
     UNINTERRUPTED,
@@ -43,7 +45,7 @@ def test_the_job_passes_when_nobody_interrupts_it(stack: Stack) -> None:
         run = stack.finish(stack.submit(), submitted=submitted, note="not interrupted")
         runs.append(run)
         wrong = uninterrupted_problems(run)
-        print(f"{index:>3} {'FAIL' if wrong else 'ok  '} {run.summary()}")
+        show(f"{index:>3} {'FAIL' if wrong else 'ok  '} {run.summary()}")
         failed_runs += bool(wrong)
         failures += [f"job {index}: {p} :: {run.summary()}" for p in wrong]
     longest = max(run.seconds for run in runs)
@@ -58,7 +60,7 @@ def test_the_job_passes_when_nobody_interrupts_it(stack: Stack) -> None:
             **totals(runs),
         },
     )
-    assert not failures, "\n".join(failures)
+    assert not failures, text_safe("\n".join(failures))
     if stack.window is None:
         stack.window = longest
 
@@ -97,7 +99,7 @@ def test_jobs_survive_a_kill_at_a_random_time(stack: Stack) -> None:
         stack.start_stopped_workers()
         runs.append(run)
         wrong = problems(run)
-        print(f"{index:>3} {'FAIL' if wrong else 'ok  '} {run.summary()}")
+        show(f"{index:>3} {'FAIL' if wrong else 'ok  '} {run.summary()}")
         failed_runs += bool(wrong)
         failures += [
             f"run {index} (seed {chosen.seed}:{index}, window {window:.2f}): {p} :: {run.summary()}"
@@ -118,7 +120,7 @@ def test_jobs_survive_a_kill_at_a_random_time(stack: Stack) -> None:
             **counted,
         },
     )
-    assert not failures, "\n".join(failures)
+    assert not failures, text_safe("\n".join(failures))
     # A run of kills that never hit a job proves nothing.
     assert too_few_kills(chosen.runs, sent, counted["jobs_taken_over"]) == []
 
@@ -144,7 +146,7 @@ def test_jobs_survive_their_worker_stopping_inside_the_call(stack: Stack, failpo
             fired_in_all += fired
             runs.append(run)
             wrong = failpoint_problems(run, failpoint, fired)
-            print(f"{index:>3} {'FAIL' if wrong else 'ok  '} {run.summary()} fired={fired}")
+            show(f"{index:>3} {'FAIL' if wrong else 'ok  '} {run.summary()} fired={fired}")
             failed_runs += bool(wrong)
             failures += [f"{failpoint} run {index}: {p} :: {run.summary()}" for p in wrong]
             # The worker that stopped comes back by itself, after a wait that
@@ -163,7 +165,7 @@ def test_jobs_survive_their_worker_stopping_inside_the_call(stack: Stack, failpo
             **totals(runs),
         },
     )
-    assert not failures, "\n".join(failures)
+    assert not failures, text_safe("\n".join(failures))
 
 
 def _wait_for_workers(stack: Stack, timeout: float = 60.0) -> None:
