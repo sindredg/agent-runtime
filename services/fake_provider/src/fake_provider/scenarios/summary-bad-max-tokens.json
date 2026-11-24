@@ -1,0 +1,49 @@
+{
+  "description": "Answers its first summary request with a bad answer: max_tokens.",
+  "turns": [
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Reading a.txt next."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "a.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Reading b.txt next."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "b.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Done."
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "text": "The task: read the notes files a.txt to h.txt in order, then say done. Read so far: every file before the turn named below.",
+    "bad": {
+      "1": "max_tokens"
+    }
+  }
+}

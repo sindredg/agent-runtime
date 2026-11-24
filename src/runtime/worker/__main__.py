@@ -49,6 +49,7 @@ async def run(config: WorkerConfig) -> None:
             "default_model": config.provider.model,
             # Whether NOTIFY_URL is set. The address itself is not logged.
             "notifies": config.notify_url is not None,
+            "summary_trigger": config.summary_trigger,
         },
     )
     if config.sandbox is not None:
@@ -75,6 +76,7 @@ async def run(config: WorkerConfig) -> None:
         lease=timedelta(seconds=config.lease_seconds),
         heartbeat=config.heartbeat_seconds,
         failpoints=Failpoints(config.failpoint, tool=config.failpoint_tool),
+        summary_trigger=config.summary_trigger,
     )
     docker: Docker | None = None
     sandbox: Sandbox | None = None

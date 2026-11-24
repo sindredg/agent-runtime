@@ -236,7 +236,7 @@ def _preview(text: str) -> str:
 def _detail(kind: str, payload: dict[str, Any]) -> str:
     if kind == "model_request":
         return f"model={_preview(str(payload['model']))} messages={payload['messages']}"
-    if kind == "model_response":
+    if kind in ("model_response", "summary"):
         usage = payload["usage"]
         text = " ".join(b["text"] for b in payload["content"] if b.get("type") == "text")
         refusal = payload.get("refusal")
@@ -263,7 +263,7 @@ def _detail(kind: str, payload: dict[str, Any]) -> str:
         if "not_before" in payload:
             change += f" until {payload['not_before']}"
         return _preview(change)
-    return _preview(json.dumps(payload))
+    return _preview(json.dumps(_without_explanation(payload)))
 
 
 def _without_explanation(payload: Any) -> Any:

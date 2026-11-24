@@ -5,6 +5,7 @@ tests/integration.
 """
 
 import asyncio
+import dataclasses
 import json
 import warnings
 from collections.abc import Callable
@@ -27,6 +28,7 @@ from runtime.provider.messages import (
 from runtime.worker import __main__ as worker_main
 from runtime.worker.__main__ import quiet_serializer_warnings
 
+TOOL = {"name": "read_file", "input_schema": {"type": "object"}}
 REQUEST = ModelRequest(
     model="m", max_tokens=100, messages=[{"role": "user", "content": "hi"}], user_id="job-1"
 )
@@ -96,6 +98,7 @@ def test_a_complete_stream_becomes_the_response() -> None:
     assert sent["metadata"] == {"user_id": "job-1"}
     assert "system" not in sent
     assert "tools" not in sent
+    assert "tool_choice" not in sent
 
 
 @pytest.mark.parametrize(
@@ -497,3 +500,28 @@ def test_usage_details_of_another_shape_have_no_thinking_count(details: Any) -> 
             data["usage"]["output_tokens_details"] = details
         chunks.append(encode_sse(event, data))
     assert complete(lambda request: sse(chunks)).thinking_tokens is None
+
+
+def test_a_tool_choice_is_sent_when_set() -> None:
+    seen: list[httpx2.Request] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        seen.append(request)
+        return sse(STREAM)
+
+    async def run() -> None:
+        http_client = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
+        provider = AnthropicProvider(
+            api_key="k", base_url="http://provider", http_client=http_client
+        )
+        try:
+            await provider.complete(
+                dataclasses.replace(REQUEST, tool_choice={"type": "none"}, tools=(TOOL,))
+            )
+        finally:
+            await provider.aclose()
+
+    asyncio.run(run())
+    sent = json.loads(seen[0].content)
+    assert sent["tool_choice"] == {"type": "none"}
+    assert sent["tools"] == [TOOL]

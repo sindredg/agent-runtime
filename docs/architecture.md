@@ -62,6 +62,10 @@ the provider is busy or failed, when the worker is told to stop, when the job
 is halted, or when it [repeats one call](halt.md#a-job-that-repeats-itself)
 with the same result five times.
 
+With `SUMMARY_TRIGGER` set, a response at the trigger is followed by a summary
+request instead. Its answer is a `summary` step, and the next context window
+starts from it alone ([ADR 0033](adr/0033-summarise-a-long-conversation-as-a-step.md)).
+
 Rules of one turn:
 
 - A response is checked before any of its tools run. Every tool call needs an

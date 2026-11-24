@@ -49,6 +49,13 @@ def _positive_int(env: Mapping[str, str], name: str, default: int) -> int:
     return value
 
 
+def _optional_positive_int(env: Mapping[str, str], name: str) -> int | None:
+    """A positive integer, or None when the setting is unset or empty."""
+    if not env.get(name, ""):
+        return None
+    return _positive_int(env, name, 1)
+
+
 def _positive_float(env: Mapping[str, str], name: str, default: float) -> float:
     text = env.get(name, "")
     if not text:
@@ -285,6 +292,9 @@ class WorkerConfig:
     # Where parked jobs' questions are posted. Unset, this worker posts none.
     # Left out of repr(): a webhook's address can hold a token.
     notify_url: str | None = field(default=None, repr=False)
+    # The tokens of a response at which the job's conversation is summarised
+    # (ADR 0033). Unset, a job this worker starts never summarises.
+    summary_trigger: int | None = None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> WorkerConfig:
@@ -336,6 +346,7 @@ class WorkerConfig:
             sweep_interval=_positive_float(env, "SWEEP_INTERVAL_SECONDS", 300.0),
             stop_grace_seconds=stop_grace_seconds,
             notify_url=_notify_url(env),
+            summary_trigger=_optional_positive_int(env, "SUMMARY_TRIGGER"),
         )
 
 

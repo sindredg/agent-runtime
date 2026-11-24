@@ -344,7 +344,12 @@ class Stack:
     workspace_root: Path
 
     def settings(
-        self, default_model: str = "hello", *, lease: float = 30.0, heartbeat: float = 10.0
+        self,
+        default_model: str = "hello",
+        *,
+        lease: float = 30.0,
+        heartbeat: float = 10.0,
+        summary_trigger: int | None = None,
     ) -> AgentSettings:
         return AgentSettings(
             default_model=default_model,
@@ -352,6 +357,7 @@ class Stack:
             workspace_root=self.workspace_root,
             lease=timedelta(seconds=lease),
             heartbeat=heartbeat,
+            summary_trigger=summary_trigger,
         )
 
     def run[T](

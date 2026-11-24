@@ -51,6 +51,7 @@ STEP_KINDS = [
     "approval_requested",
     "approval_given",
     "approval_denied",
+    "summary",
 ]
 
 DEADLINE = datetime.now(UTC) + timedelta(hours=1)
@@ -281,6 +282,35 @@ def test_the_denial_step_kind_arrives_with_its_migration_and_leaves_with_it(
     alembic(url, "downgrade", "0004")
     with pytest.raises(asyncpg.CheckViolationError):
         on(url, lambda c: add(c, "approval_denied"))
+
+
+def test_the_summary_step_kind_arrives_with_0012_and_a_summary_blocks_the_downgrade(
+    empty_database_url: str,
+) -> None:
+    """ADR 0033: the downgrade refuses while the log holds a summary."""
+    url = empty_database_url
+
+    async def add(conn: Connection, kind: str) -> None:
+        job_id = await conn.fetchval(INSERT_JOB, DEADLINE)
+        await conn.execute(INSERT_STEP, job_id, 1, kind)
+
+    alembic(url, "upgrade", "0011")
+    with pytest.raises(asyncpg.CheckViolationError):
+        on(url, lambda c: add(c, "summary"))
+
+    # Up and down with no summary in the table.
+    alembic(url, "upgrade", "0012")
+    alembic(url, "downgrade", "0011")
+    assert on(url, current_revision) == "0011"
+    alembic(url, "upgrade", "0012")
+
+    on(url, lambda c: add(c, "summary"))
+    # A log that holds a summary is not cut to fit the older schema.
+    with pytest.raises(subprocess.CalledProcessError):
+        alembic(url, "downgrade", "0011")
+    assert on(url, current_revision) == "0012"
+    count = "SELECT count(*) FROM steps WHERE kind = 'summary'"
+    assert on(url, lambda c: c.fetchval(count)) == 1
 
 
 def test_a_running_job_without_a_lease_gets_one_that_is_over_and_then_is_refused(

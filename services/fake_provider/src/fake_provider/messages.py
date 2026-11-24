@@ -15,7 +15,7 @@ def estimate_tokens(value: Any) -> int:
     return max(1, len(json.dumps(value)) // 4)
 
 
-def _cut(content: list[dict[str, Any]], max_tokens: int) -> list[dict[str, Any]]:
+def cut_to_max_tokens(content: list[dict[str, Any]], max_tokens: int) -> list[dict[str, Any]]:
     """What is left of a message cut off at `max_tokens`: the start of its text, no tool calls.
 
     The API stops writing at `max_tokens` and may stop in the middle of a
@@ -58,7 +58,11 @@ def build_message(
     stop_reason: str = turn.resolved_stop_reason
     output_tokens = estimate_tokens(content) + (turn.thinking_tokens or 0)
     if output_tokens > max_tokens:
-        content, stop_reason, output_tokens = _cut(content, max_tokens), "max_tokens", max_tokens
+        content, stop_reason, output_tokens = (
+            cut_to_max_tokens(content, max_tokens),
+            "max_tokens",
+            max_tokens,
+        )
     message: dict[str, Any] = {
         "id": f"msg_fake_{name}_{turn_index:02d}",
         "type": "message",
@@ -135,7 +139,10 @@ def stream_events(message: dict[str, Any]) -> Iterator[tuple[str, dict[str, Any]
                 {"type": "content_block_delta", "index": index, "delta": delta},
             )
         yield "content_block_stop", {"type": "content_block_stop", "index": index}
-    ending: dict[str, Any] = {"stop_reason": message["stop_reason"], "stop_sequence": None}
+    ending: dict[str, Any] = {
+        "stop_reason": message["stop_reason"],
+        "stop_sequence": message.get("stop_sequence"),
+    }
     if "stop_details" in message:
         ending["stop_details"] = message["stop_details"]
     final_usage: dict[str, Any] = {"output_tokens": usage["output_tokens"]}

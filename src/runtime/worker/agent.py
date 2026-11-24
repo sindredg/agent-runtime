@@ -14,7 +14,9 @@ The token budget is kept with an upper bound of each call's input
 (`runtime.worker.budget`). A cancel and the deadline halt the job
 (`runtime.worker.halt`). A tool call that needs approval waits for a person
 before it runs (`runtime.worker.approval`). A job that repeats one call with
-the same result five times in a row fails (ADR 0031).
+the same result five times in a row fails (ADR 0031). With a summary
+trigger, a long conversation is summarised into a step and the next context
+window starts from it (`runtime.worker.summary`, ADR 0033).
 """
 
 import asyncio
@@ -56,6 +58,13 @@ from runtime.worker.halt import Halt, Halted, HaltReason, watch_cancel
 from runtime.worker.lease import Lease, keep_renewing
 from runtime.worker.recovery import Ask, Recovered, decide
 from runtime.worker.replay import MAX_REPEATS, Replay, replay
+from runtime.worker.summary import (
+    TOOL_CHOICE_NONE,
+    opening_message,
+    summary_messages,
+    summary_problem,
+    summary_text,
+)
 from runtime.worker.workspace import prepare_workspace, remove_workspace
 
 log = logging.getLogger("runtime.worker")
@@ -81,6 +90,9 @@ class AgentSettings:
     failpoints: Failpoints = field(default_factory=Failpoints)
     # The random part of a wait for a busy provider. Tests pass a seeded one.
     rng: random.Random = field(default_factory=random.Random)
+    # SUMMARY_TRIGGER: for a job with no model call yet, the response tokens
+    # at which its conversation is summarised (ADR 0033). None: never.
+    summary_trigger: int | None = None
 
 
 class _JobFailed(Exception):
@@ -701,7 +713,13 @@ async def _loop(
         # A step boundary: a halted job starts nothing more.
         halt.check()
         if state.problem:
-            raise _JobFailed(f"the model's response is not usable: {state.problem}")
+            what = "summary" if state.problem_in_summary else "model's response"
+            raise _JobFailed(f"the {what} is not usable: {state.problem}")
+        # From the log once a request is in it, so a worker with another
+        # setting sends what the first worker would have sent (ADR 0033).
+        trigger = state.trigger(settings.summary_trigger)
+        if (oversize := state.oversize(trigger)) is not None:
+            raise _JobFailed(oversize)
 
         calls_open = state.stop_reason == "tool_use" and bool(state.pending)
         # A step boundary: everything started so far has its step. A worker
@@ -716,11 +734,15 @@ async def _loop(
             if (stuck := state.stuck_on) is not None:
                 raise _JobFailed(_repeat_error(stuck, tools))
             definitions = tools.definitions()
+            summarising = state.summary_due(trigger)
+            # A summary request carries the instruction after the last tool
+            # result. The conversation itself is left as it is.
+            messages = summary_messages(state.messages) if summarising else state.messages
             used = job.tokens_used + writer.tokens_added
             bound = input_bound(
                 system=spec.system,
                 tools=definitions,
-                messages=state.messages,
+                messages=messages,
                 counted=state.counted,
                 counted_messages=state.counted_messages,
             )
@@ -734,29 +756,35 @@ async def _loop(
             request = ModelRequest(
                 model=model,
                 max_tokens=max_tokens,
-                messages=state.messages,
+                messages=messages,
                 system=spec.system,
                 tools=definitions,
                 user_id=str(job.id),
+                tool_choice=TOOL_CHOICE_NONE if summarising else None,
                 mid_stream=(
                     (lambda: failpoints.hit("mid_stream", takeovers=job.takeovers))
                     if failpoints.name == "mid_stream"
                     else None
                 ),
             )
+            request_step: dict[str, Any] = {
+                "model": model,
+                "max_tokens": request.max_tokens,
+                "messages": len(messages),
+                # The upper bound of the input and the count before the
+                # call, so the log shows the budget was kept.
+                "input_bound": bound,
+                "tokens_used": used,
+                # The trigger in force, which pins it for the job, and the
+                # tools offered, by name and in order. Replay reads only
+                # the trigger, and only from the job's first request.
+                "summary_trigger": trigger,
+                "tools": [definition["name"] for definition in definitions],
+            }
+            if summarising:
+                request_step["summary"] = True
             lease.check()
-            await writer.append(
-                StepKind.MODEL_REQUEST,
-                {
-                    "model": model,
-                    "max_tokens": request.max_tokens,
-                    "messages": len(state.messages),
-                    # The upper bound of the input and the count before the
-                    # call, so the log shows the budget was kept.
-                    "input_bound": bound,
-                    "tokens_used": used,
-                },
-            )
+            await writer.append(StepKind.MODEL_REQUEST, request_step)
             failpoints.hit("after_model_request", takeovers=job.takeovers)
             # Immediately before the call: a worker that was paused past its
             # lease must not send it.
@@ -799,6 +827,8 @@ async def _loop(
                     ),
                 }
             problem = _response_problem(response, state.used_ids)
+            if summarising and problem is None:
+                problem = summary_problem(response.stop_reason, response.content)
             try:
                 check_json(payload)
             except InvalidPayload as error:
@@ -809,10 +839,14 @@ async def _loop(
                 payload["content_dropped"] = True
             if problem:
                 # Stored with the step, so a worker that takes the job over
-                # here fails it for the same reason.
+                # here fails it for the same reason. A summary with a
+                # problem is not retried.
                 payload["problem"] = problem
+            elif summarising:
+                # The message the next window starts from (ADR 0033).
+                payload["message"] = opening_message(summary_text(response.content))
             await writer.append(
-                StepKind.MODEL_RESPONSE,
+                StepKind.SUMMARY if summarising else StepKind.MODEL_RESPONSE,
                 payload,
                 tokens=response.input_tokens + response.output_tokens,
             )

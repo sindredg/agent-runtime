@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="740" height="440" viewBox="0 0 740 440" role="img" aria-labelledby="summary-window-title summary-window-desc">
+  <title id="summary-window-title">A context window boundary</title>
+  <desc id="summary-window-desc">A response reaches the summary trigger. Once its tool calls are answered, the worker writes a model_request marked as a summary and sends the conversation with the instruction after the last tool result and tool_choice none. The answer is stored as one summary step whose message is the summary text and the continuation line. The next window starts from that message alone; if its first response reports input tokens at or over the trigger, the job fails.</desc>
+  <defs>
+    <marker id="summary-window-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="m0 0 8 4-8 4z" fill="#bdc8d6"/>
+    </marker>
+  </defs>
+  <rect width="740" height="440" rx="8" fill="#0d1117"/>
+  <g stroke="#657382" stroke-dasharray="3 5" fill="none">
+    <path d="M100 54v370 M390 54v370 M640 54v370"/>
+  </g>
+  <g fill="#1b2531" stroke="#788798">
+    <rect x="35" y="16" width="130" height="38" rx="5"/>
+    <rect x="325" y="16" width="130" height="38" rx="5"/>
+    <rect x="575" y="16" width="130" height="38" rx="5"/>
+  </g>
+  <path d="M16 300h708" stroke="#788798" stroke-dasharray="8 6" fill="none"/>
+  <g fill="none" stroke="#bdc8d6" stroke-width="1.5" marker-end="url(#summary-window-arrow)">
+    <path d="M640 92H102"/>
+    <path d="M100 128h288"/>
+    <path d="M100 168h288"/>
+    <path d="M100 206h538"/>
+    <path d="M640 244H102"/>
+    <path d="M100 282h288"/>
+    <path d="M100 344h538"/>
+    <path d="M640 382H102"/>
+  </g>
+  <g font-family="system-ui, sans-serif" text-anchor="middle" fill="#eef2f6">
+    <g font-size="16" font-weight="600">
+      <text x="100" y="41">Worker</text>
+      <text x="390" y="41">Step log</text>
+      <text x="640" y="41">Model</text>
+    </g>
+    <g fill="#0d1117">
+      <rect x="190" y="70" width="360" height="20"/>
+      <rect x="185" y="184" width="370" height="20"/>
+      <rect x="320" y="222" width="100" height="20"/>
+      <rect x="250" y="322" width="240" height="20"/>
+      <rect x="273" y="360" width="194" height="20"/>
+    </g>
+    <g font-size="14" fill="#d6dfe9">
+      <text x="370" y="84">response: input + output tokens at or over the trigger</text>
+      <text x="245" y="120">model_response, then tool results</text>
+      <text x="245" y="160">model_request, summary: true</text>
+      <text x="370" y="198">conversation + instruction, tool_choice none, tools kept</text>
+      <text x="370" y="236">summary text</text>
+      <text x="245" y="274">summary step, with the opening message</text>
+      <text x="730" y="322" text-anchor="end" fill="#bdc8d6">next window</text>
+      <text x="370" y="336">the summary step's message alone</text>
+      <text x="370" y="374">first response of the window</text>
+    </g>
+    <rect x="210" y="398" width="320" height="28" rx="4" fill="#3b2b25"/>
+    <text x="370" y="418" font-size="14" fill="#ffb991" font-weight="600">input tokens at or over the trigger: failed</text>
+  </g>
+</svg>
