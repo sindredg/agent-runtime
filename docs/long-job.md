@@ -91,24 +91,28 @@ The other failure switches are in [Testing](testing.md#failure-switches).
 
 - Each run checks every clause, also after one failed, and fails with one
   line per failed clause: a fixed text, then what was found.
-- A planned kill that came after its request, or never, is INCONCLUSIVE
-  with its seed. It is a finding, and the run is not repeated until it
-  passes. The same holds for a failure nobody can explain.
+- A kill that came after its request, or never, is INCONCLUSIVE: a planned
+  kill of run 4, with its seed, or the kill before a takeover in run 7. It
+  is a finding, and the run is not repeated until it passes. The same
+  holds for a failure nobody can explain.
 - A run during which the machine's clock was set is `void`.
 
-A lost lease or a lost database can miss the 5 s halt that APTS SC-009 asks
-for ([OWASP APTS](apts.md#halt-and-approval)). A summary call is halted
-like any model call ([Halt](halt.md)).
+## Not covered
 
-## Runs that had to fail
+The suite does not time a halt. A summary call is halted like any model
+call ([Halt](halt.md)). The gap for a lost lease or database is in
+[OWASP APTS](apts.md#halt-and-approval).
 
-Five entries of `scripts/switched_off.py` switch one mechanism off on the
-long stack ([Testing](testing.md#must-fail-runs)).
+## Runs that have to fail
 
-| Entry | Switched off | The test fails on |
+Five entries of `scripts/switched_off.py` each switch one mechanism off on
+the long stack ([Testing](testing.md#must-fail-runs)). None has a recorded
+run yet.
+
+| Entry | Switched off | The test has to fail on |
 |---|---|---|
 | `long-trigger-off` | The summary trigger | Run 1: the last request is refused for the window |
-| `long-replay-skips-summary` | Summary steps in a replayed log | Run 2: four summaries. Run 4: a request at a key run 1 lacks. |
+| `long-replay-skips-summary` | Summary steps in a replayed log | Run 2: more than three summaries. Run 4: a request at a key run 1 lacks. |
 | `long-summary-cut` | Half of the summary in a window's opening message | Run 1: a window does not open with the summary |
 | `long-own-trigger` | The trigger the first request pinned | Run 7: other requests than the first worker's |
 | `long-oversize-off` | The stop of a window that opens at the trigger | Run 8: the job is not failed for it |

@@ -38,12 +38,12 @@ long-up:
 	docker compose -f docker-compose.yml -f docker-compose.long.yml up --build --wait
 
 # The long-job suite on that stack: one job longer than the context window,
-# run with nobody interrupting it and checked request by request against the
-# fake provider's log. The tests set the trigger, the scenarios and the
-# failpoints themselves, whatever the shell holds. Keeps the database: a job
-# left unfinished by an earlier session stops it, and `make clean` removes
-# it. Results and worker logs in .long/. `make up` afterwards brings the
-# normal stack back.
+# run with nobody interrupting it and again with workers stopped and killed,
+# each compared request by request with the fake provider's log. The tests
+# set the trigger, the scenarios and the failpoints themselves, whatever the
+# shell holds. Keeps the database: a job left unfinished by an earlier
+# session stops it, and `make clean` removes it. Results and worker logs in
+# .long/. `make up` afterwards brings the normal stack back.
 long: long-up
 	uv run --frozen pytest -v -s tests/long
 

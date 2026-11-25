@@ -206,6 +206,7 @@ jobs:
           token=$(openssl rand -hex 16)
           echo "::stop-commands::$token"
           docker compose logs --no-color
+          cat .long/*/logs/*.log 2>/dev/null || true
           echo "::$token::"
       - name: Stop the stack
         if: always()
@@ -304,6 +305,7 @@ jobs:
           token=$(openssl rand -hex 16)
           echo "::stop-commands::$token"
           docker compose logs --no-color
+          cat .long/*/logs/*.log 2>/dev/null || true
           echo "::$token::"
       - name: Stop the stack
         if: always()

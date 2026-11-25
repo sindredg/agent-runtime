@@ -3,7 +3,7 @@
 #
 #   docker compose -f docker-compose.yml -f docker-compose.long.yml up --wait
 #
-# `make long-up` does that, and `make long` runs tests/long on it. Four
+# `make long-up` does that, and `make long` runs tests/long on it. Five
 # settings come from the shell. LONG_SCENARIO_DIR names the host directory of
 # scenario files; unset, the packaged ones. SUMMARY_TRIGGER sets the trigger;
 # unset, no job summarises. FAILPOINT and FAILPOINT_SUMMARY stop a worker at
