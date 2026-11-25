@@ -437,16 +437,17 @@ def test_a_run_on_the_long_stack_gets_its_settings_empty_whatever_it_inherits() 
     """Empty, not left out: a variable that is set beats the same name in `.env`."""
     entry = replace(ENTRY, stack="long")
     env = switched_off.child_environment(entry, "fake", INHERITED)
-    assert env == {"PATH": "/usr/bin", "DOCKER_GID": "999", **dict.fromkeys(LONG_SETTINGS, "")}
+    empty = dict.fromkeys(("FAILPOINT", *LONG_SETTINGS), "")
+    assert env == {"PATH": "/usr/bin", "DOCKER_GID": "999", **empty}
     # The same with nothing inherited.
-    assert switched_off.child_environment(entry, "fake", {}) == dict.fromkeys(LONG_SETTINGS, "")
+    assert switched_off.child_environment(entry, "fake", {}) == empty
 
 
 @pytest.mark.parametrize("stack", ["none", "up", "chaos", "kills", "lab"])
 def test_a_run_on_another_stack_gets_no_setting_of_the_long_stack(stack: str) -> None:
     entry = replace(ENTRY, stack=stack)
     env = switched_off.child_environment(entry, "fake", INHERITED)
-    assert not set(LONG_SETTINGS) & env.keys()
+    assert not {"FAILPOINT", *LONG_SETTINGS} & env.keys()
     assert {"PATH": "/usr/bin", "DOCKER_GID": "999"}.items() <= env.items()
 
 

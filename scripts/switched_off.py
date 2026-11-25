@@ -1678,8 +1678,9 @@ def child_environment(entry: SwitchedOff, provider: str, env: Mapping[str, str])
     passed on only to a run on the Claude API.
 
     No inherited setting of the long stack reaches them either. A run on the
-    long stack gets each as the empty string, which a value in `.env` cannot
-    replace: the stack starts on its defaults, and each test sets its own.
+    long stack gets each as the empty string, and the failpoint too. A value
+    in `.env` cannot replace a variable that is set: the stack starts on its
+    defaults, and each test sets its own.
     """
     dropped = ("FAILPOINT", PROVIDER_VARIABLE, *LONG_VARIABLES)
     kept = {
@@ -1698,7 +1699,9 @@ def child_environment(entry: SwitchedOff, provider: str, env: Mapping[str, str])
         for name in ("KILLS_RUNS", "KILLS_FAILPOINT_RUNS", "KILLS_JOB_LIMIT"):
             kept[name] = str(entry.runs)
     if entry.stack == "long":
-        for name in LONG_VARIABLES:
+        # The failpoint too: the long stack reads it from the shell, and a
+        # value in `.env` would stop a worker of the run.
+        for name in ("FAILPOINT", *LONG_VARIABLES):
             kept[name] = ""
     return kept
 
