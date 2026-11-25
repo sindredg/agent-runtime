@@ -293,6 +293,7 @@ def test_a_long_job_result_line_and_failure_line_hold_no_marker(
     run = long_job.Running("a run", datetime.now(UTC), 0.0, 0.0)
     run.counts = {"jobs": 1, "status": HOSTILE}
     stack.write(run, "void", HOSTILE)
+    stack.hang_up()
     file = (tmp_path / "results.jsonl").read_text()
     printed = capsys.readouterr().out
     assert commands(file) == commands(printed) == []

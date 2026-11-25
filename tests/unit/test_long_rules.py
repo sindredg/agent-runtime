@@ -12,6 +12,8 @@ import copy
 import importlib.util
 import json
 import sys
+import time
+from datetime import UTC, datetime
 from importlib import resources
 from pathlib import Path
 from types import ModuleType
@@ -937,3 +939,53 @@ def test_the_uninterrupted_job_has_three_clauses_of_its_own(suite: ModuleType) -
     ]
     log.entries.append(copy.deepcopy(log.entries[-1]))
     assert texts(suite, suite.uninterrupted(log.seen(rules), 3400, 9)) == ["REPEATED"]
+
+
+# The end of a run: the clock and the record
+
+
+def test_a_run_during_which_the_clock_was_set_is_void_and_says_so(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.syspath_prepend(str(TESTS))
+    harness = importlib.import_module("long.conftest")
+    stack = harness.Stack(tmp_path)
+
+    def run(name: str, wall_back: float = 0.0, **more: Any) -> Any:
+        return harness.Running(
+            name, datetime.now(UTC), time.time() - wall_back, time.monotonic(), **more
+        )
+
+    steady: list[str] = []
+    stack.close(run("steady"), steady)
+    failed = ["a clause: 1"]
+    stack.close(run("failed"), failed)
+    # The wall clock ran 5 s ahead of the monotonic clock since the run began.
+    moved: list[str] = []
+    stack.close(run("moved", 5.0), moved)
+    # Or it was set back 3 s while the job ran, before the run's own measurement.
+    earlier: list[str] = ["a clause: 1"]
+    stack.close(run("earlier", drift_before=-3.0), earlier)
+    # Under the limit of a second: not void.
+    small: list[str] = []
+    stack.close(run("small", 0.5), small)
+    stack.hang_up()
+
+    assert (steady, failed, small) == ([], ["a clause: 1"], [])
+    assert moved == [
+        "void run: the wall clock moved +5.0 s against the monotonic clock during this run."
+        " Leases run on the wall clock."
+    ]
+    assert earlier[1].startswith("void run: the wall clock moved -3.0 s")
+    records = [json.loads(line) for line in (tmp_path / "results.jsonl").read_text().splitlines()]
+    assert [(record["test"], record["verdict"]) for record in records] == [
+        ("steady", "passed"),
+        ("failed", "failed"),
+        ("moved", "void"),
+        ("earlier", "void"),
+        ("small", "passed"),
+    ]
+    assert records[2]["void"] == "the wall clock moved +5.0 s against the monotonic clock"
+    assert "void" not in records[0]
+    assert {record["provider"] for record in records} == {"fake provider"}
+    assert {record["workers"] for record in records} == {2}

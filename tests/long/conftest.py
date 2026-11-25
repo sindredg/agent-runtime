@@ -144,6 +144,11 @@ class Stack:
         self.run: Running | None = None
         self.saved = 0
 
+    def hang_up(self) -> None:
+        """Close the connections to the API, the fake provider and the tracker."""
+        for client in (self.api, self.provider, self.tracker):
+            client.close()
+
     # The stack
 
     def write_scenarios(self) -> None:
@@ -486,6 +491,7 @@ def stack(request: pytest.FixtureRequest) -> Iterator[Stack]:
     found.up()
     wrong = found.wrong_workers()
     if wrong is not None:
+        found.hang_up()
         pytest.exit(f"Not run: {wrong}. Start the stack with `make long`.")
     show(
         f"\nfake provider, scenario {rules.MODEL}, {rules.WORKERS} workers,"
@@ -501,8 +507,7 @@ def stack(request: pytest.FixtureRequest) -> Iterator[Stack]:
             found.save_logs()
         except (RuntimeError, OSError, subprocess.TimeoutExpired) as error:
             show(f"The stack was not left as it was found: {error}")
-        for client in (found.api, found.provider, found.tracker):
-            client.close()
+        found.hang_up()
 
 
 @pytest.fixture(scope="session")
@@ -526,6 +531,7 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     stack = Stack(directory)
     wrong = stack.wrong_workers()
     if wrong is not None:
+        stack.hang_up()
         pytest.exit(
             f"Not run: {wrong}. Start the stack with `make long`.",
             returncode=pytest.ExitCode.USAGE_ERROR,
@@ -533,6 +539,7 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     try:
         left = stack.unfinished()
     except httpx2.HTTPError as error:
+        stack.hang_up()
         pytest.exit(
             f"Not run: the API did not list its jobs ({error}). Start the stack with `make long`.",
             returncode=pytest.ExitCode.USAGE_ERROR,
@@ -540,9 +547,10 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     if left:
         # `make long` keeps the database. Such a job would take a worker,
         # and could reach a failpoint meant for another.
+        stack.hang_up()
         pytest.exit(
-            f"Not run: {len(left)} jobs of an earlier session are not final ({left[0]}, ...)."
-            " Remove them with `make clean`, then `make long`.",
+            f"Not run: jobs of an earlier session are not final: {len(left)}, the first"
+            f" {left[0]}. Remove them with `make clean`, then `make long`.",
             returncode=pytest.ExitCode.USAGE_ERROR,
         )
     stack.write_scenarios()
