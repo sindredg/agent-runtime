@@ -1,5 +1,6 @@
 """Failpoints: named places where a worker stops dead, for tests only."""
 
+import ast
 import json
 import subprocess
 import sys
@@ -13,8 +14,10 @@ from runtime.tools import default_tools
 from runtime.tools.base import ToolCall
 from runtime.tools.crash_worker import crash_worker_tool
 from runtime.tools.trackers import FakeTracker
+from runtime.worker.__main__ import failpoints_of
 
 WORKER_ENV = {"ANTHROPIC_API_KEY": "k", "MODEL": "m", "DATABASE_URL": "postgresql://u:p@h/db"}
+TESTS = Path(__file__).resolve().parents[1]
 
 
 class Crashed(BaseException):
@@ -35,6 +38,22 @@ def test_the_seven_failpoints_are_named() -> None:
         "after_tool_result",
         "after_summary",
     )
+
+
+@pytest.mark.parametrize("path", ["chaos/test_kills.py", "integration/test_failpoints.py"])
+def test_the_tests_of_a_job_without_a_summary_name_every_other_failpoint(path: str) -> None:
+    """Those tests list their failpoints by name. A new failpoint has to join a list.
+
+    The list is read from the file's text: importing the file needs its stack.
+    """
+    listed = [
+        ast.literal_eval(node.value)
+        for node in ast.parse((TESTS / path).read_text()).body
+        if isinstance(node, ast.Assign)
+        and [getattr(target, "id", None) for target in node.targets] == ["WITHOUT_A_SUMMARY"]
+    ]
+    assert listed == [NAMES[:-1]]
+    assert NAMES[-1] == "after_summary"
 
 
 # `summaries=1` below is the count at which `after_summary` fires: the job's
@@ -147,6 +166,25 @@ def test_failpoint_settings_are_read() -> None:
     )
     assert (config.failpoint, config.failpoint_tool) == ("after_tool_ran", "create_issue")
     assert config.chaos_log_dir == Path("/chaos")
+
+
+def test_the_worker_builds_its_failpoints_from_every_failpoint_setting() -> None:
+    config = WorkerConfig.from_env(
+        {
+            **WORKER_ENV,
+            "FAILPOINT": "after_model_request",
+            "FAILPOINT_TOOL": "create_issue",
+            "FAILPOINT_SUMMARY": "1",
+        }
+    )
+    points = failpoints_of(config)
+    assert (points.name, points.tool, points.summary) == (
+        "after_model_request",
+        "create_issue",
+        True,
+    )
+    plain = failpoints_of(WorkerConfig.from_env(WORKER_ENV))
+    assert (plain.name, plain.tool, plain.summary) == (None, None, False)
 
 
 def test_an_unknown_failpoint_in_the_environment_is_a_config_error() -> None:

@@ -251,7 +251,12 @@ class Split:
 
 
 def stopped_then_taken_over(
-    stack: Stack, points: Callable[[Callable[[], None]], Failpoints], *, lease_lost_first: bool
+    stack: Stack,
+    points: Callable[[Callable[[], None]], Failpoints],
+    *,
+    lease_lost_first: bool,
+    spec: dict[str, Any] = NOTES_JOB,
+    trigger: int = TRIGGER,
 ) -> Split:
     """The notes job: a worker stops at the failpoint, and another takes the job over.
 
@@ -261,11 +266,11 @@ def stopped_then_taken_over(
     stopping = Counting()
 
     def settings() -> AgentSettings:
-        return replace(stack.settings(summary_trigger=TRIGGER), failpoints=points(stopping))
+        return replace(stack.settings(summary_trigger=trigger), failpoints=points(stopping))
 
     async def body(engine: AsyncEngine, provider: AnthropicProvider) -> Split:
         async with engine.begin() as conn:
-            await stack.create(conn, NOTES_JOB)
+            await stack.create(conn, spec)
             first_claim = await claim_job(conn, worker_id="w1")
             assert first_claim is not None
             if lease_lost_first:
@@ -388,3 +393,31 @@ def test_a_worker_stops_at_a_summary_request_before_it_is_sent_and_the_next_fini
     # The request the first worker wrote never left it: the provider got
     # one summary request for each summary.
     assert len(summary_requests(split.requests)) == SUMMARIES
+
+
+def test_a_summary_stored_with_a_problem_counts_as_the_jobs_first_summary(stack: Stack) -> None:
+    """`after_summary` stops the worker after a summary that cannot be used too.
+
+    The scenario answers the summary request with empty text. The worker
+    stores that with its problem and stops. The next worker fails the job
+    for the problem and asks for no other summary.
+    """
+    problem = "it has no text"
+    split = stopped_then_taken_over(
+        stack,
+        after_summary,
+        lease_lost_first=False,
+        spec={**NOTES_JOB, "model": "summary-bad-empty"},
+        trigger=100,
+    )
+
+    # The first worker stopped with the bad summary as its last step.
+    assert split.left[-1].kind is K.SUMMARY
+    assert split.left[-1].payload["problem"] == problem
+    assert len(of_kind(split.left, K.SUMMARY)) == 1
+    assert split.fired == 1
+    # The second worker wrote the job's error and nothing else.
+    assert split.status is JobStatus.FAILED
+    assert split.job.error == f"the summary is not usable: {problem}"
+    assert [step.kind for step in split.added] == [K.ERROR]
+    assert len(summary_requests(split.requests)) == 1
