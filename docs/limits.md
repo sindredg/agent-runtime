@@ -36,9 +36,8 @@ refused, but the tool ran. An idempotency key on the other side closes this.
   Other failed calls fail the job. Workers share no limit ([Backoff](backoff.md#limits)).
 - A response cut off at `max_tokens`, or a refusal, fails the job. It is not continued.
 - Without `SUMMARY_TRIGGER` a job that outgrows the model's context window
-  fails. With it, a summary can drop what a later step needs or bring back
-  text the job read as part of a user message, and no older worker may run
-  ([ADR 0033](adr/0033-summarise-a-long-conversation-as-a-step.md#consequences)).
+  fails. With it, a summary can drop what a later step needs, and no older
+  worker may run ([ADR 0033](adr/0033-summarise-a-long-conversation-as-a-step.md#consequences)).
 - All workers have to see the same workspace directory. The stack does that
   with one volume on one host.
 - A workspace left behind waits up to `SWEEP_INTERVAL_SECONDS` for the sweep.
@@ -46,10 +45,9 @@ refused, but the tool ran. An idempotency key on the other side closes this.
 
 ## Tool calls
 
-- "Not done" from a tool's check is the tool author's claim, and so is the
-  bound a tool names for its request. After a takeover `create_issue` waits
-  12 s for its request. One the tracker stores later still makes two, and the
-  reset is not tried over TLS ([ADR 0025](adr/0025-a-tool-in-the-worker-names-how-long-its-request-can-arrive.md)).
+- "Not done" from a tool's check is the tool author's claim, and so is the bound
+  a tool names for its request. After a takeover `create_issue` waits 12 s for
+  its request. One the tracker stores later still makes two ([ADR 0025](adr/0025-a-tool-in-the-worker-names-how-long-its-request-can-arrive.md)).
 - On Gitea, the `create_issue` check misses an issue whose marker line a
   person edited or wrote below, and is fooled by a bot issue edited to end
   with another call's marker. It trusts that each page's `X-Total-Count`
@@ -68,6 +66,9 @@ refused, but the tool ran. An idempotency key on the other side closes this.
 - The wait before a decision about an interrupted sandboxed call assumes the
   worker was not paused before the start request, and that Docker does not
   act on a request late. A container that starts later can still be running.
+- Text in a tool result, or brought back by a summary inside a user message,
+  cannot change the scope, the approval gate or the step log. The goal is not
+  protected: a model can follow the text. Fake provider only ([unit](../tests/unit/test_record_shaped_text.py), [stack](../tests/integration/test_record_shaped_text_in_stack.py)).
 
 ## Sandbox and scope
 
@@ -79,9 +80,8 @@ refused, but the tool ran. An idempotency key on the other side closes this.
   limit is [issue 78](https://github.com/sindredg/agent-runtime/issues/78).
 - A command can also write to `/dev/shm` (counted against its memory) and
   `/dev/mqueue`. Neither outlives the call.
-- A tool container whose removal failed, or was cut off when its worker
-  exited, stays on the host stopped. The sweep removes workspaces only
-  ([issue 45](https://github.com/sindredg/agent-runtime/issues/45)).
+- A tool container whose removal failed, or was cut off when its worker exited,
+  stays on the host stopped. The sweep removes workspaces only ([issue 45](https://github.com/sindredg/agent-runtime/issues/45)).
 - A container whose `create` was cut off is removed by name. If Docker had
   not created it yet, it is left in the `created` state, without running.
 - What a scope does not cover is on [Scope](scope.md#limits).
