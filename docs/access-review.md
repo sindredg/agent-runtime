@@ -5,24 +5,7 @@ renders it as one job: seed files, `system` and a prompt. From the job's
 text it reads two answer keys, and it prints a hash commitment to the seed,
 the keys and the job. Standard library only.
 
-<!-- diagram: access-review, draft -->
-```mermaid
-flowchart LR
-    S[seed and shape] --> O[organisation]
-    O --> F[corpus files and index.txt]
-    O --> P[prompt: task, rules, late records, code]
-    Y[system: fixed text]
-    F --> KF[key_files]
-    F --> KU[key_full]
-    P --> KU
-    F --> J[job digest]
-    P --> J
-    Y --> J
-    S --> C[commitment]
-    KF --> C
-    KU --> C
-    J --> C
-```
+![A seed and a shape give an organisation, rendered as the corpus files with their index and as the prompt. With the fixed system text they make the job file. The files give one answer key, the files and the notices the other. The commitment hashes the seed, both keys and a digest of the job.](diagrams/access-review.svg)
 
 ## The organisation
 

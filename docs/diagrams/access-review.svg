@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="848" height="300" viewBox="0 0 848 300" role="img" aria-labelledby="access-review-title access-review-desc">
+  <title id="access-review-title">The access review generator</title>
+  <desc id="access-review-desc">A seed and a shape give an organisation, rendered as the corpus files with their index and as the prompt; with the fixed system text they make the job file. The files give one answer key, the files and the prompt's notices the other, and the commitment is a SHA-256 hash over the seed, both keys and a digest of the job.</desc>
+  <defs>
+    <marker id="access-review-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="m0 0 8 4-8 4z" fill="#bdc8d6"/>
+    </marker>
+  </defs>
+  <rect width="848" height="300" rx="8" fill="#0d1117"/>
+  <rect x="316" y="8" width="164" height="256" rx="6" fill="none" stroke="#788798" stroke-dasharray="4,3"/>
+  <text x="328" y="27" font-family="system-ui, sans-serif" font-size="11" letter-spacing="1" fill="#9aa7b6">THE JOB FILE</text>
+  <g fill="none" stroke="#bdc8d6" stroke-width="1.5" marker-end="url(#access-review-arrow)">
+    <path d="M144 144H174"/>
+    <path d="M296 132H302Q310 132 310 124V72Q310 64 318 64H326"/>
+    <path d="M296 156H326"/>
+    <path d="M468 56H510"/>
+    <path d="M468 144H484Q492 144 492 136V80Q492 72 500 72H510"/>
+    <path d="M400 264V276Q400 284 408 284H576Q584 284 584 276V254"/>
+    <path d="M656 64H660Q668 64 668 72V124Q668 132 676 132H682"/>
+    <path d="M656 224H660Q668 224 668 216V164Q668 156 676 156H682"/>
+  </g>
+  <g fill="#1b2531" stroke="#788798">
+    <rect x="24" y="116" width="120" height="56" rx="5"/>
+    <rect x="176" y="116" width="120" height="56" rx="5"/>
+    <rect x="328" y="36" width="140" height="56" rx="5"/>
+    <rect x="328" y="116" width="140" height="56" rx="5"/>
+    <rect x="328" y="196" width="140" height="56" rx="5"/>
+    <rect x="512" y="36" width="144" height="56" rx="5"/>
+    <rect x="512" y="196" width="144" height="56" rx="5"/>
+  </g>
+  <rect x="684" y="116" width="140" height="56" rx="5" fill="#3b2b25" stroke="#ffb991"/>
+  <g font-family="system-ui, sans-serif" font-size="14" text-anchor="middle" font-weight="600" fill="#eef2f6">
+    <text x="84" y="140">Seed, shape</text>
+    <text x="236" y="140">Organisation</text>
+    <text x="398" y="60">Corpus files</text>
+    <text x="398" y="140">Prompt</text>
+    <text x="398" y="220">system</text>
+    <text x="584" y="60">Answer keys</text>
+    <text x="584" y="220">Job digest</text>
+    <text x="754" y="140" fill="#ffb991">Commitment</text>
+  </g>
+  <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle" fill="#9aa7b6">
+    <text x="84" y="160">128 bits or more</text>
+    <text x="236" y="160">teams, grants</text>
+    <text x="398" y="80">and index.txt</text>
+    <text x="398" y="160">rules, notices, code</text>
+    <text x="398" y="240">fixed text</text>
+    <text x="584" y="80">files; with notices</text>
+    <text x="584" y="240">SHA-256 of the job</text>
+    <text x="754" y="160" fill="#ffb991">seed, keys, job</text>
+  </g>
+</svg>
