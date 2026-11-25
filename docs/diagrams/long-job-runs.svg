@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="740" height="256" viewBox="0 0 740 256" role="img" aria-labelledby="long-job-runs-title long-job-runs-desc">
   <title id="long-job-runs-title">The runs of the long-job suite</title>
-  <desc id="long-job-runs-desc">One job runs past its context window with nobody interrupting it, through three summaries and 47 requests, and is kept as the reference. A job whose worker is stopped or killed is taken over when its lease ends, its log is replayed, and it must send the same requests as the reference. A job whose summary answer is bad, or whose next window opens at the trigger, must end failed with no tool run.</desc>
+  <desc id="long-job-runs-desc">One job runs past its context window with nobody interrupting it, through three summaries and 47 requests, and is kept as the reference. A job whose worker is stopped or killed is taken over when its lease ends, its log is replayed, and it must send the same requests as the reference. A job whose summary answer is bad, or whose next window opens at the trigger, must end failed; after a bad answer no tool runs.</desc>
   <defs>
     <marker id="long-job-runs-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
       <path d="m0 0 8 4-8 4z" fill="#bdc8d6"/>
@@ -59,7 +59,7 @@
     <text x="248" y="224">stored</text>
     <text x="384" y="204">Not usable, or</text>
     <text x="384" y="224">at the trigger</text>
-    <text x="520" y="204">Job failed,</text>
-    <text x="520" y="224">no tool run</text>
+    <text x="520" y="204">Job ends</text>
+    <text x="520" y="224">failed</text>
   </g>
 </svg>
