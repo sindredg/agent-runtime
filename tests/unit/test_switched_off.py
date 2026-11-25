@@ -382,7 +382,17 @@ INHERITED = {
     "KILLS_WINDOW": "7.82",
     "KILLS_SEED": "1",
     "FAILPOINT": "after_claim",
+    "SUMMARY_TRIGGER": "2800",
+    "LONG_SCENARIO_DIR": "/srv/scenarios",
+    "FAILPOINT_SUMMARY": "1",
+    "FAKE_TRACKER_FIRST_ISSUE": "200000",
 }
+LONG_SETTINGS = (
+    "SUMMARY_TRIGGER",
+    "LONG_SCENARIO_DIR",
+    "FAILPOINT_SUMMARY",
+    "FAKE_TRACKER_FIRST_ISSUE",
+)
 
 
 def test_a_run_on_the_claude_api_gets_its_settings_from_the_entry_alone() -> None:
@@ -421,6 +431,24 @@ def test_a_rehearsal_and_a_run_on_the_fake_provider_get_no_key() -> None:
     assert (chosen.provider, chosen.refusal(5) is not None) == ("fake", True)
     other = switched_off.child_environment(switched_off.ENTRIES["budget-off"], "fake", INHERITED)
     assert other == {"PATH": "/usr/bin", "DOCKER_GID": "999"}
+
+
+def test_a_run_on_the_long_stack_gets_its_settings_empty_whatever_it_inherits() -> None:
+    """Empty, not left out: a variable that is set beats the same name in `.env`."""
+    entry = replace(ENTRY, stack="long")
+    env = switched_off.child_environment(entry, "fake", INHERITED)
+    empty = dict.fromkeys(("FAILPOINT", *LONG_SETTINGS), "")
+    assert env == {"PATH": "/usr/bin", "DOCKER_GID": "999", **empty}
+    # The same with nothing inherited.
+    assert switched_off.child_environment(entry, "fake", {}) == empty
+
+
+@pytest.mark.parametrize("stack", ["none", "up", "chaos", "kills", "lab"])
+def test_a_run_on_another_stack_gets_no_setting_of_the_long_stack(stack: str) -> None:
+    entry = replace(ENTRY, stack=stack)
+    env = switched_off.child_environment(entry, "fake", INHERITED)
+    assert not {"FAILPOINT", *LONG_SETTINGS} & env.keys()
+    assert {"PATH": "/usr/bin", "DOCKER_GID": "999"}.items() <= env.items()
 
 
 def test_the_scripts_own_git_commands_never_get_the_key() -> None:
@@ -978,12 +1006,18 @@ def test_a_stack_the_script_does_not_know_is_refused_and_every_entry_has_one_it_
         ("none", "tests/lab/test_x.py::test_y", "stack 'none' runs tests/unit/ only"),
         ("lab", "tests/unit/test_x.py::test_y", "stack 'lab' runs tests/lab/ only"),
         ("lab", "tests/chaos/test_x.py::test_y", "stack 'lab' runs tests/lab/ only"),
+        ("long", "tests/unit/test_x.py::test_y", "stack 'long' runs tests/long/ only"),
+        ("long", "tests/chaos/test_x.py::test_y", "stack 'long' runs tests/long/ only"),
     ],
 )
 def test_a_run_with_no_stack_or_the_lab_names_only_the_tests_it_can_run(
     stack: str, node: str, problem: str
 ) -> None:
-    fits = {"none": "tests/unit/test_x.py::test_y", "lab": "tests/lab/test_x.py::test_y"}
+    fits = {
+        "none": "tests/unit/test_x.py::test_y",
+        "lab": "tests/lab/test_x.py::test_y",
+        "long": "tests/long/test_x.py::test_y",
+    }
     assert (
         switched_off.run_problems(
             replace(ENTRY, stack=stack, expect=(switched_off.Expect(fits[stack], "x"),))
@@ -1134,7 +1168,7 @@ def test_an_edit_outside_the_code_and_its_migrations_is_refused(
 
 
 def test_every_entry_edits_the_code_or_its_migrations_only() -> None:
-    assert len(switched_off.ENTRIES) == 44
+    assert len(switched_off.ENTRIES) == 49
     for entry in switched_off.ENTRIES.values():
         assert switched_off.edit_path_problems(entry) == []
     paths = {edit.path for e in switched_off.ENTRIES.values() for edit in e.edits}

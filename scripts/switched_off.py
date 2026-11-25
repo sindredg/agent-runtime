@@ -104,8 +104,12 @@ ORDER_CASES = (
 LAB = (
     "tests/lab/test_lab_demo.py::test_a_worker_stopped_in_a_call_to_gitea_leaves_exactly_one_issue"
 )
-# The tests that a run with no stack, and the lab's stack, may name.
-STACK_TESTS = {"none": "tests/unit/", "lab": "tests/lab/"}
+# The long-job suite: its tests, and the issue its switched-off runs are recorded under.
+LONG = "tests/long/test_long_job.py"
+LONG_UNINTERRUPTED = f"{LONG}::test_a_job_longer_than_the_window_finishes_through_three_summaries"
+LONG_RUNS_ISSUE = 237
+# The tests that a run with no stack, the lab's stack and the long stack may name.
+STACK_TESTS = {"none": "tests/unit/", "lab": "tests/lab/", "long": "tests/long/"}
 # What an edit may change: the product's code and its migrations, never a test,
 # the workflow or this script.
 EDITABLE = ("src/", "migrations/")
@@ -122,6 +126,14 @@ KEYED_TOKEN_BOUND = 250_000
 PROVIDER_VARIABLE = "SWITCHED_OFF_PROVIDER"
 # Never passed on to a run on the fake provider, nor to this script's own git commands.
 KEY_VARIABLES = ("CLAUDE_API_KEY", "ANTHROPIC_API_KEY")
+# What the long stack reads from the shell: the workers' trigger and summary
+# failpoint limit, the fake provider's scenarios and the tracker's first number.
+LONG_VARIABLES = (
+    "SUMMARY_TRIGGER",
+    "LONG_SCENARIO_DIR",
+    "FAILPOINT_SUMMARY",
+    "FAKE_TRACKER_FIRST_ISSUE",
+)
 # The counts of a kill runner's record that a `Refusals` entry is judged by.
 SENT = "jobs_that_sent_a_rebuilt_thinking_block"
 ANSWERED = "jobs_answered_after_sending_one"
@@ -1188,6 +1200,113 @@ ENTRIES: dict[str, SwitchedOff] = {
             ),
         ),
     ),
+    "long-trigger-off": SwitchedOff(
+        issue=LONG_RUNS_ISSUE,
+        what="the summary trigger: no worker summarises, whatever SUMMARY_TRIGGER says",
+        edits=(
+            Edit(
+                "src/runtime/config.py",
+                '            summary_trigger=_optional_positive_int(env, "SUMMARY_TRIGGER"),\n',
+                "            summary_trigger=None,  # switched off\n",
+            ),
+        ),
+        stack="long",
+        expect=(
+            Expect(
+                LONG_UNINTERRUPTED,
+                "the job's last request was refused for the context window on a scripted turn",
+            ),
+        ),
+    ),
+    "long-replay-skips-summary": SwitchedOff(
+        issue=LONG_RUNS_ISSUE,
+        what="the summary steps in the log a worker reads when it claims a job",
+        edits=(
+            Edit(
+                "src/runtime/worker/replay.py",
+                "    for step in steps:\n        state.apply(step)\n",
+                "    for step in steps:\n"
+                "        if step.kind is not StepKind.SUMMARY:  # switched off\n"
+                "            state.apply(step)\n",
+            ),
+        ),
+        stack="long",
+        expect=(
+            Expect(
+                LONG_UNINTERRUPTED,
+                None,
+                "nobody takes the job over, so no worker reads a log with a summary in it",
+            ),
+            Expect(
+                f"{LONG}::test_a_job_stopped_after_its_first_summary_sends_what_the"
+                "_uninterrupted_job_sent",
+                "the job stored more summary steps than the three its windows need",
+            ),
+            Expect(
+                f"{LONG}::test_jobs_killed_at_planned_requests_send_what_the"
+                "_uninterrupted_job_sent",
+                "a request at a key the uninterrupted run lacks",
+            ),
+        ),
+    ),
+    "long-summary-cut": SwitchedOff(
+        issue=LONG_RUNS_ISSUE,
+        what="the whole summary in the message that opens the next window: half of it is cut",
+        edits=(
+            Edit(
+                "src/runtime/worker/summary.py",
+                'the summary, a blank line, the continuation."""\n',
+                'the summary, a blank line, the continuation."""\n'
+                '    text = text[: len(text) // 2] + "\\n\\n" + text.rsplit("\\n", 1)[-1]'
+                "  # switched off\n",
+            ),
+        ),
+        stack="long",
+        expect=(
+            Expect(
+                LONG_UNINTERRUPTED,
+                "a window does not open with the summary text and the continuation line",
+            ),
+        ),
+    ),
+    "long-own-trigger": SwitchedOff(
+        issue=LONG_RUNS_ISSUE,
+        what="the trigger a job's first request pinned: a worker uses its own setting",
+        edits=(
+            Edit(
+                "src/runtime/worker/replay.py",
+                "        return self.pinned_trigger if self.pinned else own\n",
+                "        return own  # switched off\n",
+            ),
+        ),
+        stack="long",
+        expect=(
+            Expect(
+                f"{LONG}::test_a_takeover_by_workers_with_another_trigger_sends_what_the"
+                "_first_would_have",
+                "a worker with another trigger sent other requests than the first worker"
+                " would have",
+            ),
+        ),
+    ),
+    "long-oversize-off": SwitchedOff(
+        issue=LONG_RUNS_ISSUE,
+        what="the stop of a job whose window opens at or over the trigger",
+        edits=(
+            Edit(
+                AGENT,
+                "            raise _JobFailed(oversize)\n",
+                "            pass  # switched off\n",
+            ),
+        ),
+        stack="long",
+        expect=(
+            Expect(
+                f"{LONG}::test_a_window_that_opens_at_the_trigger_fails_the_job_for_it",
+                "the window opened at the trigger and the job was not failed for it",
+            ),
+        ),
+    ),
 }
 
 
@@ -1668,8 +1787,13 @@ def child_environment(entry: SwitchedOff, provider: str, env: Mapping[str, str])
     No inherited `KILLS_*` variable and no failpoint reaches them: the entry
     alone names the provider, the model and the number of jobs. The key is
     passed on only to a run on the Claude API.
+
+    No inherited setting of the long stack reaches them either. A run on the
+    long stack gets each as the empty string, and the failpoint too. A value
+    in `.env` cannot replace a variable that is set: the stack starts on its
+    defaults, and each test sets its own.
     """
-    dropped = ("FAILPOINT", PROVIDER_VARIABLE)
+    dropped = ("FAILPOINT", PROVIDER_VARIABLE, *LONG_VARIABLES)
     kept = {
         name: value
         for name, value in without_keys(env).items()
@@ -1685,6 +1809,11 @@ def child_environment(entry: SwitchedOff, provider: str, env: Mapping[str, str])
         # jobs, and the runner refuses one more.
         for name in ("KILLS_RUNS", "KILLS_FAILPOINT_RUNS", "KILLS_JOB_LIMIT"):
             kept[name] = str(entry.runs)
+    if entry.stack == "long":
+        # The failpoint too: the long stack reads it from the shell, and a
+        # value in `.env` would stop a worker of the run.
+        for name in ("FAILPOINT", *LONG_VARIABLES):
+            kept[name] = ""
     return kept
 
 

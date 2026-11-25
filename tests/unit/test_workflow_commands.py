@@ -15,6 +15,7 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any
@@ -277,6 +278,38 @@ def test_a_kill_runs_failure_message_and_list_hold_no_marker(kills: ModuleType) 
     assert commands("\n".join(failures)) == commands(repr(failures)) == []
 
 
+@pytest.fixture
+def long_job(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
+    """The long-job suite's conftest, imported as pytest imports it. It starts no stack."""
+    monkeypatch.syspath_prepend(str(ROOT / "tests"))
+    return importlib.import_module("long.conftest")
+
+
+def test_a_long_job_result_line_and_failure_line_hold_no_marker(
+    long_job: ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The reason of a question is stored text, and it is in a failure line."""
+    stack = long_job.Stack(tmp_path)
+    run = long_job.Running("a run", datetime.now(UTC), 0.0, 0.0)
+    run.counts = {"jobs": 1, "status": HOSTILE}
+    stack.write(run, "void", HOSTILE)
+    stack.hang_up()
+    file = (tmp_path / "results.jsonl").read_text()
+    printed = capsys.readouterr().out
+    assert commands(file) == commands(printed) == []
+    assert (json.loads(file)["status"], json.loads(file)["void"]) == (HOSTILE, HOSTILE)
+    assert printed.strip() == f"RESULT {file.strip()}"
+
+    line = long_job.failure("the job asked a person a question", f"question 3: {HOSTILE}")
+    # `show` gets stored text as it is, not a line that is escaped already.
+    long_job.show(f"question 3: {HOSTILE}")
+    out = capsys.readouterr().out
+    assert "#\\u0023[error]four" in out
+    # pytest prints the message of `assert not failures` and the list itself.
+    assert commands(line) == commands(repr([line])) == commands(out) == []
+    assert "#\\u0023[error]four" in line
+
+
 def test_the_contract_report_holds_no_marker(tmp_path: Path) -> None:
     contract = load("contract_printer", ROOT / "tests" / "contract" / "test_messages_contract.py")
     usage = {"input_tokens": 1, "output_tokens": 1}
@@ -333,6 +366,7 @@ TARGETS = (
     "kills",
     "kills-claude",
     "long-up",
+    "long",
 )
 # What runs tests or the stack, or prints stored text: pytest, one of the
 # targets, a container's logs, or a record file.
@@ -340,7 +374,7 @@ PRINTS = re.compile(
     r"\bpytest\b"
     rf"|\bmake ({'|'.join(map(re.escape, TARGETS))})(?![\w-])"
     r"|\bdocker\b.*\blogs\b"
-    r"|\.(chaos|kills|notify-timing|contract)/"
+    r"|\.(chaos|kills|long|notify-timing|contract)/"
 )
 # The steps with a `run` that print nothing from the stack or the tests:
 # lint of the repository's own files, setup, checks of inputs, and stops.
@@ -516,7 +550,7 @@ def test_every_step_with_a_run_stops_workflow_commands_unless_it_prints_nothing_
     }
     assert ("ci.yml", "integration", "Integration tests") in wrapped
     assert ("manual-runs.yml", "claude", "Contract test") in wrapped
-    assert len(wrapped) == 29
+    assert len(wrapped) == 32
 
 
 def test_the_reader_takes_any_indentation() -> None:
@@ -580,7 +614,7 @@ def test_setup_uv_runs_without_its_problem_matchers() -> None:
         for file, step in every_step()
         if step.uses.startswith("astral-sh/setup-uv@")
     ]
-    assert len(setups) == 11
+    assert len(setups) == 12
     assert [setup for setup in setups if setup[2] != "false"] == []
 
 

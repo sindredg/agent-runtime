@@ -35,6 +35,13 @@ def worker_engine(database_url: str) -> AsyncEngine:
     return create_engine(database_url, application_name="runtime-worker", hide_parameters=True)
 
 
+def failpoints_of(config: WorkerConfig) -> Failpoints:
+    """The failpoints the worker's settings switch on, with both of their limits."""
+    return Failpoints(
+        config.failpoint, tool=config.failpoint_tool, summary=config.failpoint_summary
+    )
+
+
 async def run(config: WorkerConfig) -> None:
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -75,7 +82,7 @@ async def run(config: WorkerConfig) -> None:
         workspace_root=config.workspace_root,
         lease=timedelta(seconds=config.lease_seconds),
         heartbeat=config.heartbeat_seconds,
-        failpoints=Failpoints(config.failpoint, tool=config.failpoint_tool),
+        failpoints=failpoints_of(config),
         summary_trigger=config.summary_trigger,
     )
     docker: Docker | None = None

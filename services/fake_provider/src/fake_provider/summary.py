@@ -72,12 +72,13 @@ def build_summary(
     content: list[dict[str, Any]] = [{"type": "text", "text": text}]
     stop_reason, stop_sequence = "end_turn", None
     if fault == "tool_use":
+        call = section.bad_call
         content.append(
             {
                 "type": "tool_use",
                 "id": f"toolu_fake_{name}_summary_{number:02d}",
-                "name": "read_file",
-                "input": {"path": "summary.txt"},
+                "name": "read_file" if call is None else call.name,
+                "input": {"path": "summary.txt"} if call is None else call.input,
             }
         )
         stop_reason = "tool_use"

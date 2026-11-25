@@ -705,6 +705,10 @@ async def _loop(
             + ", ".join(repr(name) for name in unknown[:5])
             + more
         )
+    # The summaries stored so far, counted from the log itself and not from
+    # the replayed state: the `after_summary` failpoint must tell the job's
+    # first summary from a later one whatever replay makes of the log.
+    summaries = sum(1 for step in steps if step.kind is StepKind.SUMMARY)
     # The log is replayed once, here. This is also how a job is resumed: the
     # steps a stopped worker left behind are read like any others.
     state = replay(spec.prompt, steps)
@@ -785,7 +789,7 @@ async def _loop(
                 request_step["summary"] = True
             lease.check()
             await writer.append(StepKind.MODEL_REQUEST, request_step)
-            failpoints.hit("after_model_request", takeovers=job.takeovers)
+            failpoints.hit("after_model_request", takeovers=job.takeovers, summary=summarising)
             # Immediately before the call: a worker that was paused past its
             # lease must not send it.
             lease.check()
@@ -850,6 +854,10 @@ async def _loop(
                 payload,
                 tokens=response.input_tokens + response.output_tokens,
             )
+            if summarising:
+                # A summary with a problem is a `summary` step too.
+                summaries += 1
+                failpoints.hit("after_summary", takeovers=job.takeovers, summaries=summaries)
             continue
 
         # A response cut off at max_tokens can hold half a tool call, so the

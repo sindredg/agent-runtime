@@ -146,5 +146,5 @@ Read by the [kill runs](kill-runs.md) and the
 switched-off run sets the `KILLS_*` variables from its entry and passes on
 none it was given.
 
-The switches for failure tests (`FAILPOINT`, `FAILPOINT_TOOL`, `CHAOS_TOOLS`,
-`CHAOS_LOG_DIR`) are in [Testing](testing.md#failure-switches).
+The switches for failure tests (`FAILPOINT`, `FAILPOINT_TOOL`, `FAILPOINT_SUMMARY`,
+`CHAOS_TOOLS`, `CHAOS_LOG_DIR`) are in [Testing](testing.md#failure-switches).

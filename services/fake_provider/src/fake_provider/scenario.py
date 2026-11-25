@@ -120,6 +120,10 @@ class Summary(_Strict):
     delay_seconds: float = Field(default=0, ge=0, le=MAX_DELAY_SECONDS, allow_inf_nan=False)
     # A bad answer for a summary, by its number in the job, from 1.
     bad: dict[Annotated[int, Field(ge=1)], SummaryFault] = Field(default_factory=dict)
+    # The call a `tool_use` bad answer makes. Left out, it reads `summary.txt`.
+    # A scenario names a call that changes something outside, so a test can
+    # show that the call of a bad summary never runs.
+    bad_call: ToolUseBlock | None = None
 
 
 class Scenario(_Strict):

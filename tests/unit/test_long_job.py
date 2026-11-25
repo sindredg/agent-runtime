@@ -7,8 +7,10 @@ of the request's `system`, `tools` and `messages` as JSON.
 """
 
 import asyncio
+import importlib.util
 import json
 import re
+import sys
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -53,6 +55,19 @@ WIDER = "1000000"
 REFUSAL = re.compile(r"prompt is too long: (\d+) tokens > (\d+) maximum")
 # The turn whose response the scenario sizes to one token under the trigger.
 BOUNDARY = 10
+# A short `system` for the job. The scenario is sized for a job without one.
+SYSTEM = "Keep every note."
+
+
+def long_rules() -> Any:
+    """The rules of the long-job suite, which holds the same numbers for the stack."""
+    path = Path(__file__).resolve().parents[1] / "long" / "rules.py"
+    spec = importlib.util.spec_from_file_location("long_rules_for_the_scenario", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def scenario(window: bool = True) -> Scenario:
@@ -108,11 +123,11 @@ def tracker_transport(first_issue: str) -> httpx2.MockTransport:
     return httpx2.MockTransport(forward)
 
 
-def job() -> Job:
+def job(spec: dict[str, Any]) -> Job:
     return Job(
         id=JOB,
         status=JobStatus.RUNNING,
-        spec=SPEC,
+        spec=spec,
         token_budget=1_000_000,
         tokens_used=0,
         deadline=NOW + timedelta(hours=1),
@@ -133,9 +148,14 @@ def run(
     *,
     with_window: bool = True,
     first_issue: str = FIRST_ISSUE,
+    system: str | None = None,
 ) -> tuple[str, Writer, list[dict[str, Any]]]:
-    """Run the job to its end. Returns (outcome, step log, the fake's request log)."""
+    """Run the job to its end. Returns (outcome, step log, the fake's request log).
+
+    `system` is the spec's `system`. Left out, the job has none.
+    """
     seed(workspace)
+    spec = SPEC if system is None else {**SPEC, "system": system}
     app = create_app({NAME: scenario(with_window)})
     # The tools of a worker with a tracker and no sandbox, in its order.
     tools = ToolRegistry(
@@ -158,8 +178,8 @@ def run(
                         writer,  # type: ignore[arg-type]
                         provider,
                         tools,
-                        job(),
-                        JobSpec.model_validate(SPEC),
+                        job(spec),
+                        JobSpec.model_validate(spec),
                         settings,
                         workspace,
                         Lease(JOB, 1, timedelta(seconds=60), claimed_at=time.monotonic()),
@@ -247,6 +267,15 @@ def test_with_the_trigger_the_job_summarises_three_times_and_fits_the_window(
     # Every turn of the script was answered once, in order, across the windows.
     turns = [entry["turn"] for entry in log if entry["tool_choice"] is None]
     assert turns == list(range(len(scenario().turns)))
+    # The requests of each window, its summary request included: 13, 12, 12 and
+    # 10. The long-job suite plans its kills by these numbers.
+    ends = [index for index, entry in enumerate(log) if entry["tool_choice"] is not None]
+    windows = [b - a for a, b in zip([-1, *ends], [*ends, len(log) - 1], strict=True)]
+    assert tuple(windows) == long_rules().WINDOW_REQUESTS == (13, 12, 12, 10)
+    # A response of a later window counts at least 2800 and under the trigger:
+    # workers with a trigger of 2800 would summarise there, a turn early.
+    later = [tokens(entry) for entry in log[ends[0] + 1 :] if entry["tool_choice"] is None]
+    assert any(2800 <= counted < TRIGGER for counted in later)
 
 
 def test_no_id_repeats_across_the_windows(tmp_path: Path) -> None:
@@ -305,3 +334,26 @@ def test_one_more_digit_in_an_issue_number_moves_the_summary(tmp_path: Path) -> 
     assert first_summary(wide)["turn"] == BOUNDARY + 1
     # Without the seventh digit the next response reaches the trigger instead.
     assert first_summary(narrow)["turn"] == BOUNDARY + 2
+
+
+# The spec's `system`
+
+
+def test_every_request_of_a_summarising_job_carries_the_specs_system(tmp_path: Path) -> None:
+    """The `system` of the spec is in every request the job sends.
+
+    That holds for a summary request and for the first request of the
+    window after it, which carries nothing else of the conversation before.
+    """
+    outcome, writer, log = run(tmp_path / "w", TRIGGER, system=SYSTEM)
+    summaries = [index for index, entry in enumerate(log) if entry["tool_choice"] is not None]
+    openers = [log[index + 1] for index in summaries if index + 1 < len(log)]
+
+    assert outcome == "succeeded"
+    assert len(kinds(writer, StepKind.SUMMARY)) >= 1
+    # The log holds a summary request, and a request that opens a window
+    # from a summary: one message.
+    assert len(summaries) >= 1
+    assert len(openers) >= 1
+    assert all(len(entry["body"]["messages"]) == 1 for entry in openers)
+    assert [entry["body"].get("system") for entry in log] == [SYSTEM] * len(log)

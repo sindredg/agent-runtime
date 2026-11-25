@@ -169,6 +169,25 @@ def test_a_scripted_bad_answer_is_given_to_its_summary_number_only(
         assert bad.json()["stop_details"]["category"] == "cyber"
 
 
+def test_a_tool_use_bad_answer_makes_the_call_the_scenario_names() -> None:
+    """Left out, the call reads `summary.txt`. Named, it is that call under the same id."""
+    issue = {"type": "tool_use", "name": "create_issue", "input": {"title": "t", "body": "b"}}
+    for section, name, given in (
+        ({}, "read_file", {"path": "summary.txt"}),
+        ({"bad_call": issue}, "create_issue", {"title": "t", "body": "b"}),
+    ):
+        http = client(text=TEXT, bad={"1": "tool_use"}, **section)
+        bad = post(http, first_window(http), tool_choice=NONE).json()
+
+        assert bad["stop_reason"] == "tool_use"
+        assert bad["content"][-1] == {
+            "type": "tool_use",
+            "id": "toolu_fake_long_summary_01",
+            "name": name,
+            "input": given,
+        }
+
+
 def test_the_real_client_reads_a_stop_sequence_and_an_empty_text_from_the_stream() -> None:
     app = create_app({"long": scenario(text=TEXT, bad={"1": "stop_sequence"})})
     http = TestClient(app, base_url=LOCAL)
@@ -196,6 +215,8 @@ def test_the_real_client_reads_a_stop_sequence_and_an_empty_text_from_the_stream
         {"text": "x", "bad": {"0": "empty"}},
         {"text": "x", "bad": {"1": "silence"}},
         {"text": "x", "colour": "red"},
+        {"text": "x", "bad_call": {"type": "text", "text": "not a call"}},
+        {"text": "x", "bad_call": {"type": "tool_use", "name": "", "input": {}}},
     ],
 )
 def test_a_summary_section_that_cannot_be_used_is_refused(summary: dict[str, Any]) -> None:

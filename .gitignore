@@ -32,3 +32,6 @@ dist/
 
 # Results written by the timed notification run.
 .notify-timing/
+
+# Results and worker logs written by the long-job suite.
+.long/

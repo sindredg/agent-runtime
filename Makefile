@@ -1,5 +1,5 @@
 .PHONY: all up up-claude down clean logs test integration escape chaos lab kills kills-claude
-.PHONY: switched-off switched-off-rehearsal notify-timing long-up
+.PHONY: switched-off switched-off-rehearsal notify-timing long-up long
 
 # The group that owns the Docker socket. The worker joins it to start a
 # container for each sandboxed tool call. Every compose command needs it.
@@ -36,6 +36,16 @@ up-claude:
 # nothing. `make up` puts the normal stack back.
 long-up:
 	docker compose -f docker-compose.yml -f docker-compose.long.yml up --build --wait
+
+# The long-job suite on that stack: one job longer than the context window,
+# run with nobody interrupting it and again with workers stopped and killed,
+# each compared request by request with the fake provider's log. The tests
+# set the trigger, the scenarios and the failpoints themselves, whatever the
+# shell holds. Keeps the database: a job left unfinished by an earlier
+# session stops it, and `make clean` removes it. Results and worker logs in
+# .long/. `make up` afterwards brings the normal stack back.
+long: long-up
+	uv run --frozen pytest -v -s tests/long
 
 # Stop the services and keep the database volume.
 down:
