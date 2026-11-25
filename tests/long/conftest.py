@@ -20,7 +20,7 @@ import platform
 import re
 import subprocess
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -141,6 +141,8 @@ class Stack:
         # The worker containers, read once after each `up`. A container that
         # is killed and started again keeps its id.
         self.containers: list[str] = []
+        # Every job submitted since the run began, so that none is left running.
+        self.submitted: list[str] = []
         self.run: Running | None = None
         self.saved = 0
 
@@ -284,6 +286,48 @@ class Stack:
             return None
         return next((c for c in self.containers if owner.startswith(c[:12])), None)
 
+    def kill_holder(self, job_id: str, step: dict[str, Any]) -> dict[str, Any] | None:
+        """Kill the worker that holds the job while `step` is its last step, and start it again.
+
+        Returns the step's seq and epoch, the container, and the seconds
+        from the step's `created_at` to the return of `docker kill`. None if
+        no worker of the last `up` holds the job. No compose call here: the
+        kill has to land while the request is open.
+        """
+        holder = self.holder(job_id)
+        if holder is None:
+            return None
+        docker("docker", "kill", holder, check=False)
+        returned = datetime.now(UTC)
+        docker("docker", "start", holder, check=False)
+        created = datetime.fromisoformat(step["created_at"])
+        return {
+            "seq": step["seq"],
+            "epoch": step["lease_epoch"],
+            "container": holder[:12],
+            "latency": round((returned - created).total_seconds(), 3),
+        }
+
+    def take_over_with(self, job_id: str, *, trigger: int | None) -> list[str]:
+        """Stop every worker dead, let the job's lease run out, and start workers on `trigger`.
+
+        Killed, not stopped: a worker that is told to stop gives its job
+        back, and the next claim is then no takeover. Returns the trigger
+        each new worker says it has.
+        """
+        for container in self.workers():
+            docker("docker", "kill", container, check=False)
+        left = [c[:12] for c, state in self.workers().items() if state == "running"]
+        if left:
+            raise RuntimeError(f"workers still running after the kill: {left}")
+        expires = self.job(job_id)["lease_expires_at"]
+        if expires is not None:
+            wait = (datetime.fromisoformat(expires) - datetime.now(UTC)).total_seconds()
+            time.sleep(max(wait, 0) + 1)
+        self.workers_up(trigger=trigger)
+        running = [c for c, state in self.workers().items() if state == "running"]
+        return [self.setting(c, "SUMMARY_TRIGGER") for c in running]
+
     # Jobs, and the fake provider's and the tracker's own records
 
     def clear(self) -> None:
@@ -295,6 +339,7 @@ class Stack:
         """Submit the job: the scenario's files as the spec's, no `system`, the default budget."""
         body = {"prompt": rules.PROMPT, "model": model, "files": rules.job_files(self.packaged)}
         job_id: str = self.api.post("/jobs", json=body).raise_for_status().json()["id"]
+        self.submitted.append(job_id)
         return job_id
 
     def job(self, job_id: str) -> dict[str, Any]:
@@ -336,17 +381,32 @@ class Stack:
             **more,
         )
 
-    def finish(self, job_id: str, *, within: float, started: datetime, submitted: float) -> Seen:
+    def finish(
+        self,
+        job_id: str,
+        *,
+        within: float,
+        started: datetime,
+        submitted: float,
+        each: Callable[[list[dict[str, Any]]], None] | None = None,
+    ) -> Seen:
         """Wait for a final status, at most `within` seconds, and read the job.
 
         A job that asks a person gets an approval, so that it goes on, and
         the question is kept: the checks count it. A wait that runs out is
         not an error here. The job comes back as it is, not final.
+
+        `each` gets the job's steps so far at every look, five times a
+        second. A run stops a worker from it, at the step it waits for.
         """
         questions: list[dict[str, Any]] = []
         wall, monotonic = time.time(), time.monotonic()
         deadline = submitted + within
+        steps: list[dict[str, Any]] = []
         while True:
+            if each is not None:
+                steps += self.steps(job_id, after=steps[-1]["seq"] if steps else 0)
+                each(steps)
             job = self.job(job_id)
             if job["status"] not in rules.NOT_FINAL or time.monotonic() > deadline:
                 break
@@ -373,10 +433,18 @@ class Stack:
             drift=(time.time() - wall) - (time.monotonic() - monotonic),
         )
 
-    def run_job(self, model: str = rules.MODEL, *, within: float = FULL_JOB) -> Seen:
-        """Submit the job and wait for its end."""
+    def run_job(
+        self,
+        model: str = rules.MODEL,
+        *,
+        within: float = FULL_JOB,
+        each: Callable[[str, list[dict[str, Any]]], None] | None = None,
+    ) -> Seen:
+        """Submit the job and wait for its end. `each` gets the job's id and its steps so far."""
         started, submitted = datetime.now(UTC), time.monotonic()
-        return self.finish(self.submit(model), within=within, started=started, submitted=submitted)
+        job_id = self.submit(model)
+        watch = None if each is None else (lambda steps: each(job_id, steps))
+        return self.finish(job_id, within=within, started=started, submitted=submitted, each=watch)
 
     def cancel(self, job_id: str) -> dict[str, Any]:
         """Cancel a job that is not final and wait for its end. Returns the job as it is then."""
@@ -405,9 +473,10 @@ class Stack:
         else:
             self.clear()
         self.run = run
+        self.submitted = []
         return run
 
-    def settle(self, run: Running, failures: list[str], job_ids: list[str]) -> None:
+    def settle(self, run: Running, failures: list[str], job_ids: list[str] | None = None) -> None:
         """After a run, passed or failed: the workers back, no job left running, the logs saved.
 
         Called from the test's own `finally`, before its one assert. What
@@ -420,7 +489,7 @@ class Stack:
             self.workers_up()
         except (RuntimeError, subprocess.TimeoutExpired) as error:
             failures.append(failure("the workers did not come back after the run", error))
-        for job_id in job_ids:
+        for job_id in self.submitted if job_ids is None else job_ids:
             try:
                 job = self.job(job_id)
                 if job["status"] in rules.NOT_FINAL:

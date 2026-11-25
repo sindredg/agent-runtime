@@ -177,6 +177,20 @@ class Log:
             log_length=log_length,
         )
 
+    def taken_over_after(self, seq: int) -> None:
+        """Every step after `seq` is the next worker's."""
+        for step in self.steps:
+            step["lease_epoch"] = 2 if step["seq"] > seq else 1
+
+    def first(self, kind: str, **payload: Any) -> dict[str, Any]:
+        """The first step of a kind whose payload holds these values."""
+        return next(
+            step
+            for step in self.steps
+            if step["kind"] == kind
+            and all(step["payload"].get(name) == value for name, value in payload.items())
+        )
+
     def at(self, rules: ModuleType, key: tuple[int, int], summary: bool = False) -> dict[str, Any]:
         """The entry at a key."""
         found: dict[str, Any] = rules.by_key(self.entries)[key, summary]
@@ -269,7 +283,13 @@ def test_each_bad_summary_has_a_scenario_the_fake_provider_loads(rules: ModuleTy
     for fault in rules.FAULTS:
         bad = files[rules.bad_name(fault)]
         # The first summary gets the fault, under its own name, and no answer waits.
-        assert bad == {**original, "summary": {**original["summary"], "bad": {"1": fault}}}
+        section = {**original["summary"], "bad": {"1": fault}}
+        if fault == "tool_use":
+            # Its call would open an issue if it ran, under the id the provider gives it.
+            section["bad_call"] = rules.BAD_CALL
+            assert rules.BAD_CALL["name"] == "create_issue"
+            assert rules.bad_call_id(fault) == "toolu_fake_long-window-bad-tool-use_summary_01"
+        assert bad == {**original, "summary": section}
         assert parse_scenario(json.dumps(bad)).summary.bad == {1: fault}  # type: ignore[union-attr]
 
 
@@ -517,7 +537,13 @@ def test_steps_whose_request_never_arrived_are_held_to_the_number_allowed(
 
     assert rules.unsent_over(found, 1) is None
     assert rules.unsent_over(found, 0) == "1 steps, at most 0 expected"
-    assert rules.unsent_over(rules.matched(Log().entries, Log().steps), 0) is None
+    none = rules.matched(Log().entries, Log().steps)
+    assert rules.unsent_over(none, 0) is None
+    # A worker stopped between the step and the call leaves exactly one.
+    assert rules.unsent_over(none, 1) is None
+    assert rules.unsent_over(none, 1, exactly=True) == "0 steps, exactly 1 expected"
+    assert rules.unsent_over(found, 1, exactly=True) is None
+    assert rules.unsent_over(found, 0, exactly=True) == "1 steps, exactly 0 expected"
 
 
 def test_a_log_at_the_providers_cap_may_have_dropped_requests(rules: ModuleType) -> None:
@@ -757,6 +783,9 @@ def kept(lines: list[str]) -> str:
 
 
 def test_the_lines_a_switched_off_run_names_come_first_and_are_all_kept(rules: ModuleType) -> None:
+    # Five lines of 150 characters are 770 with the exception's name and the
+    # line breaks, and pytest keeps 500. So with five named lines each is cut
+    # to 95; with one or two, as every test of the suite has, to 150.
     others = [f"another clause: job {n}, key (1, {n}), 3 of 4" for n in range(100)]
     named = [f"{text}: 4 steps, expected 3; job 0a0a, key (0, 12)" + " x" * 80 for text in NAMED]
     # The named lines last, and each too long to fit five times.
@@ -789,6 +818,312 @@ def test_one_or_two_named_lines_keep_150_characters_and_only_the_first_of_each_m
     plain = ["another clause: 1", "another clause: 2"]
     assert rules.ordered(plain, NAMED) == plain
     assert rules.ordered([], NAMED) == []
+
+
+# Stops and takeovers
+
+
+def test_a_worker_stopped_right_after_the_first_summary_is_told_from_a_later_stop(
+    rules: ModuleType,
+) -> None:
+    log = Log()
+    summary = log.first("summary")
+    log.taken_over_after(summary["seq"])
+    assert rules.stopped_after_first_summary(log.steps) is None
+    assert rules.carried_on({"takeovers": 1}, log.steps, summary=True) is None
+
+    # Stopped a step later: the first worker wrote the opening request too.
+    log.taken_over_after(summary["seq"] + 1)
+    found = rules.stopped_after_first_summary(log.steps)
+    assert (
+        found
+        == "the first worker's last step is model_request at seq 12, the first summary is at seq 11"
+    )
+    # Never stopped: one worker wrote everything.
+    log.taken_over_after(len(log.steps))
+    assert rules.stopped_after_first_summary(log.steps) is not None
+    assert rules.stopped_after_first_summary([]) is not None
+
+
+def test_a_worker_stopped_at_a_summary_request_left_it_for_the_next_worker_to_send(
+    rules: ModuleType,
+) -> None:
+    log = Log()
+    request = log.first("model_request", summary=True)
+    # The first worker wrote the step and stopped. The next wrote it again and sent it.
+    log.steps.insert(log.steps.index(request) + 1, copy.deepcopy(request))
+    for seq, step in enumerate(log.steps, start=1):
+        step["seq"] = seq
+    log.taken_over_after(request["seq"])
+    assert rules.stopped_at_summary_request(log.steps, log.entries) is None
+    assert rules.unsent_over(rules.matched(log.entries, log.steps), 1, exactly=True) is None
+
+    # Stopped at an ordinary request instead.
+    earlier = Log()
+    earlier.taken_over_after(earlier.first("model_request", messages=3)["seq"])
+    assert rules.stopped_at_summary_request(earlier.steps, earlier.entries) == (
+        "the first worker's last step is model_request at seq 4, not a summary request"
+    )
+    # The provider got no request after the stop.
+    assert rules.stopped_at_summary_request(log.steps, log.entries[:3]) == (
+        "the provider got 3 requests, and none after the stop"
+    )
+    # The next request the provider got after the stop is not the summary request.
+    others = [entry for entry in log.entries if not rules.is_summary(entry)]
+    assert rules.stopped_at_summary_request(log.steps, others) == (
+        "the provider's request 4, the first after the stop, asks for no summary"
+    )
+    # A first worker that did send it looks the same here. The count of
+    # steps that were never sent tells the two apart.
+    sent = Log()
+    sent.taken_over_after(sent.first("model_request", summary=True)["seq"])
+    assert rules.stopped_at_summary_request(sent.steps, sent.entries) is None
+    found = rules.unsent_over(rules.matched(sent.entries, sent.steps), 1, exactly=True)
+    assert found == "0 steps, exactly 1 expected"
+
+
+def test_a_job_is_carried_on_when_a_later_worker_sent_a_request(rules: ModuleType) -> None:
+    log = Log()
+    log.taken_over_after(log.first("summary")["seq"])
+    assert rules.carried_on({"takeovers": 1}, log.steps, summary=True) is None
+    assert rules.carried_on({"takeovers": 1}, log.steps, summary=False) is None
+    assert rules.carried_on({"takeovers": 0}, log.steps, summary=True) is not None
+
+    # The later worker only wrote the job's last answer: no request, no summary.
+    log.taken_over_after(len(log.steps) - 1)
+    assert rules.carried_on({"takeovers": 1}, log.steps, summary=False) == (
+        "1 takeovers; steps of a later worker: 1, of the kinds needed [] of ['model_request']"
+    )
+    # A request of the later worker, and no summary where one is needed.
+    log.taken_over_after(len(log.steps) - 2)
+    assert rules.carried_on({"takeovers": 1}, log.steps, summary=False) is None
+    assert rules.carried_on({"takeovers": 1}, log.steps, summary=True) is not None
+
+
+# Kills at planned requests
+
+
+def test_the_plan_of_the_suites_seed_meets_its_three_rules(rules: ModuleType) -> None:
+    plan = rules.plan(293)
+    assert plan == [
+        [(1, 9), (3, 1)],
+        [(1, 2), (3, 1), (3, 3)],
+        [(3, 1)],
+        [(0, 4), (0, 9), (3, 2)],
+        [(1, 7), (2, 6), (3, 1)],
+    ]
+    assert rules.plan(293) == plan
+    assert rules.plan_problems(plan) == []
+    # No kill is planned in a window's last three requests: the windows hold 13, 12, 12 and 10.
+    assert all(m <= (10, 9, 9, 7)[k] for kills in plan for k, m in kills)
+    assert all(1 <= len(kills) <= 3 for kills in plan)
+
+
+def test_a_plan_that_shows_too_little_or_cannot_land_is_refused(rules: ModuleType) -> None:
+    good = rules.plan(293)
+
+    # Most seeds give a job with no kill right after a summary.
+    assert rules.plan_problems(rules.plan(1)) != []
+    no_boundary = [*good[:2], [(0, 1)], *good[3:]]
+    assert rules.plan_problems(no_boundary) == [
+        "job 2: no kill in the first two requests after a summary"
+    ]
+    only_boundaries = [[(1, 1)], [(2, 2)], [(3, 1)], [(1, 2)], [(0, 9), (2, 1)]]
+    assert rules.plan_problems(only_boundaries) == [
+        "no job has a kill at the fourth request or later after a summary"
+    ]
+    backwards = [[(3, 1), (1, 9)], *good[1:]]
+    assert rules.plan_problems(backwards) == [
+        "job 0: [(3, 1), (1, 9)] is not one to three pairs in rising order"
+    ]
+    twice = [[(1, 2), (1, 2)], *good[1:]]
+    assert rules.plan_problems(twice)[0].startswith("job 0: [(1, 2), (1, 2)] is not")
+    # The summary request of the first window is its thirteenth request.
+    too_late = [[(0, 11), (1, 1)], *good[1:]]
+    assert rules.plan_problems(too_late) == ["job 0: (0, 11) is outside the windows"]
+
+
+def test_a_planned_request_is_counted_from_its_summary_with_resends(rules: ModuleType) -> None:
+    log = Log()
+    assert rules.planned_seq(log.steps, 0, 1) == 1
+    assert rules.planned_seq(log.steps, 0, 2) == 4
+    # The fourth request step of the first window is its summary request.
+    assert rules.planned_seq(log.steps, 0, 4) == log.first("model_request", summary=True)["seq"]
+    assert rules.planned_seq(log.steps, 0, 5) is None
+    # After the first summary: the opening request, then the next.
+    assert rules.planned_seq(log.steps, 1, 1) == log.first("summary")["seq"] + 1
+    assert rules.planned_seq(log.steps, 2, 3) is None
+    assert rules.planned_seq(log.steps[:5], 1, 1) is None
+    # A request sent again is a step of its own, so the one after it moves on.
+    step = log.first("model_request", messages=3)
+    log.steps.insert(log.steps.index(step), copy.deepcopy(step))
+    for seq, moved in enumerate(log.steps, start=1):
+        moved["seq"] = seq
+    assert (rules.planned_seq(log.steps, 0, 2), rules.planned_seq(log.steps, 0, 3)) == (4, 5)
+
+
+def test_a_kill_reached_its_request_when_the_killed_worker_wrote_nothing_after_it(
+    rules: ModuleType,
+) -> None:
+    log = Log()
+    target = log.first("model_request", messages=3)["seq"]
+    log.taken_over_after(target)
+    assert rules.kill_reached(log.steps, target) is True
+
+    # The worker got its answer and wrote a step more: the kill came late.
+    log.taken_over_after(target + 1)
+    assert rules.kill_reached(log.steps, target) is False
+    # Not a request step, and a step that is not there.
+    assert rules.kill_reached(log.steps, target + 1) is False
+    assert rules.kill_reached(log.steps, 999) is False
+
+
+# A bad summary answer
+
+
+def bad_summary(rules: ModuleType) -> Any:
+    """A job whose first summary answer could not be used: stored with its problem, then failed."""
+    log = Log()
+    summary = log.first("summary")
+    summary["payload"]["problem"] = "it calls a tool"
+    log.steps = log.steps[: summary["seq"]]
+    log.step("error", message="the summary is not usable: it calls a tool")
+    log.entries = log.entries[:4]
+    log.tracker = log.tracker[:1]
+    return log
+
+
+def test_a_bad_summary_fails_the_job_at_once_and_runs_nothing(rules: ModuleType) -> None:
+    log = bad_summary(rules)
+    job = log.seen(rules, status="failed", error="the summary is not usable: it calls a tool")
+    assert rules.bad_summary_problems(job, "toolu_summary_01") == []
+
+
+@pytest.mark.parametrize(
+    ("change", "problem"),
+    [
+        ("no problem", "1 summary steps, with a problem: [False]"),
+        ("succeeded", "status succeeded"),
+        ("asked again", "2 summary requests at the provider"),
+        ("a tool ran", "steps after the summary: ['tool_intent', 'error']"),
+        ("an issue", f"the tracker holds [9] for {JOB}:toolu_summary_01"),
+    ],
+)
+def test_a_bad_summary_that_did_not_end_the_job_cleanly_is_found(
+    rules: ModuleType, change: str, problem: str
+) -> None:
+    log = bad_summary(rules)
+    view: dict[str, Any] = {
+        "status": "failed",
+        "error": "the summary is not usable: it calls a tool",
+    }
+    if change == "no problem":
+        del log.first("summary")["payload"]["problem"]
+    elif change == "succeeded":
+        view = {"status": "succeeded", "error": None}
+    elif change == "asked again":
+        log.entries.append(copy.deepcopy(log.entries[-1]))
+    elif change == "a tool ran":
+        log.steps.insert(-1, {"seq": 11.5, "kind": "tool_intent", "lease_epoch": 1, "payload": {}})
+    elif change == "an issue":
+        log.tracker.append({"id": 9, "operation_id": f"{JOB}:toolu_summary_01"})
+
+    assert rules.bad_summary_problems(log.seen(rules, **view), "toolu_summary_01") == [problem]
+
+
+# Other issue numbers
+
+
+def test_requests_of_the_same_size_at_every_key_and_numbers_from_the_new_first(
+    rules: ModuleType,
+) -> None:
+    reference, job = Log(), Log(OTHER, first_issue=200_000)
+    assert rules.estimate_differences(reference.entries, job.entries) == []
+    assert rules.numbers_below(rules.issues_of(OTHER, job.tracker), 200_000) == []
+
+    job.at(rules, (1, 4))["input_estimate"] = 51
+    assert rules.estimate_differences(reference.entries, job.entries) == [(1, 4)]
+    # A refused request has no size to compare.
+    job.at(rules, (1, 4))["status"] = 400
+    assert rules.estimate_differences(reference.entries, job.entries) == []
+    # The old tracker was still in use: its numbers are under the new first one.
+    old = rules.issues_of(JOB, reference.tracker)
+    assert rules.numbers_below(old, 200_000) == [7, 8]
+
+
+# No trigger, and a window that opens at the trigger
+
+
+def test_a_job_that_must_not_summarise_is_found_when_it_did(rules: ModuleType) -> None:
+    log = Log()
+    assert rules.summarised(log.seen(rules)) == "2 summary steps, 2 summary requests"
+    log.steps = [step for step in log.steps if step["kind"] != "summary"]
+    assert rules.summarised(log.seen(rules)) == "0 summary steps, 2 summary requests"
+    log.entries = [entry for entry in log.entries if not rules.is_summary(entry)]
+    assert rules.summarised(log.seen(rules)) is None
+
+
+def test_the_tokens_of_a_response_are_its_input_and_output(rules: ModuleType) -> None:
+    usage = {"input_tokens": 2900, "output_tokens": 99}
+    assert rules.response_tokens({"payload": {"usage": usage}}) == 2999
+    assert rules.response_tokens({"payload": {}}) == 0
+
+
+def oversize(rules: ModuleType, size: int = 293) -> Any:
+    """A job cut after the first request of its second window, which the provider counted."""
+    log = Log()
+    log.entries = log.entries[:5]
+    for entry in log.entries:
+        entry["usage"] = {"input_tokens": 120, "output_tokens": 40}
+    log.entries[4]["usage"]["input_tokens"] = size
+    log.steps = log.steps[: log.first("summary")["seq"] + 2]
+    return log
+
+
+def test_the_size_of_a_windows_first_request_is_read_from_the_providers_count(
+    rules: ModuleType,
+) -> None:
+    log = oversize(rules)
+    assert rules.opening_input(log.entries) == 293
+    # Not before the request after the summary request is answered.
+    assert rules.opening_input(log.entries[:4]) is None
+    del log.entries[4]["usage"]
+    assert rules.opening_input(log.entries) is None
+    assert rules.opening_input([]) is None
+
+
+def test_a_job_whose_window_opens_at_the_trigger_is_failed_for_exactly_that(
+    rules: ModuleType,
+) -> None:
+    log = oversize(rules)
+    error = (
+        "the summary leaves the next window at or over the trigger: 293 input tokens, trigger 293"
+    )
+    assert rules.oversize_error(293, 293) == error
+    assert rules.oversize_problems(log.seen(rules, status="failed", error=error), 293, 293) == []
+
+    # It went on and summarised again, to its end.
+    whole = Log()
+    assert rules.oversize_problems(whole.seen(rules), 293, 293) == [
+        "status succeeded, error 'None'",
+        "2 summary steps, 2 summary requests",
+    ]
+    other = error.replace("trigger 293", "trigger 1")
+    assert rules.oversize_problems(log.seen(rules, status="failed", error=other), 293, 293) == [
+        f"status failed, error {other!r}"
+    ]
+
+
+def test_the_differences_of_a_job_are_counted_by_kind(rules: ModuleType) -> None:
+    reference, job = Log(), Log(OTHER, first_issue=41)
+    assert rules.compared(reference.seen(rules), job.seen(rules)).summary() == (
+        "0 differ, 0 lacking, 0 missing, 0 out of order, 0 wrong numbers"
+    )
+    job.entries = job.entries[:-1]
+    job.at(rules, (1, 4))["body"]["system"] = "another"
+    assert rules.compared(reference.seen(rules), job.seen(rules)).summary() == (
+        "1 differ, 0 lacking, 1 missing, 0 out of order, 0 wrong numbers, the first (1, 4)"
+    )
 
 
 # The lines of a test: each check under its own fixed text
@@ -836,12 +1171,6 @@ def test_a_job_that_holds_every_clause_gets_no_line(suite: ModuleType) -> None:
     # The texts a switched-off run names, word for word, each under its own name.
     assert NAMED[:3] == (suite.WINDOW_REFUSAL, suite.SUMMARY_STEPS, suite.OPENING)
     assert suite.LACKING == "a request at a key the uninterrupted run lacks"
-    assert set(suite.NAMED) == {
-        suite.WINDOW_REFUSAL,
-        suite.SUMMARY_STEPS,
-        suite.OPENING,
-        suite.LACKING,
-    }
 
 
 @pytest.mark.parametrize(
@@ -989,3 +1318,29 @@ def test_a_run_during_which_the_clock_was_set_is_void_and_says_so(
     assert "void" not in records[0]
     assert {record["provider"] for record in records} == {"fake provider"}
     assert {record["workers"] for record in records} == {2}
+
+
+def test_the_lines_of_one_job_among_several_carry_its_name(suite: ModuleType) -> None:
+    lines = [f"{suite.LACKING}: 1 keys, the first (0, 15)", f"{suite.NOT_SUCCEEDED}: status failed"]
+    assert suite.tagged(lines, "job 3") == [
+        f"{suite.LACKING}: job 3: 1 keys, the first (0, 15)",
+        f"{suite.NOT_SUCCEEDED}: job 3: status failed",
+    ]
+    # The line still starts with its fixed text, and the named ones come first.
+    assert suite.rules.ordered(suite.tagged(lines[::-1], "job 3"), suite.NAMED)[0].startswith(
+        suite.LACKING
+    )
+
+
+def test_the_suite_names_the_six_texts_of_the_switched_off_runs(suite: ModuleType) -> None:
+    assert suite.NAMED == (
+        "the job's last request was refused for the context window on a scripted turn",
+        "the job does not have exactly N summary steps",
+        "a request at a key the uninterrupted run lacks",
+        "a window does not open with the summary text and the continuation line",
+        "a worker with another trigger sent other requests than the first worker would have",
+        "the window opened at the trigger and the job was not failed for it",
+    )
+    assert suite.rules.plan_problems(suite.rules.plan(suite.SEED)) == []
+    # A missed kill says the word and the seed.
+    assert suite.INCONCLUSIVE.startswith("INCONCLUSIVE")
