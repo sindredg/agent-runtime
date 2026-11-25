@@ -104,8 +104,8 @@ ORDER_CASES = (
 LAB = (
     "tests/lab/test_lab_demo.py::test_a_worker_stopped_in_a_call_to_gitea_leaves_exactly_one_issue"
 )
-# The tests that a run with no stack, and the lab's stack, may name.
-STACK_TESTS = {"none": "tests/unit/", "lab": "tests/lab/"}
+# The tests that a run with no stack, the lab's stack and the long stack may name.
+STACK_TESTS = {"none": "tests/unit/", "lab": "tests/lab/", "long": "tests/long/"}
 # What an edit may change: the product's code and its migrations, never a test,
 # the workflow or this script.
 EDITABLE = ("src/", "migrations/")
@@ -122,6 +122,14 @@ KEYED_TOKEN_BOUND = 250_000
 PROVIDER_VARIABLE = "SWITCHED_OFF_PROVIDER"
 # Never passed on to a run on the fake provider, nor to this script's own git commands.
 KEY_VARIABLES = ("CLAUDE_API_KEY", "ANTHROPIC_API_KEY")
+# What the long stack reads from the shell: the workers' trigger and summary
+# failpoint limit, the fake provider's scenarios and the tracker's first number.
+LONG_VARIABLES = (
+    "SUMMARY_TRIGGER",
+    "LONG_SCENARIO_DIR",
+    "FAILPOINT_SUMMARY",
+    "FAKE_TRACKER_FIRST_ISSUE",
+)
 # The counts of a kill runner's record that a `Refusals` entry is judged by.
 SENT = "jobs_that_sent_a_rebuilt_thinking_block"
 ANSWERED = "jobs_answered_after_sending_one"
@@ -1668,8 +1676,12 @@ def child_environment(entry: SwitchedOff, provider: str, env: Mapping[str, str])
     No inherited `KILLS_*` variable and no failpoint reaches them: the entry
     alone names the provider, the model and the number of jobs. The key is
     passed on only to a run on the Claude API.
+
+    No inherited setting of the long stack reaches them either. A run on the
+    long stack gets each as the empty string, which a value in `.env` cannot
+    replace: the stack starts on its defaults, and each test sets its own.
     """
-    dropped = ("FAILPOINT", PROVIDER_VARIABLE)
+    dropped = ("FAILPOINT", PROVIDER_VARIABLE, *LONG_VARIABLES)
     kept = {
         name: value
         for name, value in without_keys(env).items()
@@ -1685,6 +1697,9 @@ def child_environment(entry: SwitchedOff, provider: str, env: Mapping[str, str])
         # jobs, and the runner refuses one more.
         for name in ("KILLS_RUNS", "KILLS_FAILPOINT_RUNS", "KILLS_JOB_LIMIT"):
             kept[name] = str(entry.runs)
+    if entry.stack == "long":
+        for name in LONG_VARIABLES:
+            kept[name] = ""
     return kept
 
 
