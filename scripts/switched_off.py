@@ -1240,7 +1240,7 @@ ENTRIES: dict[str, SwitchedOff] = {
             Expect(
                 f"{LONG}::test_a_job_stopped_after_its_first_summary_sends_what_the"
                 "_uninterrupted_job_sent",
-                "the job does not have exactly N summary steps",
+                "the job stored more summary steps than the three its windows need",
             ),
             Expect(
                 f"{LONG}::test_jobs_killed_at_planned_requests_send_what_the"

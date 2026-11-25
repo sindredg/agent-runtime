@@ -1,6 +1,6 @@
 """One job longer than the fake provider's context window, on the long stack.
 
-The job reads the notes of 43 parts and opens four issues. Its scenario has
+The job reads 39 notes and opens four issues, over 44 turns. Its scenario has
 a context window, and with the stack's trigger the job stores three
 summaries and every request fits the window. The fake provider's log is the
 record of what the workers really sent, and the tracker's own list of what
@@ -16,7 +16,7 @@ import time
 from typing import Any
 
 from . import rules
-from .conftest import FULL_JOB, PER_TAKEOVER, SHORT_JOB, Running, Stack, failure, show
+from .conftest import FAILED, FULL_JOB, PER_TAKEOVER, SHORT_JOB, Running, Stack, failure, show
 from .rules import SUMMARIES, TRIGGER, Seen
 
 # The suite's own copies of the worker's two texts and of the scenario's
@@ -45,18 +45,27 @@ SAME_WIDTH = 200_000
 WIDER = 1_000_000
 
 # The fixed text of each clause. A run with a mechanism switched off names
-# one of the first six, so each is one string on one line.
+# one of the first seven, so each is one string on one line.
 WINDOW_REFUSAL = "the job's last request was refused for the context window on a scripted turn"
-SUMMARY_STEPS = "the job does not have exactly N summary steps"
+MORE_SUMMARIES = "the job stored more summary steps than the three its windows need"
+SUMMARY_STEPS = "the job does not have exactly three summary steps"
 LACKING = "a request at a key the uninterrupted run lacks"
 OPENING = "a window does not open with the summary text and the continuation line"
 OTHER_TRIGGER = "a worker with another trigger sent other requests than the first worker would have"
 OVERSIZE = "the window opened at the trigger and the job was not failed for it"
-NAMED = (WINDOW_REFUSAL, SUMMARY_STEPS, LACKING, OPENING, OTHER_TRIGGER, OVERSIZE)
+NAMED = (
+    WINDOW_REFUSAL,
+    MORE_SUMMARIES,
+    SUMMARY_STEPS,
+    LACKING,
+    OPENING,
+    OTHER_TRIGGER,
+    OVERSIZE,
+)
 NOT_SUCCEEDED = "the job did not end succeeded"
 NOT_FINAL = "the job was not final in time"
 OTHER_FAILURE = "the job failed, and not at the context window on a scripted turn"
-SUMMARY_WINDOWS = "the provider's log does not hold N windows with an answered summary request"
+SUMMARY_WINDOWS = "the provider's log does not hold three windows with an answered summary request"
 SUMMARY_REQUEST = "a summary request is not the request before it plus the instruction"
 DIFFERS = "a request is not the uninterrupted run's request at its key"
 MISSING = "a request of the uninterrupted run was never sent"
@@ -87,6 +96,7 @@ WRONG_SETTING = "the workers that took the job over do not have the other trigge
 PINNED = "a job whose first request named no trigger did not go on as a job with no trigger"
 PROBE = "the job with trigger 1 did not show the size of a window's first request"
 TRACKER_BACK = "the tracker did not come back on its default numbers"
+KILL_FAILED = "a worker could not be killed or started again"
 
 
 def clauses(job: Seen, baseline: Seen, *, unsent: int, exactly: bool = False) -> list[str]:
@@ -102,8 +112,9 @@ def clauses(job: Seen, baseline: Seen, *, unsent: int, exactly: bool = False) ->
         lines.append(failure(NOT_FINAL, counts))
     if (found := rules.not_succeeded(job.job)) is not None:
         lines.append(failure(NOT_SUCCEEDED, found))
-    if (found := rules.summary_step_count(job.steps, SUMMARIES)) is not None:
-        lines.append(failure(SUMMARY_STEPS, found))
+    if (counted := rules.summary_step_count(job.steps, SUMMARIES)) is not None:
+        more, found = counted
+        lines.append(failure(MORE_SUMMARIES if more else SUMMARY_STEPS, found))
     if (found := rules.summary_window_count(job.entries, SUMMARIES)) is not None:
         lines.append(failure(SUMMARY_WINDOWS, found))
     lines += [
@@ -176,15 +187,42 @@ def ended(
     The workers come back and no job is left running. Then the last clause:
     a worker stopped at a failpoint `fired` times. Then the clock and the record.
     """
+    stack.settle(run, failures, job_ids)
+    failures += closing_lines(checked, stack.worker_log(run), fired)
+    stack.close(run, failures)
+
+
+def closing_lines(checked: bool, log: str, fired: int) -> list[str]:
+    """The last lines of a run: its checks ran to their end, and the failpoint fired as often.
+
+    `log` is what the workers logged in the run. A run that switches a
+    failpoint on expects its line once, every other run not at all.
+    """
+    lines = []
     if not checked:
         # The record must not say `passed` for a run whose checks stopped half way.
-        failures.append(failure(UNCHECKED, "an error ended the checks; see the traceback"))
-    stack.settle(run, failures, job_ids)
-    found = rules.failpoint_lines(stack.worker_log(run))
-    if found != fired:
-        text = FAILPOINT_ONCE if fired else FAILPOINT
-        failures.append(failure(text, f"{found} lines in the workers' logs, expected {fired}"))
-    stack.close(run, failures)
+        lines.append(failure(UNCHECKED, "an error ended the checks; see the traceback"))
+    if (found := rules.fired_problem(log, fired)) is not None:
+        lines.append(failure(FAILPOINT_ONCE if fired else FAILPOINT, found))
+    return lines
+
+
+def stops(name: str, job: Seen, hit: dict[str, Any] | None) -> list[str]:
+    """The lines about one takeover the suite forced: the kill, and whether it came in time.
+
+    A kill that came after the worker's next answer shows nothing about the
+    takeover it was meant for: the run is then inconclusive, like a planned
+    kill that missed.
+    """
+    lines = []
+    if hit is None or "problem" in hit:
+        problem = "the job never came to the step" if hit is None else hit["problem"]
+        lines.append(failure(KILL_FAILED, f"{name}: {problem}"))
+    if hit is None or not rules.stopped_before_an_answer(job.steps, hit["seq"]):
+        seq = None if hit is None else hit["seq"]
+        found = f"{name}: the workers were killed at seq {seq}; keep the logs, do not rerun"
+        lines.append(failure(INCONCLUSIVE, found))
+    return lines
 
 
 def tagged(lines: list[str], tag: str) -> list[str]:
@@ -364,12 +402,10 @@ def test_jobs_killed_at_planned_requests_send_what_the_uninterrupted_job_sent(
                 target = rules.planned_seq(steps, k, m)
                 if target is None:
                     return
-                hit = None
-                if steps[-1]["seq"] == target:
-                    hit = stack.kill_holder(job_id, steps[-1])
-                # Else the request already has a step after it: the kill would come late.
+                # A request that already has a step after it is not killed: too late.
+                hit = stack.kill_holder(job_id, steps[-1]) if steps[-1]["seq"] == target else {}
                 pending.pop(0)
-                done.append({"job": index, "k": k, "m": m, "seq": target, **(hit or {})})
+                done.append({"job": index, "k": k, "m": m, "seq": target, **hit})
 
             job = stack.run_job(within=FULL_JOB + PER_TAKEOVER * len(planned), each=each)
             jobs.append(job)
@@ -377,13 +413,14 @@ def test_jobs_killed_at_planned_requests_send_what_the_uninterrupted_job_sent(
             # A kill whose request never came is missed too.
             done += [{"job": index, "k": k, "m": m, "seq": None} for k, m in pending]
             for kill in done:
-                kill["reached"] = "latency" in kill and rules.kill_reached(job.steps, kill["seq"])
+                kill["reached"] = rules.reached(job.steps, kill)
+                if "problem" in kill:
+                    found = f"job {index}, kill ({kill['k']}, {kill['m']}): {kill['problem']}"
+                    failures.append(failure(KILL_FAILED, found))
             kills += done
-            takeovers = job.job["takeovers"]
-            if takeovers < len(planned):
-                found = f"job {index}: {takeovers} takeovers, {len(planned)} kills planned"
-                failures.append(failure(FEW_TAKEOVERS, found))
-        missed = [(kill["job"], kill["k"], kill["m"]) for kill in kills if not kill["reached"]]
+            if (few := rules.too_few_takeovers(job.job, len(planned))) is not None:
+                failures.append(failure(FEW_TAKEOVERS, f"job {index}: {few}"))
+        missed = rules.missed(kills)
         if missed:
             found = f"seed {SEED}, (job, k, m) {missed}; keep the seed and the logs, do not rerun"
             failures.append(failure(INCONCLUSIVE, found))
@@ -459,33 +496,26 @@ def test_issue_numbers_of_the_same_width_move_no_summary_and_a_wider_number_does
         stack.tracker_up(str(SAME_WIDTH))
         same = stack.run_job()
         failures += clauses(same, baseline, unsent=0)
-        numbers = sorted(number for found in same.issues.values() for number in found)
-        low = rules.numbers_below(same.issues, SAME_WIDTH)
-        if low or not numbers:
-            failures.append(
-                failure(LOW_NUMBER, f"{len(numbers)} issues, under {SAME_WIDTH}: {low}")
-            )
+        if (numbering := rules.numbering_problem(same.issues, SAME_WIDTH)) is not None:
+            failures.append(failure(LOW_NUMBER, numbering))
         sizes = rules.estimate_differences(baseline.entries, same.entries)
         if sizes:
             failures.append(failure(SIZES, f"{len(sizes)} keys, the first {sizes[0]}"))
-        keys, expected = rules.summary_keys(same.entries), rules.summary_keys(baseline.entries)
-        if keys != expected:
-            failures.append(failure(SUMMARY_MOVED, f"{keys}, the uninterrupted run {expected}"))
+        if (keys := rules.summary_keys_problem(baseline.entries, same.entries)) is not None:
+            failures.append(failure(SUMMARY_MOVED, keys))
         stack.tracker_up(str(WIDER))
         wide = stack.run_job()
         if not wide.final:
             failures.append(failure(NOT_FINAL, f"seven digits: {wide.job['status']}"))
-        first = rules.summary_keys(wide.entries)[:1]
-        if not expected or first != [(expected[0][0], expected[0][1] - 1)]:
-            failures.append(
-                failure(NOT_MOVED, f"first summary at {first}, six digits {expected[:1]}")
-            )
-        run.counts = counts([same, wide], first_summary=[keys[:1], first])
+        if (stayed := rules.not_moved(baseline.entries, wide.entries)) is not None:
+            failures.append(failure(NOT_MOVED, stayed))
+        first = [rules.summary_keys(job.entries)[:1] for job in (same, wide)]
+        run.counts = counts([same, wide], first_summary=first)
         checked = True
     finally:
         try:
             stack.tracker_up()
-        except RuntimeError as error:
+        except FAILED as error:
             failures.append(failure(TRACKER_BACK, error))
         ended(stack, run, failures, checked)
     show(f"{run.name}: {run.counts}")
@@ -517,49 +547,55 @@ def test_a_takeover_by_workers_with_another_trigger_sends_what_the_first_would_h
     failures: list[str] = []
     checked = False
     jobs: list[Seen] = []
-    # The trigger each worker said it had after each of the three takeovers.
-    read_back: list[list[str]] = []
+    # What each of the three takeovers did: the kill of the holder, and the
+    # trigger each new worker said it had.
+    hits: list[dict[str, Any] | None] = []
     try:
         for name, other in (("job A", OTHER_TRIGGER_VALUE), ("job B", None)):
             stack.workers_up()
-            got: list[list[str]] = []
+            got: list[dict[str, Any]] = []
 
             def at_the_first_summary(
                 job_id: str,
                 steps: list[dict[str, Any]],
                 other: int | None = other,
-                got: list[list[str]] = got,
+                got: list[dict[str, Any]] = got,
             ) -> None:
                 if not got and rules.of_kind(steps, "summary"):
-                    got.append(stack.take_over_with(job_id, trigger=other))
+                    got.append(stack.take_over_with(job_id, steps[-1], trigger=other))
 
             job = stack.run_job(within=FULL_JOB + PER_TAKEOVER, each=at_the_first_summary)
             jobs.append(job)
+            hit = got[0] if got else None
+            hits.append(hit)
             failures += tagged(clauses(job, baseline, unsent=job.job["takeovers"]), name)
+            failures += stops(name, job, hit)
             against = rules.compared(baseline, job)
             if not against.same:
                 found = f"{name}, taken over with trigger {other}: {against.summary()}"
                 failures.append(failure(OTHER_TRIGGER, found))
-            wanted = "" if other is None else str(other)
-            read_back += got[:1]
-            if not got or set(got[0]) != {wanted}:
-                failures.append(failure(WRONG_SETTING, f"{name}: {got}, expected {wanted!r}"))
+            read = None if hit is None else hit.get("triggers")
+            if (wrong := rules.wrong_triggers(read, other)) is not None:
+                failures.append(failure(WRONG_SETTING, f"{name}: {wrong}"))
             if (carried := rules.carried_on(job.job, job.steps, summary=True)) is not None:
                 failures.append(failure(NOT_CARRIED_ON, f"{name}: {carried}"))
 
         stack.workers_up(trigger=None)
         untriggered = stack.run_job(within=SHORT_JOB)
-        back: list[list[str]] = []
+        back: list[dict[str, Any]] = []
 
         def at_the_trigger(job_id: str, steps: list[dict[str, Any]]) -> None:
             responses = rules.of_kind(steps, "model_response")
             if back or not responses or steps[-1]["kind"] != "model_request":
                 return
             if rules.response_tokens(responses[-1]) >= TRIGGER:
-                back.append(stack.take_over_with(job_id, trigger=TRIGGER))
+                back.append(stack.take_over_with(job_id, steps[-1], trigger=TRIGGER))
 
         pinned = stack.run_job(within=SHORT_JOB + PER_TAKEOVER, each=at_the_trigger)
         jobs += [untriggered, pinned]
+        hit = back[0] if back else None
+        hits.append(hit)
+        failures += stops("job C", pinned, hit)
         for name, job in (("the job with no trigger", untriggered), ("job C", pinned)):
             how = rules.how_it_failed(job.job, job.entries, stack.window, stack.turns)
             if how is None or not how[0]:
@@ -567,15 +603,34 @@ def test_a_takeover_by_workers_with_another_trigger_sends_what_the_first_would_h
                 failures.append(failure(PINNED, f"{name} did not end at the window: {counted}"))
             if (summaries := rules.summarised(job)) is not None:
                 failures.append(failure(PINNED, f"{name}: {summaries}"))
+            pairs = rules.matched(job.entries, job.steps).pairs
+            failures += [
+                failure(TOOL_NAMES, f"{name}: {problem}")
+                for problem in rules.tool_name_problems(pairs)
+            ]
         against = rules.compared(untriggered, pinned)
         if not against.same:
             found = f"job C, taken over with trigger {TRIGGER}: {against.summary()}"
             failures.append(failure(OTHER_TRIGGER, found))
-        if not back or set(back[0]) != {str(TRIGGER)}:
-            failures.append(failure(WRONG_SETTING, f"job C: {back}, expected {str(TRIGGER)!r}"))
+        read = None if hit is None else hit.get("triggers")
+        if (wrong := rules.wrong_triggers(read, TRIGGER)) is not None:
+            failures.append(failure(WRONG_SETTING, f"job C: {wrong}"))
         if (carried := rules.carried_on(pinned.job, pinned.steps, summary=False)) is not None:
             failures.append(failure(NOT_CARRIED_ON, f"job C: {carried}"))
-        run.counts = counts(jobs, triggers_after_takeover=[*read_back, *back[:1]])
+        late = [
+            name
+            for name, job, hit in zip(("A", "B", "C"), (*jobs[:2], pinned), hits, strict=True)
+            if hit is None or not rules.stopped_before_an_answer(job.steps, hit["seq"])
+        ]
+        run.counts = counts(
+            jobs,
+            kills_planned=len(hits),
+            kills_reached=len(hits) - len(late),
+            kill_latencies=[None if hit is None else hit.get("latency") for hit in hits],
+            kills_missed=late,
+            inconclusive=bool(late),
+            triggers_after_takeover=[None if hit is None else hit.get("triggers") for hit in hits],
+        )
         checked = True
     finally:
         ended(stack, run, failures, checked)
@@ -613,20 +668,21 @@ def test_a_window_that_opens_at_the_trigger_fails_the_job_for_it(stack: Stack) -
             elif time.monotonic() - read["at"] > 30:
                 raise _TooLong
 
+        too_long = False
         try:
             probe = stack.run_job(within=SHORT_JOB, each=until_the_size_is_read)
         except _TooLong:
             # With the check of the window's size switched off it would run to its end.
+            too_long = True
+            stack.cancel(stack.submitted[-1])
             probe = stack.seen(stack.submitted[-1])
-            failures.append(failure(PROBE, f"not final 30 s after its size was read: {read}"))
         jobs.append(probe)
         size = rules.opening_input(probe.entries)
-        if size is None:
-            failures.append(failure(PROBE, f"no request after a summary request: {probe.job}"))
-        else:
-            if probe.job["error"] != rules.oversize_error(size, 1):
-                found = f"status {probe.job['status']}, size {size}, not the error for trigger 1"
-                failures.append(failure(PROBE, found))
+        failures += [
+            failure(PROBE, problem)
+            for problem in rules.probe_problems(probe, size, too_long=too_long)
+        ]
+        if size is not None:
             stack.workers_up(trigger=size)
             job = stack.run_job()
             jobs.append(job)

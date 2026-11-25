@@ -34,8 +34,6 @@ LEASE = 30.0
 DELAY = 2.0
 # The bad answers a summary request can get, each on a scenario of its own.
 FAULTS = ("tool_use", "refusal", "empty", "whitespace", "max_tokens", "stop_sequence")
-# What the long stack reads from the shell. The suite sets every one on every
-# compose call, so none comes from the shell or from `.env`.
 # The call the bad answer with a tool call makes, and the id the provider gives it.
 BAD_CALL = {
     "type": "tool_use",
@@ -48,6 +46,8 @@ def bad_call_id(fault: str) -> str:
     return f"toolu_fake_{bad_name(fault)}_summary_01"
 
 
+# What the long stack reads from the shell. The suite sets every one on every
+# compose call, so none comes from the shell or from `.env`.
 SETTINGS = (
     "LONG_SCENARIO_DIR",
     "SUMMARY_TRIGGER",
@@ -245,10 +245,16 @@ def not_succeeded(job: Mapping[str, Any]) -> str | None:
     return f"status {job['status']}, error {str(job.get('error'))[:200]!r}"
 
 
-def summary_step_count(steps: Sequence[dict[str, Any]], expected: int) -> str | None:
-    """The number of `summary` steps unless it is `expected`."""
+def summary_step_count(steps: Sequence[dict[str, Any]], expected: int) -> tuple[bool, str] | None:
+    """Unless the job has `expected` `summary` steps: (it has more, the count).
+
+    More and fewer are told apart. A job that summarised again where a
+    window was already opened has more; a job that stopped early has fewer.
+    """
     found = len(of_kind(steps, "summary"))
-    return None if found == expected else f"{found} summary steps, expected {expected}"
+    if found == expected:
+        return None
+    return found > expected, f"{found} summary steps, expected {expected}"
 
 
 def summary_window_count(entries: Sequence[dict[str, Any]], expected: int) -> str | None:
@@ -274,6 +280,16 @@ def summary_request_problems(
     """
     responses = {
         step["payload"]["id"]: step["payload"] for step in of_kind(steps, "model_response")
+    }
+    # The result of each call as a request carries it: the last one stored for its id.
+    stored = {
+        step["payload"]["tool_use_id"]: {
+            "type": "tool_result",
+            "tool_use_id": step["payload"]["tool_use_id"],
+            "content": step["payload"]["content"],
+            "is_error": step["payload"]["is_error"],
+        }
+        for step in of_kind(steps, "tool_result")
     }
     ordinary = {
         key(entry["body"]): entry
@@ -314,6 +330,8 @@ def summary_request_problems(
             problems.append(f"{at}: its messages are not the request before it and its answer")
         elif last.get("role") != "user" or len(blocks) != len(calls) + 1 or results != calls:
             problems.append(f"{at}: its last message does not hold one result for each call")
+        elif blocks[:-1] != [stored.get(call) for call in calls]:
+            problems.append(f"{at}: a result in its last message is not the stored result")
         elif blocks[-1] != {"type": "text", "text": instruction}:
             problems.append(f"{at}: its last block is not the instruction")
     return problems
@@ -624,7 +642,9 @@ def ordered(lines: Sequence[str], named: Sequence[str]) -> list[str]:
             first[found] = text
     if not first:
         return list(lines)
-    room = (MESSAGE_BUDGET - MESSAGE_PREFIX) // len(first) - 1
+    # Each kept line costs its length, a line break and, after the first,
+    # the two spaces pytest puts before a later line of the message.
+    room = (MESSAGE_BUDGET - MESSAGE_PREFIX) // len(first) - 3
     width = min(NAMED_WIDTH, room)
     # Never cut inside the named text itself.
     top = [lines[index][: max(width, len(text))] for index, text in first.items()]
@@ -873,4 +893,105 @@ def oversize_problems(job: Seen, size: int, trigger: int) -> list[str]:
     asked = sum(is_summary(entry) for entry in job.entries)
     if steps != 1 or asked != 1:
         problems.append(f"{steps} summary steps, {asked} summary requests")
+    return problems
+
+
+# What a run's test compares, as functions
+
+
+def fired_problem(log: str, expected: int) -> str | None:
+    """The failpoint lines in a run's worker log unless they are `expected`."""
+    found = failpoint_lines(log)
+    if found == expected:
+        return None
+    return f"{found} lines in the workers' logs, expected {expected}"
+
+
+def stopped_before_an_answer(steps: Sequence[dict[str, Any]], seq: int) -> bool:
+    """True if the worker that wrote step `seq` was stopped before its next answer.
+
+    The workers were killed when `seq` was the job's last step. That worker
+    may have written one request after it, and nothing after a request: a
+    step after an open request means the kill came late.
+    """
+    step = next((step for step in steps if step["seq"] == seq), None)
+    if step is None:
+        return False
+    later = [s for s in steps if s["lease_epoch"] == step["lease_epoch"] and s["seq"] >= seq]
+    request = next((i for i, s in enumerate(later) if s["kind"] == "model_request"), None)
+    return len(later) == 1 if request is None else request == len(later) - 1
+
+
+def reached(steps: Sequence[dict[str, Any]], kill: Mapping[str, Any]) -> bool:
+    """True if a planned kill was sent and came while its request was open.
+
+    A kill that was never sent has no latency: its request already had a
+    step after it when it was seen, or it never came.
+    """
+    return kill.get("latency") is not None and kill_reached(steps, kill["seq"])
+
+
+def missed(kills: Sequence[Mapping[str, Any]]) -> list[tuple[Any, ...]]:
+    """(job, k, m) of every kill that did not reach its request."""
+    return [(kill["job"], kill["k"], kill["m"]) for kill in kills if not kill["reached"]]
+
+
+def too_few_takeovers(job: Mapping[str, Any], planned: int) -> str | None:
+    """The job's takeovers when they are fewer than the kills planned for it."""
+    if job["takeovers"] >= planned:
+        return None
+    return f"{job['takeovers']} takeovers, {planned} kills planned"
+
+
+def numbering_problem(issues: Mapping[str, Sequence[int]], first: int) -> str | None:
+    """Unless the job has issues and every number is at least `first`.
+
+    Shows that the tracker started on `first` was the one in use.
+    """
+    numbers = [number for found in issues.values() for number in found]
+    low = numbers_below(issues, first)
+    if numbers and not low:
+        return None
+    return f"{len(numbers)} issues, under {first}: {low}"
+
+
+def summary_keys_problem(
+    reference: Sequence[dict[str, Any]], entries: Sequence[dict[str, Any]]
+) -> str | None:
+    """The keys of the job's summary requests unless they are the uninterrupted job's."""
+    keys, expected = summary_keys(entries), summary_keys(reference)
+    return None if keys == expected else f"{keys}, the uninterrupted run {expected}"
+
+
+def not_moved(reference: Sequence[dict[str, Any]], entries: Sequence[dict[str, Any]]) -> str | None:
+    """Unless the job's first summary request is one turn before the uninterrupted job's."""
+    first, expected = summary_keys(entries)[:1], summary_keys(reference)[:1]
+    if expected and first == [(expected[0][0], expected[0][1] - 1)]:
+        return None
+    return f"first summary at {first}, the uninterrupted run {expected}"
+
+
+def wrong_triggers(read: Sequence[str] | None, wanted: int | None) -> str | None:
+    """Unless every new worker said it has the trigger `wanted`. None is read back as empty."""
+    expected = "" if wanted is None else str(wanted)
+    if read and set(read) == {expected}:
+        return None
+    return f"read back {None if read is None else list(read)}, expected {expected!r}"
+
+
+def probe_problems(probe: Seen, size: int | None, *, too_long: bool) -> list[str]:
+    """Where the job with trigger 1 did not show a window's size and fail for it at once.
+
+    Its first request after a summary gives the size. The job then ends
+    `failed` with the error that names the size and trigger 1. `too_long`
+    says it was still running long after the size was read.
+    """
+    status, requests = probe.job["status"], len(probe.entries)
+    if size is None:
+        return [f"no request after a summary request: status {status}, {requests} requests"]
+    problems = []
+    if too_long:
+        problems.append(f"not final 30 s after its size, {size}, was read: status {status}")
+    if probe.job.get("error") != oversize_error(size, 1):
+        problems.append(f"status {status}, size {size}, not the error for trigger 1")
     return problems

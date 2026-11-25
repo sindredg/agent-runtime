@@ -301,8 +301,10 @@ def test_a_long_job_result_line_and_failure_line_hold_no_marker(
     assert printed.strip() == f"RESULT {file.strip()}"
 
     line = long_job.failure("the job asked a person a question", f"question 3: {HOSTILE}")
-    long_job.show(line)
+    # `show` gets stored text as it is, not a line that is escaped already.
+    long_job.show(f"question 3: {HOSTILE}")
     out = capsys.readouterr().out
+    assert "#\\u0023[error]four" in out
     # pytest prints the message of `assert not failures` and the list itself.
     assert commands(line) == commands(repr([line])) == commands(out) == []
     assert "#\\u0023[error]four" in line

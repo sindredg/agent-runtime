@@ -11,6 +11,7 @@ request at (1, 5), then (2, 5) and (2, 6). Turns 1 and 4 open an issue.
 import copy
 import importlib.util
 import json
+import subprocess
 import sys
 import time
 from datetime import UTC, datetime
@@ -297,6 +298,7 @@ def test_the_jobs_files_are_one_short_line_for_each_file_the_scenario_reads(
     rules: ModuleType,
 ) -> None:
     files = rules.job_files(packaged())
+    # 44 turns: 39 read a file, 4 open an issue, and the last one only answers.
     assert len(files) == 39
     assert files["notes/01.txt"] == "notes/01.txt: read.\n"
     assert all(text == f"{path}: read.\n" for path, text in files.items())
@@ -341,13 +343,22 @@ def test_a_job_that_did_not_succeed_is_named_with_its_error(rules: ModuleType) -
 def test_the_number_of_summary_steps_is_held_to_the_expected_one(rules: ModuleType) -> None:
     log = Log()
     assert rules.summary_step_count(log.steps, 2) is None
+    # More is told from fewer: a job that summarised again, and one that stopped early.
+    assert rules.summary_step_count(log.steps, 1) == (True, "2 summary steps, expected 1")
+    assert rules.summary_step_count(log.steps, 3) == (False, "2 summary steps, expected 3")
     log.step("summary", id="msg_summary_01", content=[])
-    assert rules.summary_step_count(log.steps, 2) == "3 summary steps, expected 2"
+    assert rules.summary_step_count(log.steps, 2) == (True, "3 summary steps, expected 2")
 
 
 def test_each_of_the_first_windows_has_an_answered_summary_request(rules: ModuleType) -> None:
     log = Log()
     assert rules.summary_window_count(log.entries, 2) is None
+    # A window more than expected has one too.
+    longer = Log(windows=FOUR_WINDOWS)
+    assert rules.summary_window_count(longer.entries, 3) is None
+    assert rules.summary_window_count(longer.entries, 2) == (
+        "windows with an answered summary request [0, 1, 2], expected 2 from 0"
+    )
     # The second window's summary request was refused.
     log.at(rules, (1, 5), summary=True)["status"] = 400
     found = rules.summary_window_count(log.entries, 2)
@@ -372,6 +383,10 @@ def test_a_summary_request_is_the_request_before_it_its_answer_and_the_instructi
         ("instruction", "(0, 3): its last block is not the instruction"),
         ("no answer", "(0, 3): no model_response step has the id msg_02"),
         ("no request", "(0, 3): the job has no answered request at (0, 2)"),
+        ("answer", "(0, 3): its messages are not the request before it and its answer"),
+        ("result id", "(0, 3): its last message does not hold one result for each call"),
+        ("result content", "(0, 3): a result in its last message is not the stored result"),
+        ("result error", "(0, 3): a result in its last message is not the stored result"),
     ],
 )
 def test_a_summary_request_that_differs_in_one_part_is_found(
@@ -395,6 +410,15 @@ def test_a_summary_request_that_differs_in_one_part_is_found(
         log.steps = [s for s in log.steps if s["payload"].get("id") != "msg_02"]
     elif change == "no request":
         log.entries = [e for e in log.entries if rules.key(e["body"]) != (0, 2)]
+    elif change == "answer":
+        # The assistant message before the results is not the stored answer.
+        body["messages"][-2]["content"][0]["text"] = "another"
+    elif change == "result id":
+        body["messages"][-1]["content"][0]["tool_use_id"] = "toolu_99"
+    elif change == "result content":
+        body["messages"][-1]["content"][0]["content"] = "something else"
+    elif change == "result error":
+        body["messages"][-1]["content"][0]["is_error"] = True
 
     assert rules.summary_request_problems(log.steps, log.entries, INSTRUCTION) == [problem]
 
@@ -519,6 +543,12 @@ def test_an_entry_that_no_step_announced_is_found(rules: ModuleType) -> None:
     log.entries.append({**copy.deepcopy(log.at(rules, (2, 6))), "seq": 77})
     found = rules.matched(log.entries, log.steps)
     assert (len(found.pairs), found.without_step, found.unsent) == (9, [77], 0)
+
+    # A request with a number of messages that no step names.
+    longer = Log()
+    longer.at(rules, (0, 1))["body"]["messages"].append({"role": "user", "content": "one more"})
+    found = rules.matched(longer.entries, longer.steps)
+    assert (found.without_step, found.unsent) == ([2], 1)
 
     # A request with another `max_tokens` than any step names.
     other = Log()
@@ -655,11 +685,21 @@ def test_a_job_with_other_issue_numbers_sends_what_the_uninterrupted_job_sent(
     assert rules.compared(reference.seen(rules), reference.seen(rules)).same
 
 
-def test_a_request_sent_again_is_compared_too_and_changes_nothing(rules: ModuleType) -> None:
+def test_a_request_sent_again_is_compared_too(rules: ModuleType) -> None:
     reference = Log()
     job = Log(OTHER, first_issue=41)
     job.entries.insert(6, copy.deepcopy(job.at(rules, (1, 4))))
     assert rules.compared(reference.seen(rules), job.seen(rules)).same
+
+    # The copy differs in one block: found, whether it came after the original or before.
+    for position in (6, 5):
+        job = Log(OTHER, first_issue=41)
+        again = copy.deepcopy(job.at(rules, (1, 4)))
+        again["body"]["messages"][-1]["content"][0]["content"] = "read!"
+        job.entries.insert(position, again)
+        found = rules.compared(reference.seen(rules), job.seen(rules))
+        assert found.differs == [(1, 4)]
+        assert (found.lacking, found.missing, found.out_of_order) == ([], [], [])
 
 
 @pytest.mark.parametrize("part", ["system", "tools", "tool_choice", "messages"])
@@ -740,6 +780,12 @@ def test_only_the_number_of_a_new_issue_is_masked_and_it_is_the_trackers(rules: 
     found = rules.compared(reference.seen(rules), job.seen(rules))
     assert found.numbers == [f"{operation}: 41 in the request, the tracker lists ()"]
 
+    # The request holds the first of two numbers the tracker lists, not the last.
+    twice = Log(OTHER, first_issue=41)
+    twice.tracker.append({"id": 99, "operation_id": operation})
+    found = rules.compared(reference.seen(rules), twice.seen(rules))
+    assert found.numbers == [f"{operation}: 41 in the request, the tracker lists [41, 99]"]
+
     # After an approved rerun the request holds the last number the tracker lists.
     rerun = Log(OTHER, first_issue=41)
     rerun.tracker.insert(0, {"id": 39, "operation_id": operation})
@@ -770,7 +816,7 @@ def test_a_number_outside_a_new_issues_result_is_compared_as_it_is(rules: Module
 
 NAMED = (
     "the job's last request was refused for the context window on a scripted turn",
-    "the job does not have exactly N summary steps",
+    "the job does not have exactly three summary steps",
     "a window does not open with the summary text and the continuation line",
     "a worker with another trigger sent other requests than the first worker would have",
     "the window opened at the trigger and the job was not failed for it",
@@ -779,13 +825,19 @@ NAMED = (
 
 def kept(lines: list[str]) -> str:
     """What pytest keeps of the message of `assert not failures, "\\n".join(lines)`."""
-    return shorten_message("AssertionError: " + "\n".join(lines) + "\nassert not ['...']")
+    return shorten_message(message_of(lines))
+
+
+def message_of(lines: list[str]) -> str:
+    """The message as pytest writes it: the exception's name, and two spaces before a later line."""
+    return "AssertionError: " + "\n  ".join(lines) + "\nassert not ['...']"
 
 
 def test_the_lines_a_switched_off_run_names_come_first_and_are_all_kept(rules: ModuleType) -> None:
-    # Five lines of 150 characters are 770 with the exception's name and the
-    # line breaks, and pytest keeps 500. So with five named lines each is cut
-    # to 95; with one or two, as every test of the suite has, to 150.
+    # Five lines of 150 characters are 778 with the exception's name, the
+    # line breaks and the two spaces before each later line, and pytest
+    # keeps 500. So with five named lines each is cut to 93; with one to
+    # three, as every test of the suite has, to 150.
     others = [f"another clause: job {n}, key (1, {n}), 3 of 4" for n in range(100)]
     named = [f"{text}: 4 steps, expected 3; job 0a0a, key (0, 12)" + " x" * 80 for text in NAMED]
     # The named lines last, and each too long to fit five times.
@@ -794,7 +846,9 @@ def test_the_lines_a_switched_off_run_names_come_first_and_are_all_kept(rules: M
 
     ordered = rules.ordered(lines, NAMED)
     message = kept(ordered)
-    assert len("AssertionError: " + "\n".join(ordered[:5])) <= 500
+    assert len("AssertionError: " + "\n  ".join(ordered[:5])) <= 500
+    # The five named texts sit inside the first 500 characters of the message.
+    assert all(text in message_of(ordered)[:500] for text in NAMED)
     assert all(text in message for text in NAMED)
     assert [line.startswith(text) for line, text in zip(ordered[:5], NAMED, strict=True)] == [
         True
@@ -838,6 +892,13 @@ def test_a_worker_stopped_right_after_the_first_summary_is_told_from_a_later_sto
     assert (
         found
         == "the first worker's last step is model_request at seq 12, the first summary is at seq 11"
+    )
+    # Stopped after the second summary: a summary, and not the first.
+    second = [step for step in log.steps if step["kind"] == "summary"][1]
+    log.taken_over_after(second["seq"])
+    assert rules.stopped_after_first_summary(log.steps) == (
+        f"the first worker's last step is summary at seq {second['seq']},"
+        " the first summary is at seq 11"
     )
     # Never stopped: one worker wrote everything.
     log.taken_over_after(len(log.steps))
@@ -938,6 +999,24 @@ def test_a_plan_that_shows_too_little_or_cannot_land_is_refused(rules: ModuleTyp
     ]
     twice = [[(1, 2), (1, 2)], *good[1:]]
     assert rules.plan_problems(twice)[0].startswith("job 0: [(1, 2), (1, 2)] is not")
+    # The third request after a summary is neither right after it nor late in the window.
+    third = [[(1, 3)], *good[1:]]
+    assert rules.plan_problems(third) == [
+        "job 0: no kill in the first two requests after a summary"
+    ]
+    early = [[(1, 1), (2, 3)], [(2, 2)], [(3, 1), (3, 3)], [(1, 2)], [(0, 9), (2, 1)]]
+    assert rules.plan_problems(early) == [
+        "no job has a kill at the fourth request or later after a summary"
+    ]
+    assert rules.plan_problems([[(1, 1), (2, 4)]] * 5) == []
+    # No kill, and four.
+    assert rules.plan_problems([[], *good[1:]])[0] == (
+        "job 0: [] is not one to three pairs in rising order"
+    )
+    four = [[(0, 1), (1, 1), (2, 1), (3, 1)], *good[1:]]
+    assert rules.plan_problems(four) == [
+        "job 0: [(0, 1), (1, 1), (2, 1), (3, 1)] is not one to three pairs in rising order"
+    ]
     # The summary request of the first window is its thirteenth request.
     too_late = [[(0, 11), (1, 1)], *good[1:]]
     assert rules.plan_problems(too_late) == ["job 0: (0, 11) is outside the windows"]
@@ -973,6 +1052,15 @@ def test_a_kill_reached_its_request_when_the_killed_worker_wrote_nothing_after_i
     # The worker got its answer and wrote a step more: the kill came late.
     log.taken_over_after(target + 1)
     assert rules.kill_reached(log.steps, target) is False
+    # A kill of the second worker, at a request it wrote: the third wrote the rest.
+    later = log.first("model_request", summary=True)["seq"]
+    for step in log.steps:
+        step["lease_epoch"] = 1 if step["seq"] <= target else 2 if step["seq"] <= later else 3
+    assert (rules.kill_reached(log.steps, target), rules.kill_reached(log.steps, later)) == (
+        True,
+        True,
+    )
+    assert rules.kill_reached(log.steps, later - 3) is False
     # Not a request step, and a step that is not there.
     assert rules.kill_reached(log.steps, target + 1) is False
     assert rules.kill_reached(log.steps, 999) is False
@@ -1006,6 +1094,8 @@ def test_a_bad_summary_fails_the_job_at_once_and_runs_nothing(rules: ModuleType)
         ("succeeded", "status succeeded"),
         ("asked again", "2 summary requests at the provider"),
         ("a tool ran", "steps after the summary: ['tool_intent', 'error']"),
+        ("a result stored", "steps after the summary: ['tool_result', 'error']"),
+        ("two summaries", "2 summary steps, with a problem: [True, True]"),
         ("an issue", f"the tracker holds [9] for {JOB}:toolu_summary_01"),
     ],
 )
@@ -1025,6 +1115,10 @@ def test_a_bad_summary_that_did_not_end_the_job_cleanly_is_found(
         log.entries.append(copy.deepcopy(log.entries[-1]))
     elif change == "a tool ran":
         log.steps.insert(-1, {"seq": 11.5, "kind": "tool_intent", "lease_epoch": 1, "payload": {}})
+    elif change == "a result stored":
+        log.steps.insert(-1, {"seq": 11.5, "kind": "tool_result", "lease_epoch": 1, "payload": {}})
+    elif change == "two summaries":
+        log.steps.insert(4, copy.deepcopy(log.first("summary")))
     elif change == "an issue":
         log.tracker.append({"id": 9, "operation_id": f"{JOB}:toolu_summary_01"})
 
@@ -1057,6 +1151,9 @@ def test_requests_of_the_same_size_at_every_key_and_numbers_from_the_new_first(
 def test_a_job_that_must_not_summarise_is_found_when_it_did(rules: ModuleType) -> None:
     log = Log()
     assert rules.summarised(log.seen(rules)) == "2 summary steps, 2 summary requests"
+    steps_only = Log()
+    steps_only.entries = [e for e in steps_only.entries if not rules.is_summary(e)]
+    assert rules.summarised(steps_only.seen(rules)) == "2 summary steps, 0 summary requests"
     log.steps = [step for step in log.steps if step["kind"] != "summary"]
     assert rules.summarised(log.seen(rules)) == "0 summary steps, 2 summary requests"
     log.entries = [entry for entry in log.entries if not rules.is_summary(entry)]
@@ -1107,6 +1204,18 @@ def test_a_job_whose_window_opens_at_the_trigger_is_failed_for_exactly_that(
     assert rules.oversize_problems(whole.seen(rules), 293, 293) == [
         "status succeeded, error 'None'",
         "2 summary steps, 2 summary requests",
+    ]
+    # A second summary step alone, and a second summary request alone.
+    stored = oversize(rules)
+    stored.steps.append(copy.deepcopy(stored.first("summary")))
+    failed = {"status": "failed", "error": error}
+    assert rules.oversize_problems(stored.seen(rules, **failed), 293, 293) == [
+        "2 summary steps, 1 summary requests"
+    ]
+    asked = oversize(rules)
+    asked.entries.append(copy.deepcopy(asked.at(rules, (0, 3), summary=True)))
+    assert rules.oversize_problems(asked.seen(rules, **failed), 293, 293) == [
+        "1 summary steps, 2 summary requests"
     ]
     other = error.replace("trigger 293", "trigger 1")
     assert rules.oversize_problems(log.seen(rules, status="failed", error=other), 293, 293) == [
@@ -1170,6 +1279,9 @@ def test_a_job_that_holds_every_clause_gets_no_line(suite: ModuleType) -> None:
     assert suite.uninterrupted(reference, 3400, 9) == []
     # The texts a switched-off run names, word for word, each under its own name.
     assert NAMED[:3] == (suite.WINDOW_REFUSAL, suite.SUMMARY_STEPS, suite.OPENING)
+    assert suite.MORE_SUMMARIES == (
+        "the job stored more summary steps than the three its windows need"
+    )
     assert suite.LACKING == "a request at a key the uninterrupted run lacks"
 
 
@@ -1178,7 +1290,8 @@ def test_a_job_that_holds_every_clause_gets_no_line(suite: ModuleType) -> None:
     [
         ("failed", ["NOT_SUCCEEDED"]),
         ("running", ["NOT_FINAL", "NOT_SUCCEEDED"]),
-        ("a fourth summary", ["SUMMARY_STEPS"]),
+        ("a fourth summary", ["MORE_SUMMARIES"]),
+        ("a summary step missing", ["SUMMARY_STEPS"]),
         ("a summary refused", ["SUMMARY_WINDOWS", "OPENING"]),
         ("a summary with another instruction", ["SUMMARY_REQUEST", "DIFFERS"]),
         ("the whole history", ["LACKING", "ORDER", "NO_STEP"]),
@@ -1203,6 +1316,8 @@ def test_each_broken_clause_gets_a_line_under_its_own_text(
         view = {"status": change, "error": "an error" if change == "failed" else None}
     elif change == "a fourth summary":
         log.step("summary", id="msg_summary_09", content=[])
+    elif change == "a summary step missing":
+        log.steps.remove([step for step in log.steps if step["kind"] == "summary"][-1])
     elif change == "a summary refused":
         log.at(rules, (1, 5), summary=True)["status"] = 400
     elif change == "a summary with another instruction":
@@ -1332,10 +1447,11 @@ def test_the_lines_of_one_job_among_several_carry_its_name(suite: ModuleType) ->
     )
 
 
-def test_the_suite_names_the_six_texts_of_the_switched_off_runs(suite: ModuleType) -> None:
+def test_the_suite_names_the_seven_texts_of_the_switched_off_runs(suite: ModuleType) -> None:
     assert suite.NAMED == (
         "the job's last request was refused for the context window on a scripted turn",
-        "the job does not have exactly N summary steps",
+        "the job stored more summary steps than the three its windows need",
+        "the job does not have exactly three summary steps",
         "a request at a key the uninterrupted run lacks",
         "a window does not open with the summary text and the continuation line",
         "a worker with another trigger sent other requests than the first worker would have",
@@ -1344,3 +1460,284 @@ def test_the_suite_names_the_six_texts_of_the_switched_off_runs(suite: ModuleTyp
     assert suite.rules.plan_problems(suite.rules.plan(suite.SEED)) == []
     # A missed kill says the word and the seed.
     assert suite.INCONCLUSIVE.startswith("INCONCLUSIVE")
+
+
+def test_every_text_a_switched_off_run_of_the_long_stack_names_is_a_named_text(
+    suite: ModuleType,
+) -> None:
+    """Only a named text is moved to the top of a failure's message, where the run is judged."""
+    spec = importlib.util.spec_from_file_location(
+        "switched_off", TESTS.parent / "scripts/switched_off.py"
+    )
+    assert spec is not None and spec.loader is not None
+    switched_off = importlib.util.module_from_spec(spec)
+    sys.modules["switched_off"] = switched_off
+    spec.loader.exec_module(switched_off)
+    named = [
+        expect.fails_with
+        for entry in switched_off.ENTRIES.values()
+        if entry.stack == "long"
+        for expect in entry.expect
+        if expect.fails_with is not None
+    ]
+    assert len(named) == 6
+    assert set(named) <= set(suite.NAMED)
+    # The text of a job with too many summaries is the one named for the stop after a summary.
+    assert suite.MORE_SUMMARIES in named
+    assert suite.SUMMARY_STEPS not in named
+
+
+def test_the_scripted_calls_are_those_of_the_uninterrupted_job_not_the_jobs_own(
+    suite: ModuleType,
+) -> None:
+    reference = job_of(suite, JOB, 7).seen(suite.rules)
+    log = job_of(suite)
+    # In the job's own log the first issue's call reads a file instead.
+    answer = log.first("model_response", id="msg_01")
+    answer["payload"]["content"][1]["name"] = "read_file"
+    job = log.seen(suite.rules)
+
+    assert suite.rules.issue_problems(job.id, job.steps, job.issues, {}) == [
+        f"{OTHER}:toolu_01: 1 issues for a call the script does not make"
+    ]
+    assert suite.clauses(job, reference, unsent=0) == []
+
+
+def test_a_run_that_expects_exactly_one_unsent_request_fails_with_none(suite: ModuleType) -> None:
+    reference = job_of(suite, JOB, 7).seen(suite.rules)
+    job = job_of(suite).seen(suite.rules)
+    assert suite.clauses(job, reference, unsent=1) == []
+    assert texts(suite, suite.clauses(job, reference, unsent=1, exactly=True)) == ["UNSENT"]
+
+
+def test_the_last_lines_of_a_run_are_its_unfinished_checks_and_the_failpoint_count(
+    suite: ModuleType,
+) -> None:
+    fired = '{"message": "failpoint reached, stopping the worker"}'
+    assert suite.closing_lines(True, "", 0) == []
+    assert suite.closing_lines(True, fired, 1) == []
+    assert texts(suite, suite.closing_lines(False, "", 0)) == ["UNCHECKED"]
+    assert texts(suite, suite.closing_lines(True, fired, 0)) == ["FAILPOINT"]
+    assert texts(suite, suite.closing_lines(True, "", 1)) == ["FAILPOINT_ONCE"]
+    assert texts(suite, suite.closing_lines(True, f"{fired}\n{fired}", 1)) == ["FAILPOINT_ONCE"]
+    assert texts(suite, suite.closing_lines(False, fired, 0)) == ["UNCHECKED", "FAILPOINT"]
+
+
+def test_a_forced_takeover_whose_kill_failed_or_came_late_gets_its_own_lines(
+    suite: ModuleType,
+) -> None:
+    log = job_of(suite)
+    seq = log.first("summary")["seq"]
+    log.taken_over_after(seq + 1)
+    job = log.seen(suite.rules)
+
+    assert suite.stops("job A", job, {"seq": seq, "latency": 0.3}) == []
+    # The worker got its answer and wrote on: the kill came late.
+    assert texts(suite, suite.stops("job A", job, {"seq": seq - 3, "latency": 0.3})) == [
+        "INCONCLUSIVE"
+    ]
+    failed = {"seq": seq, "problem": "`docker kill` of 0123456789ab failed"}
+    assert texts(suite, suite.stops("job A", job, failed)) == ["KILL_FAILED"]
+    # The job never came to the step the kill waits for.
+    assert texts(suite, suite.stops("job A", job, None)) == ["KILL_FAILED", "INCONCLUSIVE"]
+    assert suite.stops("job A", job, None)[1].startswith("INCONCLUSIVE: a planned kill did not")
+
+
+# What a run's test compares
+
+
+def test_the_failpoint_lines_of_a_run_are_held_to_the_number_expected(rules: ModuleType) -> None:
+    line = '{"message": "failpoint reached, stopping the worker"}'
+    assert rules.fired_problem("", 0) is None
+    assert rules.fired_problem(line, 1) is None
+    assert rules.fired_problem(line, 0) == "1 lines in the workers' logs, expected 0"
+    assert rules.fired_problem("", 1) == "0 lines in the workers' logs, expected 1"
+    assert rules.fired_problem(f"{line}\n{line}", 1) == "2 lines in the workers' logs, expected 1"
+
+
+def test_workers_killed_at_a_step_were_stopped_before_the_next_answer(rules: ModuleType) -> None:
+    log = Log()
+    summary = log.first("summary")["seq"]
+    # Killed when the summary was the last step: the worker wrote nothing more.
+    log.taken_over_after(summary)
+    assert rules.stopped_before_an_answer(log.steps, summary) is True
+    # It wrote the next request before the kill landed, and nothing after that.
+    log.taken_over_after(summary + 1)
+    assert rules.stopped_before_an_answer(log.steps, summary) is True
+    assert rules.stopped_before_an_answer(log.steps, summary + 1) is True
+    # It got that request's answer: the kill came late.
+    log.taken_over_after(summary + 2)
+    assert rules.stopped_before_an_answer(log.steps, summary) is False
+    assert rules.stopped_before_an_answer(log.steps, summary + 1) is False
+    # A step after a step that is no request, and a step that is not there.
+    log.taken_over_after(summary)
+    assert rules.stopped_before_an_answer(log.steps, summary - 2) is False
+    assert rules.stopped_before_an_answer(log.steps, 999) is False
+
+
+def test_a_kill_counts_as_reached_only_when_it_was_sent_and_came_in_time(
+    rules: ModuleType,
+) -> None:
+    log = Log()
+    target = log.first("model_request", messages=3)["seq"]
+    log.taken_over_after(target)
+    sent = {"job": 0, "k": 0, "m": 2, "seq": target, "latency": 0.3}
+    assert rules.reached(log.steps, sent) is True
+    # Seen too late and never sent: no latency, whatever the log shows.
+    assert rules.reached(log.steps, {"job": 0, "k": 0, "m": 2, "seq": target}) is False
+    # A kill that failed has no latency either, and one whose request never came no step.
+    assert rules.reached(log.steps, {**sent, "latency": None}) is False
+    assert rules.reached(log.steps, {"job": 0, "k": 3, "m": 1, "seq": None}) is False
+    # Sent, and the worker had already written on.
+    log.taken_over_after(target + 1)
+    assert rules.reached(log.steps, sent) is False
+
+    kills = [{**sent, "reached": True}, {"job": 1, "k": 3, "m": 1, "reached": False}]
+    assert rules.missed(kills) == [(1, 3, 1)]
+    assert rules.missed(kills[:1]) == []
+
+
+def test_a_job_has_at_least_as_many_takeovers_as_kills_planned(rules: ModuleType) -> None:
+    assert rules.too_few_takeovers({"takeovers": 2}, 2) is None
+    assert rules.too_few_takeovers({"takeovers": 3}, 2) is None
+    assert rules.too_few_takeovers({"takeovers": 1}, 2) == "1 takeovers, 2 kills planned"
+
+
+def test_the_issue_numbers_show_which_tracker_was_in_use(rules: ModuleType) -> None:
+    new = rules.issues_of(OTHER, Log(OTHER, first_issue=200_000).tracker)
+    old = rules.issues_of(JOB, Log().tracker)
+    assert rules.numbering_problem(new, 200_000) is None
+    assert rules.numbering_problem(old, 200_000) == "2 issues, under 200000: [7, 8]"
+    # No issue at all shows nothing about the tracker.
+    assert rules.numbering_problem({}, 200_000) == "0 issues, under 200000: []"
+
+
+def test_the_summary_keys_of_a_job_are_the_uninterrupted_jobs_or_one_turn_earlier(
+    rules: ModuleType,
+) -> None:
+    reference, job = Log(), Log(OTHER, first_issue=41)
+    assert rules.summary_keys_problem(reference.entries, job.entries) is None
+    assert rules.not_moved(reference.entries, job.entries) == (
+        "first summary at [(0, 3)], the uninterrupted run [(0, 3)]"
+    )
+    # A job whose first window is a turn shorter.
+    earlier = Log(OTHER, first_issue=41, windows=((0, 2), (2, 5), (5, 7)))
+    assert rules.not_moved(reference.entries, earlier.entries) is None
+    assert rules.summary_keys_problem(reference.entries, earlier.entries) == (
+        "[(0, 2), (1, 5)], the uninterrupted run [(0, 3), (1, 5)]"
+    )
+    # Two turns earlier is not one, and a job with no summary did not move one.
+    two = Log(OTHER, first_issue=41, windows=((0, 1), (1, 5), (5, 7)))
+    assert rules.not_moved(reference.entries, two.entries) is not None
+    none = [entry for entry in job.entries if not rules.is_summary(entry)]
+    assert rules.not_moved(reference.entries, none) is not None
+    assert rules.not_moved(none, earlier.entries) is not None
+
+
+def test_the_trigger_read_back_from_every_new_worker_is_the_one_wanted(rules: ModuleType) -> None:
+    assert rules.wrong_triggers(["2800", "2800"], 2800) is None
+    assert rules.wrong_triggers(["", ""], None) is None
+    assert rules.wrong_triggers(["2800", "3000"], 2800) == (
+        "read back ['2800', '3000'], expected '2800'"
+    )
+    assert rules.wrong_triggers(["3000", "3000"], None) == "read back ['3000', '3000'], expected ''"
+    # No worker answered, and the takeover never happened.
+    assert rules.wrong_triggers([], 2800) == "read back [], expected '2800'"
+    assert rules.wrong_triggers(None, 2800) == "read back None, expected '2800'"
+
+
+def test_the_job_with_trigger_1_shows_a_windows_size_and_fails_for_it(rules: ModuleType) -> None:
+    log = oversize(rules)
+    error = "the summary leaves the next window at or over the trigger: 293 input tokens, trigger 1"
+    probe = log.seen(rules, status="failed", error=error)
+    assert rules.probe_problems(probe, 293, too_long=False) == []
+
+    running = log.seen(rules, status="running", error=None)
+    assert rules.probe_problems(running, 293, too_long=True) == [
+        "not final 30 s after its size, 293, was read: status running",
+        "status running, size 293, not the error for trigger 1",
+    ]
+    other = log.seen(rules, status="failed", error=error.replace("trigger 1", "trigger 293"))
+    assert rules.probe_problems(other, 293, too_long=False) == [
+        "status failed, size 293, not the error for trigger 1"
+    ]
+    # No request after a summary request: counts only, nothing of the job's spec.
+    spec = {"prompt": "a prompt that no line may carry"}
+    none = log.seen(rules, status="failed", error="model call failed", spec=spec)
+    assert rules.probe_problems(none, None, too_long=False) == [
+        "no request after a summary request: status failed, 5 requests"
+    ]
+
+
+def test_a_runs_worker_log_is_the_last_saved_file_of_each_container_from_its_start(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.syspath_prepend(str(TESTS))
+    harness = importlib.import_module("long.conftest")
+    stack = harness.Stack(tmp_path)
+    stack.hang_up()
+    (tmp_path / "logs").mkdir()
+    started = datetime(2026, 11, 25, 12, 0, 0, tzinfo=UTC)
+    before = "2026-11-25T11:59:59.999999999Z before the run"
+    first = "2026-11-25T12:00:00.000000001Z at its start"
+    later = "2026-11-25T12:00:05.5Z later"
+    files = {
+        # Saved twice: the later file holds the container's whole log.
+        "a-run-02-worker-aaaaaaaaaaaa.log": f"{before}\n{first}",
+        "a-run-03-worker-aaaaaaaaaaaa.log": f"{before}\n{first}\n{later}",
+        # A container that was made again has a file of its own.
+        "a-run-02-worker-bbbbbbbbbbbb.log": "2026-11-25T12:00:01Z of the other container\nno time",
+        # Saved in another run: not this run's.
+        "session-01-worker-cccccccccccc.log": "2026-11-25T12:00:02Z of another run",
+    }
+    for name, text in files.items():
+        (tmp_path / "logs" / name).write_text(text)
+    run = harness.Running("a-run", started, 0.0, 0.0, logs=list(files)[:3])
+
+    assert stack.worker_log(run).splitlines() == [
+        first,
+        later,
+        "2026-11-25T12:00:01Z of the other container",
+    ]
+    assert harness.stamp(later) == datetime(2026, 11, 25, 12, 0, 5, 500000, tzinfo=UTC)
+    assert harness.stamp("no time") is None
+
+
+def test_the_named_lines_are_in_the_message_a_real_failure_leaves_in_its_junit_file(
+    rules: ModuleType, tmp_path: Path
+) -> None:
+    """As a switched-off run reads it: pytest's own junit file, through the script's reader."""
+    others = [f"another clause: job {n}, key (1, {n}), 3 of 4" for n in range(100)]
+    named = [f"{text}: 4 steps, expected 3; job 0a0a, key (0, 12)" + " x" * 80 for text in NAMED]
+    for name, lines in (
+        ("ordered", rules.ordered([*others, *named], NAMED)),
+        ("as_they_came", [*others, *named]),
+    ):
+        (tmp_path / f"{name}.json").write_text(json.dumps(lines))
+    (tmp_path / "test_made_up.py").write_text(
+        "import json\nfrom pathlib import Path\n\nimport pytest\n\n\n"
+        "@pytest.mark.parametrize('name', ['ordered', 'as_they_came'])\n"
+        "def test_lines(name):\n"
+        "    failures = json.loads((Path(__file__).parent / f'{name}.json').read_text())\n"
+        "    assert not failures, '\\n'.join(failures)\n"
+    )
+    junit = tmp_path / "junit.xml"
+    subprocess.run(  # noqa: S603 - the interpreter that runs this test, on a made-up test
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "--rootdir", str(tmp_path),
+         "-c", "/dev/null", f"--junitxml={junit}", str(tmp_path / "test_made_up.py")],
+        capture_output=True, text=True, check=False, timeout=120, cwd=tmp_path,
+    )  # fmt: skip
+    spec = importlib.util.spec_from_file_location(
+        "switched_off", TESTS.parent / "scripts/switched_off.py"
+    )
+    assert spec is not None and spec.loader is not None
+    switched_off = importlib.util.module_from_spec(spec)
+    sys.modules["switched_off"] = switched_off
+    spec.loader.exec_module(switched_off)
+    found = {
+        node.rsplit("[", 1)[1]: text for node, (_, text) in switched_off.outcomes(junit).items()
+    }
+
+    assert set(found) == {"ordered]", "as_they_came]"}
+    assert all(text in found["ordered]"] for text in NAMED)
+    assert not any(text in found["as_they_came]"] for text in NAMED)

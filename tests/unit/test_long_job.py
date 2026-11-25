@@ -7,8 +7,10 @@ of the request's `system`, `tools` and `messages` as JSON.
 """
 
 import asyncio
+import importlib.util
 import json
 import re
+import sys
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -55,6 +57,17 @@ REFUSAL = re.compile(r"prompt is too long: (\d+) tokens > (\d+) maximum")
 BOUNDARY = 10
 # A short `system` for the job. The scenario is sized for a job without one.
 SYSTEM = "Keep every note."
+
+
+def long_rules() -> Any:
+    """The rules of the long-job suite, which holds the same numbers for the stack."""
+    path = Path(__file__).resolve().parents[1] / "long" / "rules.py"
+    spec = importlib.util.spec_from_file_location("long_rules_for_the_scenario", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def scenario(window: bool = True) -> Scenario:
@@ -254,6 +267,15 @@ def test_with_the_trigger_the_job_summarises_three_times_and_fits_the_window(
     # Every turn of the script was answered once, in order, across the windows.
     turns = [entry["turn"] for entry in log if entry["tool_choice"] is None]
     assert turns == list(range(len(scenario().turns)))
+    # The requests of each window, its summary request included: 13, 12, 12 and
+    # 10. The long-job suite plans its kills by these numbers.
+    ends = [index for index, entry in enumerate(log) if entry["tool_choice"] is not None]
+    windows = [b - a for a, b in zip([-1, *ends], [*ends, len(log) - 1], strict=True)]
+    assert tuple(windows) == long_rules().WINDOW_REQUESTS == (13, 12, 12, 10)
+    # A response of a later window counts at least 2800 and under the trigger:
+    # workers with a trigger of 2800 would summarise there, a turn early.
+    later = [tokens(entry) for entry in log[ends[0] + 1 :] if entry["tool_choice"] is None]
+    assert any(2800 <= counted < TRIGGER for counted in later)
 
 
 def test_no_id_repeats_across_the_windows(tmp_path: Path) -> None:

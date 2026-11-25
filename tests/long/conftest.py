@@ -77,9 +77,25 @@ def docker(*args: str, env: dict[str, str] | None = None, check: bool = True) ->
     return done.stdout + done.stderr
 
 
+FAILED = (RuntimeError, OSError, subprocess.TimeoutExpired)
+
+
+def done(*args: str) -> bool:
+    """Run a command and say whether it succeeded. One that timed out did not."""
+    try:
+        docker(*args)
+    except FAILED:
+        return False
+    return True
+
+
 def commit() -> str:
-    head = docker("git", "rev-parse", "--short", "HEAD").strip()
-    dirty = docker("git", "status", "--porcelain").strip()
+    """The commit of the checkout, for a record. Never raises: a run's end writes records."""
+    try:
+        head = docker("git", "rev-parse", "--short", "HEAD").strip()
+        dirty = docker("git", "status", "--porcelain").strip()
+    except FAILED:
+        return "unknown"
     return f"{head}{' (uncommitted changes)' if dirty else ''}"
 
 
@@ -286,37 +302,51 @@ class Stack:
             return None
         return next((c for c in self.containers if owner.startswith(c[:12])), None)
 
-    def kill_holder(self, job_id: str, step: dict[str, Any]) -> dict[str, Any] | None:
+    def kill_holder(self, job_id: str, step: dict[str, Any]) -> dict[str, Any]:
         """Kill the worker that holds the job while `step` is its last step, and start it again.
 
-        Returns the step's seq and epoch, the container, and the seconds
-        from the step's `created_at` to the return of `docker kill`. None if
-        no worker of the last `up` holds the job. No compose call here: the
-        kill has to land while the request is open.
+        Returns the step's seq and epoch, the container, and as `latency`
+        the seconds from the step's `created_at` to the return of `docker
+        kill`. A kill that was not made has no latency and says why in
+        `problem`; so does a worker that did not start again. No compose
+        call here: the kill has to land while the request is open.
         """
+        hit = self._kill(job_id, step)
+        if "container" in hit and not done("docker", "start", hit["container"]):
+            hit["problem"] = f"`docker start` of {hit['container']} failed"
+        return hit
+
+    def _kill(self, job_id: str, step: dict[str, Any]) -> dict[str, Any]:
+        """Kill the job's holder, found among the containers of the last `up`."""
+        hit: dict[str, Any] = {"seq": step["seq"], "epoch": step["lease_epoch"]}
         holder = self.holder(job_id)
         if holder is None:
-            return None
-        docker("docker", "kill", holder, check=False)
+            return {**hit, "problem": "no worker of the last `up` holds the job"}
+        hit["container"] = holder[:12]
+        killed = done("docker", "kill", holder)
         returned = datetime.now(UTC)
-        docker("docker", "start", holder, check=False)
+        if not killed:
+            return {**hit, "problem": f"`docker kill` of {holder[:12]} failed"}
         created = datetime.fromisoformat(step["created_at"])
-        return {
-            "seq": step["seq"],
-            "epoch": step["lease_epoch"],
-            "container": holder[:12],
-            "latency": round((returned - created).total_seconds(), 3),
-        }
+        return {**hit, "latency": round((returned - created).total_seconds(), 3)}
 
-    def take_over_with(self, job_id: str, *, trigger: int | None) -> list[str]:
+    def take_over_with(
+        self, job_id: str, step: dict[str, Any], *, trigger: int | None
+    ) -> dict[str, Any]:
         """Stop every worker dead, let the job's lease run out, and start workers on `trigger`.
 
+        The job's holder is killed first, as `kill_holder` does and with
+        the same record: `step` is the job's last step, and the kill has to
+        come before the worker's next answer. Then the other workers.
         Killed, not stopped: a worker that is told to stop gives its job
-        back, and the next claim is then no takeover. Returns the trigger
+        back, and the next claim is then no takeover. `triggers` is what
         each new worker says it has.
         """
+        hit = self._kill(job_id, step)
+        killed = hit["container"] if "latency" in hit else None
         for container in self.workers():
-            docker("docker", "kill", container, check=False)
+            if killed is None or not container.startswith(killed):
+                docker("docker", "kill", container, check=False)
         left = [c[:12] for c, state in self.workers().items() if state == "running"]
         if left:
             raise RuntimeError(f"workers still running after the kill: {left}")
@@ -326,7 +356,8 @@ class Stack:
             time.sleep(max(wait, 0) + 1)
         self.workers_up(trigger=trigger)
         running = [c for c, state in self.workers().items() if state == "running"]
-        return [self.setting(c, "SUMMARY_TRIGGER") for c in running]
+        hit["triggers"] = [self.setting(c, "SUMMARY_TRIGGER") for c in running]
+        return hit
 
     # Jobs, and the fake provider's and the tracker's own records
 
@@ -487,7 +518,7 @@ class Stack:
             # First: a run that stopped every worker would leave a job
             # nobody can cancel.
             self.workers_up()
-        except (RuntimeError, subprocess.TimeoutExpired) as error:
+        except FAILED as error:
             failures.append(failure("the workers did not come back after the run", error))
         for job_id in self.submitted if job_ids is None else job_ids:
             try:
@@ -557,7 +588,11 @@ def stack(request: pytest.FixtureRequest) -> Iterator[Stack]:
     found = request.config.stash[_STACK]
     # The fake provider starts on the session's scenarios here, and the
     # workers get the trigger.
-    found.up()
+    try:
+        found.up()
+    except BaseException:
+        found.hang_up()
+        raise
     wrong = found.wrong_workers()
     if wrong is not None:
         found.hang_up()
@@ -591,7 +626,15 @@ def baseline(stack: Stack) -> Seen:
     if stack.first_issue() != FIRST_ISSUE:
         stack.tracker_up()
     stack.clear()
-    return stack.run_job()
+    job = stack.run_job()
+    if not job.final:
+        # Not left to the test that asks first: under a run of one test that
+        # may be any of them. The job comes back as it was read, not final.
+        try:
+            stack.cancel(job.id)
+        except httpx2.HTTPError as error:
+            show(f"The uninterrupted job was not final and could not be cancelled: {error}")
+    return job
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:
