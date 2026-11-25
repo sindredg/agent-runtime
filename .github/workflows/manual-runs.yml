@@ -195,7 +195,8 @@ jobs:
           exec 2>&1
           token=$(openssl rand -hex 16)
           echo "::stop-commands::$token"
-          for file in .kills/*/results.jsonl .chaos/results.jsonl .notify-timing/results.jsonl .long/*/results.jsonl; do
+          for file in .kills/*/results.jsonl .chaos/results.jsonl .notify-timing/results.jsonl \
+              .long/*/results.jsonl; do
             if [ -f "$file" ]; then echo "== $file"; cat "$file"; fi
           done
           echo "::$token::"
