@@ -279,6 +279,9 @@ class WorkerConfig:
     # process, and the tool the tool failpoints are limited to.
     failpoint: str | None
     failpoint_tool: str | None
+    # Set when FAILPOINT_SUMMARY=1: `after_model_request` stops the worker
+    # only at a summary request.
+    failpoint_summary: bool
     # Set when CHAOS_TOOLS=1: the directory the `crash_worker` tool logs its
     # runs to. Unset, that tool is not offered.
     chaos_log_dir: Path | None
@@ -341,6 +344,7 @@ class WorkerConfig:
             tracker=TrackerConfig.from_env(env),
             failpoint=failpoint,
             failpoint_tool=env.get("FAILPOINT_TOOL") or None,
+            failpoint_summary=env.get("FAILPOINT_SUMMARY") == "1",
             chaos_log_dir=chaos_log_dir,
             sandbox=sandbox,
             sweep_interval=_positive_float(env, "SWEEP_INTERVAL_SECONDS", 300.0),

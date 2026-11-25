@@ -75,7 +75,9 @@ async def run(config: WorkerConfig) -> None:
         workspace_root=config.workspace_root,
         lease=timedelta(seconds=config.lease_seconds),
         heartbeat=config.heartbeat_seconds,
-        failpoints=Failpoints(config.failpoint, tool=config.failpoint_tool),
+        failpoints=Failpoints(
+            config.failpoint, tool=config.failpoint_tool, summary=config.failpoint_summary
+        ),
         summary_trigger=config.summary_trigger,
     )
     docker: Docker | None = None

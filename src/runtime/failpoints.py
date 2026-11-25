@@ -29,6 +29,8 @@ NAMES = (
     "after_tool_ran",
     # The `tool_result` step is written.
     "after_tool_result",
+    # The job's first `summary` step is stored.
+    "after_summary",
 )
 
 
@@ -44,26 +46,52 @@ class Failpoints:
         name: str | None = None,
         *,
         tool: str | None = None,
+        summary: bool = False,
         crash: Callable[[], None] = die,
     ) -> None:
         """`name` is the failpoint that is switched on, or None for none.
 
         `tool` limits the three tool failpoints to calls of that tool.
+        `summary` limits `after_model_request` to a summary request.
         `crash` is what firing does; tests replace it.
         """
         if name is not None and name not in NAMES:
             raise ValueError(f"unknown failpoint {name!r}; the failpoints are {', '.join(NAMES)}")
         self.name = name
         self.tool = tool
+        self.summary = summary
         self._crash = crash
 
-    def hit(self, name: str, *, takeovers: int, tool: str | None = None) -> None:
+    def hit(
+        self,
+        name: str,
+        *,
+        takeovers: int,
+        tool: str | None = None,
+        summaries: int = 0,
+        summary: bool = False,
+    ) -> None:
         """The worker has reached the point `name`. Stop here if it is switched on.
 
         Only on a job that was never taken over. The worker that takes the
         job over passes the same point, and it has to get past it.
+        `after_summary` goes by `summaries` instead: the number of `summary`
+        steps in the job's log once the one just stored is in it.
+
+        `summary` says the request just written is a summary request.
         """
-        if name != self.name or takeovers != 0:
+        if name != self.name:
+            return
+        if name == "after_summary":
+            # The log makes this one fire once: the worker that takes the job
+            # over finds the first summary stored and counts on from it. So
+            # the takeover rule is left out, and a lease lost before the
+            # first summary cannot cancel the stop.
+            if summaries != 1:
+                return
+        elif takeovers != 0:
+            return
+        if name == "after_model_request" and self.summary and not summary:
             return
         if tool is not None and self.tool is not None and tool != self.tool:
             return

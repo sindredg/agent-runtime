@@ -25,7 +25,7 @@ def crash() -> None:
     raise Crashed
 
 
-def test_the_six_failpoints_are_named() -> None:
+def test_the_seven_failpoints_are_named() -> None:
     assert NAMES == (
         "after_claim",
         "after_model_request",
@@ -33,26 +33,64 @@ def test_the_six_failpoints_are_named() -> None:
         "after_tool_intent",
         "after_tool_ran",
         "after_tool_result",
+        "after_summary",
     )
+
+
+# `summaries=1` below is the count at which `after_summary` fires: the job's
+# first summary is stored. The other failpoints do not read it.
 
 
 @pytest.mark.parametrize("name", NAMES)
 def test_a_failpoint_is_inert_unless_it_is_the_one_switched_on(name: str) -> None:
-    Failpoints(crash=crash).hit(name, takeovers=0)
+    Failpoints(crash=crash).hit(name, takeovers=0, summaries=1)
     other = next(n for n in NAMES if n != name)
-    Failpoints(other, crash=crash).hit(name, takeovers=0)
+    Failpoints(other, crash=crash).hit(name, takeovers=0, summaries=1)
 
 
 @pytest.mark.parametrize("name", NAMES)
 def test_the_failpoint_that_is_switched_on_fires(name: str) -> None:
     with pytest.raises(Crashed):
-        Failpoints(name, crash=crash).hit(name, takeovers=0)
+        Failpoints(name, crash=crash).hit(name, takeovers=0, summaries=1)
 
 
 @pytest.mark.parametrize("takeovers", [1, 2, 5])
 def test_a_failpoint_fires_only_on_a_job_that_was_never_taken_over(takeovers: int) -> None:
     """Otherwise the worker that takes the job over would stop at the same place, every time."""
     Failpoints("after_claim", crash=crash).hit("after_claim", takeovers=takeovers)
+
+
+def test_the_summary_failpoint_fires_on_a_job_taken_over_before_its_first_summary() -> None:
+    """A lease lost before the first summary does not cancel the stop.
+
+    The log holds one summary only once, so the takeover rule is not needed.
+    """
+    with pytest.raises(Crashed):
+        Failpoints("after_summary", crash=crash).hit("after_summary", takeovers=1, summaries=1)
+
+
+@pytest.mark.parametrize("summaries", [0, 2, 5])
+def test_the_summary_failpoint_fires_at_the_first_summary_only(summaries: int) -> None:
+    """The worker that takes the job over stores the second summary and has to get past it."""
+    points = Failpoints("after_summary", crash=crash)
+    points.hit("after_summary", takeovers=0, summaries=summaries)
+    points.hit("after_summary", takeovers=1, summaries=summaries)
+
+
+def test_the_request_failpoint_can_be_limited_to_a_summary_request() -> None:
+    """Limited, it lets every ordinary request through and stops at a summary request."""
+    points = Failpoints("after_model_request", summary=True, crash=crash)
+    points.hit("after_model_request", takeovers=0, summary=False)
+    with pytest.raises(Crashed):
+        points.hit("after_model_request", takeovers=0, summary=True)
+    # The worker that takes the job over sends the summary request again.
+    points.hit("after_model_request", takeovers=1, summary=True)
+    # Without the limit it fires at the first request, whichever kind it is.
+    for summary in (False, True):
+        with pytest.raises(Crashed):
+            Failpoints("after_model_request", crash=crash).hit(
+                "after_model_request", takeovers=0, summary=summary
+            )
 
 
 def test_a_tool_failpoint_can_be_limited_to_one_tool() -> None:
@@ -120,6 +158,20 @@ def test_an_unknown_failpoint_in_the_environment_is_a_config_error() -> None:
 def test_chaos_tools_are_on_only_for_the_value_1(flag: str) -> None:
     config = WorkerConfig.from_env({**WORKER_ENV, "CHAOS_TOOLS": flag, "CHAOS_LOG_DIR": "/chaos"})
     assert config.chaos_log_dir is None
+
+
+@pytest.mark.parametrize("flag", ["", "0", "true", "yes"])
+def test_the_request_failpoint_is_limited_to_a_summary_request_only_for_the_value_1(
+    flag: str,
+) -> None:
+    config = WorkerConfig.from_env({**WORKER_ENV, "FAILPOINT_SUMMARY": flag})
+    assert config.failpoint_summary is False
+
+
+def test_the_limit_to_a_summary_request_is_off_by_default_and_on_for_the_value_1() -> None:
+    assert WorkerConfig.from_env(WORKER_ENV).failpoint_summary is False
+    config = WorkerConfig.from_env({**WORKER_ENV, "FAILPOINT_SUMMARY": "1"})
+    assert config.failpoint_summary is True
 
 
 def test_chaos_tools_need_a_log_directory() -> None:

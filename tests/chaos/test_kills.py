@@ -20,7 +20,6 @@ from typing import Any
 
 import pytest
 
-from runtime.failpoints import NAMES
 from runtime.logs import text_safe
 
 from .conftest import (
@@ -124,7 +123,21 @@ AFTER_TAKEOVER = {
 }
 
 
-@pytest.mark.parametrize("failpoint", NAMES)
+# The failpoints a job with no summary passes. This stack's workers have no
+# trigger, so its jobs never reach `after_summary`. That one is shown by
+# `test_a_job_stopped_after_its_first_summary_sends_what_the_uninterrupted_job_sent`
+# in `tests/long/test_long_job.py`.
+WITHOUT_A_SUMMARY = (
+    "after_claim",
+    "after_model_request",
+    "mid_stream",
+    "after_tool_intent",
+    "after_tool_ran",
+    "after_tool_result",
+)
+
+
+@pytest.mark.parametrize("failpoint", WITHOUT_A_SUMMARY)
 def test_a_job_survives_its_worker_stopping_at_the_failpoint(
     chaos: Chaos, uninterrupted: list[dict[str, Any]], failpoint: str
 ) -> None:
