@@ -24,8 +24,9 @@ Tested. `tests/chaos/test_kills.py`, 200 runs.
 - At 31 kill times no worker held the job, before the claim or after the end.
 - Every takeover followed a kill at 1.49 s or earlier. The runs with no
   takeover had kill times of 0.04 to 0.17 s or 1.35 s and later.
-- One more run per failpoint, with the worker ending its own process: 6 of
-  6, each resumed with one takeover and one issue.
+- One more run at each of the six failpoints a job without a summary
+  passes, with the worker ending its own process: 6 of 6, each resumed with
+  one takeover and one issue.
 
 With the mechanism off: with resume switched off, so that the log is not
 replayed, 13 of 20 short runs failed. In 7 the provider was asked turns 0, 1, 0,
