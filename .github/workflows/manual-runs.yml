@@ -91,6 +91,11 @@ on:
           - long-summary-cut
           - long-own-trigger
           - long-oversize-off
+          - tool-result-parse
+          - gate-from-text
+          - scope-from-text
+          - summary-split-blocks
+          - guard-drop-uncounted
       provider:
         description: fake costs nothing; claude waits for a reviewer and costs money
         type: choice

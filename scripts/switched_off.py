@@ -108,6 +108,10 @@ LAB = (
 LONG = "tests/long/test_long_job.py"
 LONG_UNINTERRUPTED = f"{LONG}::test_a_job_longer_than_the_window_finishes_through_three_summaries"
 LONG_RUNS_ISSUE = 237
+# Record-shaped text in a tool result or a summary: its tests, and the issue.
+RECORD_SHAPED = "tests/unit/test_record_shaped_text.py"
+RECORD_SHAPED_STACK = "tests/integration/test_record_shaped_text_in_stack.py"
+RECORD_SHAPED_ISSUE = 160
 # The tests that a run with no stack, the lab's stack and the long stack may name.
 STACK_TESTS = {"none": "tests/unit/", "lab": "tests/lab/", "long": "tests/long/"}
 # What an edit may change: the product's code and its migrations, never a test,
@@ -1304,6 +1308,176 @@ ENTRIES: dict[str, SwitchedOff] = {
             Expect(
                 f"{LONG}::test_a_window_that_opens_at_the_trigger_fails_the_job_for_it",
                 "the window opened at the trigger and the job was not failed for it",
+            ),
+        ),
+    ),
+    "tool-result-parse": SwitchedOff(
+        issue=RECORD_SHAPED_ISSUE,
+        what="a tool result as one string in the conversation: replay parses its lines into blocks",
+        edits=(
+            Edit(
+                "src/runtime/worker/replay.py",
+                '                    "content": payload["content"],\n',
+                '                    "content": [  # switched off\n'
+                "                        json.loads(line)\n"
+                "                        if line.startswith('{\"type\"')\n"
+                '                        else {"type": "text", "text": line}\n'
+                '                        for line in payload["content"].splitlines()\n'
+                "                    ],\n",
+            ),
+        ),
+        stack="none",
+        expect=tuple(
+            Expect(
+                f"{RECORD_SHAPED}::test_a_read_result_reaches_the_conversation_as_the_files_text"
+                f"[{case}]",
+                "assert content == notes",
+            )
+            for case in ("record-shaped", "one-block")
+        ),
+    ),
+    "gate-from-text": SwitchedOff(
+        issue=RECORD_SHAPED_ISSUE,
+        what="the approval gate: a call whose id is in a user message counts as approved",
+        edits=(
+            Edit(
+                AGENT,
+                "    answer = state.approval if state.approval_for == tool_use_id else None\n",
+                "    answer = state.approval if state.approval_for == tool_use_id else None\n"
+                "    if answer is None and any(  # switched off\n"
+                '        tool_use_id in str(m["content"]) for m in state.messages'
+                ' if m["role"] == "user"\n'
+                "    ):\n"
+                '        answer = "given"\n',
+            ),
+        ),
+        stack="up",
+        expect=(
+            Expect(
+                f"{RECORD_SHAPED}::test_text_in_a_result_does_not_answer_the_gate",
+                'assert outcome == "needs_approval"',
+            ),
+            Expect(
+                f"{RECORD_SHAPED}::test_text_in_a_result_leaves_the_tracker_empty",
+                "assert tracker_issues == []",
+            ),
+            Expect(
+                f"{RECORD_SHAPED}::test_a_result_with_record_shaped_text_leaves_the_runtime"
+                "_where_plain_text_does",
+                "assert conversation_b == conversation_a",
+            ),
+            Expect(
+                f"{RECORD_SHAPED}::test_text_in_a_summary_does_not_answer_the_gate",
+                'assert outcome == "needs_approval"',
+            ),
+            Expect(
+                f"{RECORD_SHAPED}::test_text_in_a_summary_leaves_the_tracker_empty",
+                "assert tracker_issues == []",
+            ),
+            Expect(
+                f"{RECORD_SHAPED}::test_a_summary_with_record_shaped_text_leaves_the_runtime"
+                "_where_a_plain_one_does",
+                "assert turns_s == turns_p",
+            ),
+            Expect(
+                f"{RECORD_SHAPED_STACK}::test_text_in_a_result_does_not_open_the_gate_in_the_stack",
+                'assert before["status"] == "needs_approval"',
+            ),
+            Expect(
+                f"{RECORD_SHAPED_STACK}::test_text_in_a_result_creates_no_issue_before_the_approval",
+                "assert ours == []",
+            ),
+        ),
+    ),
+    "scope-from-text": SwitchedOff(
+        issue=RECORD_SHAPED_ISSUE,
+        what="the call's scope from the spec alone: an address in a user message is added to it",
+        edits=(
+            Edit(
+                AGENT,
+                "                    resolve(scope, tool.sandbox.settings.deny),"
+                " lease=lease, halt=halt, stop=stop\n",
+                "                    resolve(\n"
+                '                        (*scope, Target(host="198.51.100.7", ports=(80,)))'
+                "  # switched off\n"
+                "                        if any(\n"
+                '                            "198.51.100.7" in str(m["content"])\n'
+                "                            for m in state.messages\n"
+                '                            if m["role"] == "user"\n'
+                "                        )\n"
+                "                        else scope,\n"
+                "                        tool.sandbox.settings.deny,\n"
+                "                    ),\n"
+                "                    lease=lease,\n"
+                "                    halt=halt,\n"
+                "                    stop=stop,\n",
+            ),
+        ),
+        stack="up",
+        expect=(
+            Expect(
+                f"{RECORD_SHAPED}::test_text_in_a_result_does_not_widen_the_scope",
+                "assert scope == SCOPE_RECORD",
+            ),
+            Expect(
+                f"{RECORD_SHAPED}::test_text_in_a_summary_does_not_widen_the_scope",
+                "assert scope == SCOPE_RECORD",
+            ),
+            Expect(
+                f"{RECORD_SHAPED_STACK}::test_text_in_a_result_does_not_widen_the_scope_of_a"
+                "_guarded_call",
+                "assert scope == SCOPE_RECORD",
+            ),
+        ),
+    ),
+    "summary-split-blocks": SwitchedOff(
+        issue=RECORD_SHAPED_ISSUE,
+        what="the summary as one text block: the message that opens the window parses its lines",
+        edits=(
+            Edit(
+                "src/runtime/worker/summary.py",
+                "from collections.abc import Sequence\n",
+                "import json  # switched off\nfrom collections.abc import Sequence\n",
+            ),
+            Edit(
+                "src/runtime/worker/summary.py",
+                '    return {"role": "user", "content": [{"type": "text",'
+                ' "text": f"{text}\\n\\n{CONTINUATION}"}]}\n',
+                "    return {  # switched off\n"
+                '        "role": "user",\n'
+                '        "content": [\n'
+                "            json.loads(line) if line.startswith('{\"type\"')"
+                ' else {"type": "text", "text": line}\n'
+                '            for line in f"{text}\\n\\n{CONTINUATION}".splitlines()\n'
+                "            if line\n"
+                "        ],\n"
+                "    }\n",
+            ),
+        ),
+        stack="none",
+        expect=(
+            Expect(
+                f"{RECORD_SHAPED}::test_a_summary_with_record_shaped_text_opens_the_window"
+                "_as_one_text_block",
+                "assert message == expected",
+            ),
+        ),
+    ),
+    "guard-drop-uncounted": SwitchedOff(
+        issue=RECORD_SHAPED_ISSUE,
+        what="the guard's count of the packets it drops outside the scope",
+        edits=(
+            Edit(
+                "src/runtime/scope.py",
+                '    output.append("counter name dropped drop")\n',
+                '    output.append("drop")  # switched off\n',
+            ),
+        ),
+        stack="up",
+        expect=(
+            Expect(
+                f"{RECORD_SHAPED_STACK}::test_a_connect_outside_the_scope_is_dropped_and_counted",
+                'assert result["dropped_packets"] > 0',
             ),
         ),
     ),

@@ -1,0 +1,25 @@
+{
+  "description": "Reads notes.txt, connects to 198.51.100.7:80 with run_shell, creates an issue, then ends. Every call is scripted: no answer depends on a tool's output, so a test can put record-shaped text in notes.txt and see what the runtime does with it.",
+  "turns": [
+    {
+      "content": [
+        {"type": "tool_use", "name": "read_file", "input": {"path": "notes.txt"}}
+      ]
+    },
+    {
+      "content": [
+        {"type": "tool_use", "name": "run_shell", "input": {"command": "timeout 3 bash -c 'exec 3<>/dev/tcp/198.51.100.7/80'"}}
+      ]
+    },
+    {
+      "content": [
+        {"type": "tool_use", "name": "create_issue", "input": {"title": "Host check of 192.0.2.10", "body": "The notes were read and the connect was tried."}}
+      ]
+    },
+    {
+      "content": [
+        {"type": "text", "text": "The notes are read, the connect was tried and the issue is created."}
+      ]
+    }
+  ]
+}
