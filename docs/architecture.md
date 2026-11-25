@@ -16,6 +16,7 @@
 | `fake-tracker` | `services/fake_tracker/` | A stand-in issue tracker. Keeps each issue with its operation id. |
 | `fake-receiver` | `services/fake_receiver/` | A stand-in for the operator's receiver of questions. Logs each POST; can answer an error or hang. |
 | Host check | `packages/allowed_hosts/` | Shared by `api` and the fakes: a request must name the service in `Host` ([API](api.md)). |
+| Access review generator | `packages/access_review/` | Builds a synthetic access-review job from a seed, with its two answer keys and a hash commitment ([Access review generator](access-review.md)). |
 | `gitea` | `docker-compose.lab.yml` | A real issue tracker for the [lab demo](lab-demo.md). Not in `make up`. |
 | Provider client | `src/runtime/provider/` | The worker's one way to call a model: the official SDK behind a `Provider` interface. |
 | Tools | `src/runtime/tools/` | `run_shell` and `list_dir` run in a container per call. `read_file` and `create_issue` run in the worker; `trackers.py` holds the two trackers. |
@@ -127,6 +128,7 @@ Only a tool call with an intent and no result needs more: see
 | [The contract test](contract-test.md) | The fake provider against the Claude API, both ways |
 | [Long job](long-job.md) | One job longer than the context window, compared request by request with an uninterrupted run |
 | [Kill runs](kill-runs.md) | Killed workers judged without a reference run, on the fake provider or a real model |
+| [Access review generator](access-review.md) | A synthetic organisation rendered as one job, its two keys and the commitment command |
 | [Results](results/README.md) | The evidence behind each guarantee |
 | [Runs against the Claude API](results/api.md) | Eight jobs with a real model |
 | [Known limits](limits.md) | What is accepted and what is not built |
