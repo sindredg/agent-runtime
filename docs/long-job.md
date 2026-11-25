@@ -7,20 +7,7 @@ request the provider received with the run that nobody interrupted.
 
 Status: **configured, not tested**.
 
-<!-- diagram: long-job-runs, draft -->
-```mermaid
-flowchart LR
-    B[1 nobody interrupts] --> F[stopped at a failpoint:<br/>2 after the first summary<br/>3 at a summary request]
-    B --> K[4 five jobs killed<br/>at planned requests]
-    B --> N[6 other issue numbers]
-    B --> T[7 taken over with<br/>another trigger or none]
-    S[5 six bad summary answers] --> X[job failed, nothing run]
-    O[8 window opens at the trigger] --> X
-    F --> C[same requests by key]
-    K --> C
-    N --> C
-    T --> C
-```
+![One job runs past its context window with nobody interrupting it and is the reference. A job whose worker is stopped or killed is taken over and must send the same requests. A job with a bad summary must end failed with no tool run.](diagrams/long-job-runs.svg)
 
 ## The stack
 
