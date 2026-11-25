@@ -58,7 +58,7 @@ GIVEN = (
     "Bekisk", "Bezin", "Biveth", "Bikad", "Bizax", "Borust", "Bosusk", "Botun", "Bulom",
     "Buroth", "Bumor", "Dalik", "Damel", "Dasesk", "Fodun", "Delam", "Derath", "Dekux",
     "Dezuk", "Divol", "Didosk", "Dikon", "Dizim", "Donith", "Dovir", "Fozoth", "Dokex",
-    "Dozek", "Dunast", "Duval", "Dudask", "Dutum", "Faluth", "Farur", "Famod",
+    "Dozek", "Dunast", "Fovusk", "Dudask", "Dutum", "Faluth", "Farur", "Famod",
 )  # fmt: skip
 FAMILY = (
     "Kanod", "Kavox", "Kazil", "Kenisk", "Kedem", "Keketh", "Kezer", "Kinad", "Kivax",
@@ -77,7 +77,7 @@ TEAM_WORDS = (
 SYSTEM_WORDS = (
     "Branuk", "Bredir", "Brikask", "Brosod", "Brusisk", "Dratax", "Drekun", "Drikix",
     "Droken", "Drusux", "Krason", "Krelith", "Krisan", "Krodox", "Krudin", "Tradax",
-    "Tremun", "Trimix", "Trosam", "Truduk", "Gradim", "Gredek", "Grimum", "Gromok",
+    "Tremun", "Trilor", "Trosam", "Truduk", "Gradim", "Gredek", "Grimum", "Gromok",
     "Grumem", "Pramak", "Predoth", "Pridest", "Prulux", "Skalon", "Skerek", "Skinum",
     "Skonok", "Skunem", "Svanak", "Svelom", "Svilik", "Svolam", "Svozuk", "Svuzim",
     "Thazek", "Thetum", "Thitok", "Thuleth",
