@@ -831,8 +831,15 @@ def test_a_job_that_holds_every_clause_gets_no_line(suite: ModuleType) -> None:
     assert suite.clauses(job, reference, unsent=0) == []
     assert suite.clauses(reference, reference, unsent=0) == []
     assert suite.uninterrupted(reference, 3400, 9) == []
-    # The texts a switched-off run names are those of this file, word for word.
-    assert set(NAMED[:3]) <= set(suite.NAMED)
+    # The texts a switched-off run names, word for word, each under its own name.
+    assert NAMED[:3] == (suite.WINDOW_REFUSAL, suite.SUMMARY_STEPS, suite.OPENING)
+    assert suite.LACKING == "a request at a key the uninterrupted run lacks"
+    assert set(suite.NAMED) == {
+        suite.WINDOW_REFUSAL,
+        suite.SUMMARY_STEPS,
+        suite.OPENING,
+        suite.LACKING,
+    }
 
 
 @pytest.mark.parametrize(
