@@ -86,6 +86,11 @@ on:
           - notify-loop-off
           - notify-row-off
           - tool-env-passed-on
+          - long-trigger-off
+          - long-replay-skips-summary
+          - long-summary-cut
+          - long-own-trigger
+          - long-oversize-off
       provider:
         description: fake costs nothing; claude waits for a reviewer and costs money
         type: choice

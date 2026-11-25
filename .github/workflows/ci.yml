@@ -373,3 +373,56 @@ jobs:
       - name: Stop the stack
         if: always()
         run: make clean
+
+  long:
+    name: Long job (fake provider)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        with:
+          version: "0.13.8"
+          add-problem-matchers: false
+      - name: Sync the environment
+        run: uv sync --locked
+      # Every compose command needs the group of the Docker socket, which the
+      # worker joins to start tool containers. `make` sets it; the steps that
+      # call compose directly read it from here.
+      - name: Docker socket group
+        run: echo "DOCKER_GID=$(stat -c %g /var/run/docker.sock)" >> "$GITHUB_ENV"
+      # One job longer than the fake provider's context window: with nobody
+      # interrupting it, with workers stopped and killed at its summaries,
+      # with bad summary answers, other issue numbers and other triggers.
+      # Every request the fake provider got is compared with the first run's.
+      - name: Long job
+        run: |
+          exec 2>&1
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
+          make long
+          echo "::$token::"
+      - name: Results
+        if: always()
+        run: |
+          exec 2>&1
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
+          cat .long/*/results.jsonl 2>/dev/null || echo "No results, stopped before a test."
+          echo "::$token::"
+      # The suite goes on after a failed run and makes the workers again, so
+      # the logs it saved hold what the containers' own logs no longer do.
+      - name: Service logs
+        if: failure()
+        run: |
+          exec 2>&1
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
+          docker compose -f docker-compose.yml -f docker-compose.long.yml logs --no-color
+          cat .long/*/logs/*.log 2>/dev/null || echo "No saved worker logs."
+          echo "::$token::"
+      - name: Stop the stack
+        if: always()
+        run: make clean

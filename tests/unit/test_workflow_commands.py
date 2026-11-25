@@ -372,7 +372,7 @@ PRINTS = re.compile(
     r"\bpytest\b"
     rf"|\bmake ({'|'.join(map(re.escape, TARGETS))})(?![\w-])"
     r"|\bdocker\b.*\blogs\b"
-    r"|\.(chaos|kills|notify-timing|contract)/"
+    r"|\.(chaos|kills|long|notify-timing|contract)/"
 )
 # The steps with a `run` that print nothing from the stack or the tests:
 # lint of the repository's own files, setup, checks of inputs, and stops.
@@ -548,7 +548,7 @@ def test_every_step_with_a_run_stops_workflow_commands_unless_it_prints_nothing_
     }
     assert ("ci.yml", "integration", "Integration tests") in wrapped
     assert ("manual-runs.yml", "claude", "Contract test") in wrapped
-    assert len(wrapped) == 29
+    assert len(wrapped) == 32
 
 
 def test_the_reader_takes_any_indentation() -> None:
@@ -612,7 +612,7 @@ def test_setup_uv_runs_without_its_problem_matchers() -> None:
         for file, step in every_step()
         if step.uses.startswith("astral-sh/setup-uv@")
     ]
-    assert len(setups) == 11
+    assert len(setups) == 12
     assert [setup for setup in setups if setup[2] != "false"] == []
 
 

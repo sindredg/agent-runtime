@@ -104,6 +104,10 @@ ORDER_CASES = (
 LAB = (
     "tests/lab/test_lab_demo.py::test_a_worker_stopped_in_a_call_to_gitea_leaves_exactly_one_issue"
 )
+# The long-job suite: its tests, and the issue its switched-off runs are recorded under.
+LONG = "tests/long/test_long_job.py"
+LONG_UNINTERRUPTED = f"{LONG}::test_a_job_longer_than_the_window_finishes_through_three_summaries"
+LONG_RUNS_ISSUE = 237
 # The tests that a run with no stack, the lab's stack and the long stack may name.
 STACK_TESTS = {"none": "tests/unit/", "lab": "tests/lab/", "long": "tests/long/"}
 # What an edit may change: the product's code and its migrations, never a test,
@@ -1193,6 +1197,113 @@ ENTRIES: dict[str, SwitchedOff] = {
                 "tests/integration/test_secret_canary.py"
                 "::test_no_secret_reaches_a_step_a_log_line_or_an_answer_of_the_api",
                 "a secret was found in:",
+            ),
+        ),
+    ),
+    "long-trigger-off": SwitchedOff(
+        issue=LONG_RUNS_ISSUE,
+        what="the summary trigger: no worker summarises, whatever SUMMARY_TRIGGER says",
+        edits=(
+            Edit(
+                "src/runtime/config.py",
+                '            summary_trigger=_optional_positive_int(env, "SUMMARY_TRIGGER"),\n',
+                "            summary_trigger=None,  # switched off\n",
+            ),
+        ),
+        stack="long",
+        expect=(
+            Expect(
+                LONG_UNINTERRUPTED,
+                "the job's last request was refused for the context window on a scripted turn",
+            ),
+        ),
+    ),
+    "long-replay-skips-summary": SwitchedOff(
+        issue=LONG_RUNS_ISSUE,
+        what="the summary steps in the log a worker reads when it claims a job",
+        edits=(
+            Edit(
+                "src/runtime/worker/replay.py",
+                "    for step in steps:\n        state.apply(step)\n",
+                "    for step in steps:\n"
+                "        if step.kind is not StepKind.SUMMARY:  # switched off\n"
+                "            state.apply(step)\n",
+            ),
+        ),
+        stack="long",
+        expect=(
+            Expect(
+                LONG_UNINTERRUPTED,
+                None,
+                "nobody takes the job over, so no worker reads a log with a summary in it",
+            ),
+            Expect(
+                f"{LONG}::test_a_job_stopped_after_its_first_summary_sends_what_the"
+                "_uninterrupted_job_sent",
+                "the job does not have exactly N summary steps",
+            ),
+            Expect(
+                f"{LONG}::test_jobs_killed_at_planned_requests_send_what_the"
+                "_uninterrupted_job_sent",
+                "a request at a key the uninterrupted run lacks",
+            ),
+        ),
+    ),
+    "long-summary-cut": SwitchedOff(
+        issue=LONG_RUNS_ISSUE,
+        what="the whole summary in the message that opens the next window: half of it is cut",
+        edits=(
+            Edit(
+                "src/runtime/worker/summary.py",
+                'the summary, a blank line, the continuation."""\n',
+                'the summary, a blank line, the continuation."""\n'
+                '    text = text[: len(text) // 2] + "\\n\\n" + text.rsplit("\\n", 1)[-1]'
+                "  # switched off\n",
+            ),
+        ),
+        stack="long",
+        expect=(
+            Expect(
+                LONG_UNINTERRUPTED,
+                "a window does not open with the summary text and the continuation line",
+            ),
+        ),
+    ),
+    "long-own-trigger": SwitchedOff(
+        issue=LONG_RUNS_ISSUE,
+        what="the trigger a job's first request pinned: a worker uses its own setting",
+        edits=(
+            Edit(
+                "src/runtime/worker/replay.py",
+                "        return self.pinned_trigger if self.pinned else own\n",
+                "        return own  # switched off\n",
+            ),
+        ),
+        stack="long",
+        expect=(
+            Expect(
+                f"{LONG}::test_a_takeover_by_workers_with_another_trigger_sends_what_the"
+                "_first_would_have",
+                "a worker with another trigger sent other requests than the first worker"
+                " would have",
+            ),
+        ),
+    ),
+    "long-oversize-off": SwitchedOff(
+        issue=LONG_RUNS_ISSUE,
+        what="the stop of a job whose window opens at or over the trigger",
+        edits=(
+            Edit(
+                AGENT,
+                "            raise _JobFailed(oversize)\n",
+                "            pass  # switched off\n",
+            ),
+        ),
+        stack="long",
+        expect=(
+            Expect(
+                f"{LONG}::test_a_window_that_opens_at_the_trigger_fails_the_job_for_it",
+                "the window opened at the trigger and the job was not failed for it",
             ),
         ),
     ),
