@@ -3,9 +3,13 @@
 #
 #   docker compose -f docker-compose.yml -f docker-compose.long.yml up --wait
 #
-# `make long-up` does that. LONG_SCENARIO_DIR names the host directory of
+# `make long-up` does that, and `make long` runs tests/long on it. Four
+# settings come from the shell. LONG_SCENARIO_DIR names the host directory of
 # scenario files; unset, the packaged ones. SUMMARY_TRIGGER sets the trigger;
-# unset, no job summarises. `make up` afterwards brings the normal stack back.
+# unset, no job summarises. FAILPOINT and FAILPOINT_SUMMARY stop a worker at
+# a named point; unset, nowhere. FAKE_TRACKER_FIRST_ISSUE sets the first
+# issue number; unset, 100000. `make up` afterwards brings the normal stack
+# back.
 name: agent-runtime
 
 services:
@@ -14,11 +18,20 @@ services:
     # the heartbeat stay at the defaults.
     deploy:
       replicas: 2
+    # A worker that stopped at the failpoint comes back. One that the tests
+    # killed is started by them. A failpoint that fired on every claim would
+    # end on the limit of takeovers: the job fails, it does not hang.
+    restart: on-failure
     environment:
       # No sandbox: run_shell and list_dir are not offered.
       SANDBOX_IMAGE: ""
       MAX_TOKENS: "32000"
       SUMMARY_TRIGGER: ${SUMMARY_TRIGGER:-}
+      # Where the worker ends its own process; tests/long sets it for the
+      # runs that stop a worker at a summary. With FAILPOINT_SUMMARY=1,
+      # `after_model_request` stops it only at a summary request.
+      FAILPOINT: ${FAILPOINT:-}
+      FAILPOINT_SUMMARY: ${FAILPOINT_SUMMARY:-}
 
   fake-provider:
     environment:
@@ -38,5 +51,6 @@ services:
   fake-tracker:
     environment:
       # Every issue number has six digits, so a number never changes the
-      # length of a tool result.
-      FAKE_TRACKER_FIRST_ISSUE: "100000"
+      # length of a tool result. From the shell, for the run that shows
+      # what another width does.
+      FAKE_TRACKER_FIRST_ISSUE: ${FAKE_TRACKER_FIRST_ISSUE:-100000}
