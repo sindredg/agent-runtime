@@ -517,6 +517,8 @@ def test_a_takeover_by_workers_with_another_trigger_sends_what_the_first_would_h
     failures: list[str] = []
     checked = False
     jobs: list[Seen] = []
+    # The trigger each worker said it had after each of the three takeovers.
+    read_back: list[list[str]] = []
     try:
         for name, other in (("job A", OTHER_TRIGGER_VALUE), ("job B", None)):
             stack.workers_up()
@@ -539,6 +541,7 @@ def test_a_takeover_by_workers_with_another_trigger_sends_what_the_first_would_h
                 found = f"{name}, taken over with trigger {other}: {against.summary()}"
                 failures.append(failure(OTHER_TRIGGER, found))
             wanted = "" if other is None else str(other)
+            read_back += got[:1]
             if not got or set(got[0]) != {wanted}:
                 failures.append(failure(WRONG_SETTING, f"{name}: {got}, expected {wanted!r}"))
             if (carried := rules.carried_on(job.job, job.steps, summary=True)) is not None:
@@ -572,7 +575,7 @@ def test_a_takeover_by_workers_with_another_trigger_sends_what_the_first_would_h
             failures.append(failure(WRONG_SETTING, f"job C: {back}, expected {str(TRIGGER)!r}"))
         if (carried := rules.carried_on(pinned.job, pinned.steps, summary=False)) is not None:
             failures.append(failure(NOT_CARRIED_ON, f"job C: {carried}"))
-        run.counts = counts(jobs, triggers_after_takeover=[*got[:1], *back[:1]])
+        run.counts = counts(jobs, triggers_after_takeover=[*read_back, *back[:1]])
         checked = True
     finally:
         ended(stack, run, failures, checked)

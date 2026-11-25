@@ -129,7 +129,7 @@ long stack ([Testing](testing.md#must-fail-runs)).
 ## Run it
 
 `make long` builds the images, starts the long stack and runs the suite.
-It takes about 35 minutes. `make up` afterwards brings the normal stack
+It takes about 30 minutes. `make up` afterwards brings the normal stack
 back.
 
 - The session stops before the first test unless every worker is on the
