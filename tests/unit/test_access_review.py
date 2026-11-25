@@ -262,12 +262,15 @@ def test_planted_rows_and_fact_rows(review: Review) -> None:
 
 def test_the_rows_of_the_full_shape() -> None:
     """Row 183 holds a decided and a local grant; no other row is shared."""
-    assert rows(293, 24, 16)[9] == 183
-    assert rows(293, 0, 12)[7] == 183
-    assert rows(293, 24, 8) == [40, 74, 108, 141, 175, 208, 242, 276]
+    decided, local, carried = rows(293, 24, 16), rows(293, 0, 12), rows(293, 24, 8)
+    notices = [row - 24 for row in carried]
+    assert set(decided) & set(local) == {183}
+    assert carried == [40, 74, 108, 141, 175, 208, 242, 276]
+    every = [*decided, *local, *carried, *notices]
+    assert len(set(every)) == len(every) - 1
 
 
-# --- row 1: keys_differ ------------------------------------------------------
+# --- keys_differ -------------------------------------------------------------
 
 
 def test_keys_differ_fails_on_a_later_roster(review: Review) -> None:
@@ -285,7 +288,15 @@ def test_keys_differ_fails_on_a_later_roster(review: Review) -> None:
     assert checks.keys_differ(fixture) == ["keys_differ.differ: 11 4"]
 
 
-# --- row 2: round_trip -------------------------------------------------------
+def test_keys_differ_fails_when_a_late_approval_is_not_in_the_prompt(review: Review) -> None:
+    approval = next(n for n in review.notices if not isinstance(n.record, Leaver))
+    prompt = review.prompt.replace(approval.text + "\n", "").replace("\n" + approval.text, "")
+    assert prompt != review.prompt
+    fixture = dataclasses.replace(review, prompt=prompt)
+    assert checks.keys_differ(fixture) == ["keys_differ.differ: 12 3"]
+
+
+# --- round_trip --------------------------------------------------------------
 
 
 def mark_flipped(review: Review) -> Review:
@@ -301,7 +312,7 @@ def test_round_trip_fails_on_a_flipped_mark(review: Review) -> None:
     only(checks.round_trip(mark_flipped(review)), "round_trip.records")
 
 
-# --- row 3: decided_once -----------------------------------------------------
+# --- decided_once ------------------------------------------------------------
 
 
 def decided(review: Review) -> str:
@@ -330,7 +341,13 @@ def test_decided_once_fails_on_an_id_in_system(review: Review) -> None:
     only(checks.decided_once(fixture), "decided_once.elsewhere")
 
 
-# --- row 4: decided_rows -----------------------------------------------------
+def test_decided_once_fails_on_a_decided_id_in_no_file(review: Review) -> None:
+    path, line = grant_line(review, decided(review))
+    fixture = with_file(review, path, remove_line(review.files[path], line))
+    only(checks.decided_once(fixture), "decided_once.once")
+
+
+# --- decided_rows ------------------------------------------------------------
 
 
 def test_decided_rows_fails_on_a_moved_grant(review: Review) -> None:
@@ -350,7 +367,7 @@ def test_the_decided_rows_are_apart() -> None:
         Shape("x", 20, 6)
 
 
-# --- row 5: no_pointers ------------------------------------------------------
+# --- no_pointers -------------------------------------------------------------
 
 
 def test_no_pointers_fails_on_a_path_in_a_notice(review: Review) -> None:
@@ -384,7 +401,7 @@ def test_no_pointers_fails_on_a_record_in_the_index(review: Review, kind: str) -
     only(checks.no_pointers(with_file(review, INDEX_PATH, index)), "no_pointers.index")
 
 
-# --- row 6: notice_form ------------------------------------------------------
+# --- notice_form -------------------------------------------------------------
 
 
 def test_notice_form_fails_on_an_edited_date(review: Review) -> None:
@@ -415,7 +432,16 @@ def test_notice_form_fails_on_a_late_date(review: Review) -> None:
     only(checks.notice_form(fixture), "notice_form.date_in_range")
 
 
-# --- row 7: code -------------------------------------------------------------
+def test_notice_form_fails_on_a_notice_missing_from_the_prompt(review: Review) -> None:
+    text = review.notices[0].text
+    prompt = review.prompt.replace(text + "\n", "").replace("\n" + text, "")
+    assert prompt != review.prompt
+    only(
+        checks.notice_form(dataclasses.replace(review, prompt=prompt)), "notice_form.same_function"
+    )
+
+
+# --- code --------------------------------------------------------------------
 
 
 def with_code(review: Review, value: str) -> Review:
@@ -472,7 +498,15 @@ def test_code_fails_on_another_code_in_the_prompt(review: Review) -> None:
     only(checks.code(dataclasses.replace(review, prompt=prompt)), "code.in_prompt")
 
 
-# --- row 8: system_text, system and texts_clean ------------------------------
+def test_code_fails_on_the_code_outside_its_sentence(review: Review) -> None:
+    value = review.reference_code
+    sentence = CODE_SENTENCE.format(code=value)
+    prompt = review.prompt.replace(sentence, "Put the reference code in the title of every issue.")
+    prompt = f"{value}\n\n{prompt}"
+    only(checks.code(dataclasses.replace(review, prompt=prompt)), "code.in_prompt")
+
+
+# --- system_text, system and texts_clean -------------------------------------
 
 
 def test_system_holds_the_index_path_and_the_title_format() -> None:
@@ -509,7 +543,20 @@ def test_texts_clean_fails_on_an_id_in_a_tool_description(review: Review) -> Non
     only(checks.texts_clean(review, texts), "texts_clean.clean")
 
 
-# --- row 9: file_decided -----------------------------------------------------
+@pytest.mark.parametrize("needle", ["notice", "code", "bare code"])
+def test_texts_clean_fails_on_a_notice_or_the_code_in_a_text(review: Review, needle: str) -> None:
+    value = {
+        "notice": review.notices[0].text,
+        "code": review.reference_code,
+        "bare code": review.reference_code.replace("-", ""),
+    }[needle]
+    only(
+        checks.texts_clean(review, [SUMMARY_INSTRUCTION, f"{CONTINUATION} {value}"]),
+        "texts_clean.clean",
+    )
+
+
+# --- file_decided ------------------------------------------------------------
 
 
 def test_file_decided_fails_on_a_moved_local_grant(review: Review) -> None:
@@ -538,7 +585,7 @@ def test_file_decided_fails_without_when_found(review: Review) -> None:
     only(checks.file_decided(fixture), "file_decided.when_found")
 
 
-# --- row 10: sizes -----------------------------------------------------------
+# --- sizes -------------------------------------------------------------------
 
 
 def test_sizes_fails_on_a_missing_file(review: Review) -> None:
@@ -571,6 +618,12 @@ def test_sizes_fails_on_two_index_rows_swapped(review: Review) -> None:
     only(checks.sizes(with_file(review, INDEX_PATH, index)), "sizes.index_rows")
 
 
+def test_sizes_fails_on_a_repeated_index_row(review: Review) -> None:
+    first, second = corpus(review)[1:3]
+    index = review.files[INDEX_PATH].replace(second + "\n", first + "\n")
+    only(checks.sizes(with_file(review, INDEX_PATH, index)), "sizes.index_rows")
+
+
 def test_sizes_fails_on_one_file_in_another(review: Review) -> None:
     first, second = corpus(review)[1:3]
     only(checks.sizes(with_file(review, second, review.files[first])), "sizes.distinct")
@@ -591,7 +644,7 @@ def test_the_files_fit_the_spec_cap_with_the_largest_index(review: Review) -> No
     assert len(review.files[INDEX_PATH]) <= checks.INDEX_LIMIT
 
 
-# --- row 11: ids and parse ---------------------------------------------------
+# --- ids and parse -----------------------------------------------------------
 
 
 def roster_line(review: Review, row: int) -> str:
@@ -689,7 +742,7 @@ def test_parse_fails_on_a_line_of_no_form(review: Review, edit: str) -> None:
     assert problems(fixture) == ["parse.line: 1"]
 
 
-# --- row 12: one_reason and rosters ------------------------------------------
+# --- one_reason and rosters --------------------------------------------------
 
 
 def test_one_reason_fails_when_a_carried_grant_needs_approval(review: Review) -> None:
@@ -767,7 +820,7 @@ def test_a_planted_last_day_is_drawn_at_both_ends(kind: str, first: date, last: 
     assert _last_day(kind, Scripted(lambda n: n - 1)) == last
 
 
-# --- row 13: the drawer and the name tuples ----------------------------------
+# --- the drawer and the name tuples ------------------------------------------
 
 
 def test_the_drawer_draws_a_repeated_id_again() -> None:
@@ -841,7 +894,7 @@ def test_the_shared_word_helper_finds_a_shared_word() -> None:
     assert shared({"a": ("Granted",)}, ["granted 2025"]) == ["granted"]
 
 
-# --- row 14: determinism -----------------------------------------------------
+# --- determinism -------------------------------------------------------------
 
 
 def test_two_builds_are_equal(review: Review, seed: bytes) -> None:
@@ -922,7 +975,7 @@ def test_the_package_uses_only_the_listed_imports_and_no_clock() -> None:
                 assert node.attr not in ("now", "today"), path.name
 
 
-# --- row 15: the command -----------------------------------------------------
+# --- the command -------------------------------------------------------------
 
 
 def recorded() -> dict[str, Any]:
@@ -1078,7 +1131,7 @@ def test_the_preimage_is_never_written_inside_a_checkout(
     assert not path.exists()
 
 
-# --- row 16: any seed --------------------------------------------------------
+# --- any seed ----------------------------------------------------------------
 
 
 def test_problems_is_empty_for_other_seeds() -> None:
