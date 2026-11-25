@@ -1,5 +1,6 @@
 # One image for every service: api, worker, migrate, the fake provider, the
-# fake tracker and the fake receiver. packages/ holds code they share.
+# fake tracker and the fake receiver. packages/ holds code they share and the
+# access-review generator.
 # Each compose service runs it with a different command.
 
 # Images are pinned by digest; the tag is kept for readability.
@@ -16,6 +17,7 @@ WORKDIR /app
 # Dependencies first, without the project code, so this layer is rebuilt only
 # when the lock file changes.
 COPY pyproject.toml uv.lock .python-version ./
+COPY packages/access_review/pyproject.toml packages/access_review/
 COPY packages/allowed_hosts/pyproject.toml packages/allowed_hosts/
 COPY services/fake_provider/pyproject.toml services/fake_provider/
 COPY services/fake_receiver/pyproject.toml services/fake_receiver/
