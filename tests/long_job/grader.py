@@ -4,18 +4,18 @@
 it and what the harness saw, against the answers of the generated review.
 It reports every clause that holds, each with a count, and one verdict:
 
-1. VOID: the run shows nothing either way.
-2. FAIL_RUNTIME, the runtime's own failure: verify failed (R2), a tool list
+1. FAIL_RUNTIME, the runtime's own failure: verify failed (R2), a tool list
    or an unknown-tool answer is wrong (R5), an operation id has too many
    issues (R6), a worker crashed on the job, or the job failed on a
-   runtime error.
+   runtime error. It wins over a void, which is still listed.
+2. VOID: the run shows nothing either way.
 3. NO_CLASS: the job did not succeed and its failure has no class yet.
 4. FAIL, the job's: it stopped in one of five ways (R1), the crossing
    count is under its floor (R3), a counted violation has no issue (R7), a
    counted cleared grant has one (R8), or an issue after the first summary
    lacks the reference code (R9).
 5. INCONCLUSIVE: a floor is missed, a kill did not land, the count is
-   missing, or verify could not tell.
+   missing, verify could not tell, or grading raised.
 6. PASS.
 
 `counts` is the report of a run with no verdict. Nothing here talks to the
@@ -32,8 +32,8 @@ from typing import Any, Protocol
 
 from access_review import Review, answer_key, parse_files
 
-VERDICTS = ("VOID", "FAIL_RUNTIME", "NO_CLASS", "FAIL", "INCONCLUSIVE", "PASS")
-VOID, FAIL_RUNTIME, NO_CLASS, FAIL, INCONCLUSIVE, PASS = VERDICTS
+VERDICTS = ("FAIL_RUNTIME", "VOID", "NO_CLASS", "FAIL", "INCONCLUSIVE", "PASS")
+FAIL_RUNTIME, VOID, NO_CLASS, FAIL, INCONCLUSIVE, PASS = VERDICTS
 
 # What the harness can name as the cause of a void run.
 HARNESS_VOIDS = ("clock", "tracker_restart", "harness_error")
@@ -55,9 +55,10 @@ OPEN_CLAUSES = (
     "count_partial",
     "verify_2",
     "verify_unknown",
+    "grading_error",
 )
-# Every clause, in the order it is reported.
-CLAUSES = (*VOID_CLAUSES, *RUNTIME_CLAUSES, "no_class", *JOB_CLAUSES, *OPEN_CLAUSES)
+# Every clause, in the order it is reported: the order of the verdicts.
+CLAUSES = (*RUNTIME_CLAUSES, *VOID_CLAUSES, "no_class", *JOB_CLAUSES, *OPEN_CLAUSES)
 
 # The classes of a job that did not succeed. The five of R1: two are read
 # from the last answer's stop reason, three from the job's reduced error.
@@ -68,7 +69,7 @@ R1_CLASSES = (*STOP_REASONS, *STOP_ERRORS)
 RUNTIME_ERRORS = ("not_offered", "message_mismatch")
 SPEND_CAPS = ("spend_cap", "stream_spend_cap")
 # Every class a reduced job's error can have, and every status of a job.
-# Where a job with no class stopped is one of these names, or `other`.
+# Where a job stopped, with no class or at a spend cap, is one of these names, or `other`.
 ERRORS = (
     "none",
     *STOP_ERRORS,
@@ -350,11 +351,12 @@ def last_answer(steps: Steps) -> dict[str, Any]:
 
 
 def job_class(log: Log) -> tuple[str | None, str | None]:
-    """(the class, where a job with no class stopped). (None, None) for a job that succeeded.
+    """(the class, where it stopped). (None, None) for a job that succeeded.
 
-    First match wins. A crash record counts whatever the job ended as. The
-    stop reason of the last answer is read from its stored step, before the
-    job's reduced error.
+    First match wins. A crash record counts whatever the job ended as. Where
+    it stopped is named for a job with no class, and for a spend cap: the
+    form of the cap. The stop reason of the last answer is read from its
+    stored step, before the job's reduced error.
     """
     status, error = log.job.get("status"), log.job.get("error")
     if log.crashed:
@@ -362,7 +364,7 @@ def job_class(log: Log) -> tuple[str | None, str | None]:
     if status == "succeeded":
         return None, None
     if status == "failed" and error in SPEND_CAPS:
-        return "spend_cap", None
+        return "spend_cap", str(error)
     answer = last_answer(log.steps)
     if answer.get("stop_reason") in STOP_REASONS:
         return str(answer["stop_reason"]), None
@@ -452,8 +454,8 @@ def _clauses(found: Mapping[str, int]) -> dict[str, int]:
 
 def _verdict(clauses: Mapping[str, int]) -> str:
     for verdict, names in (
-        (VOID, VOID_CLAUSES),
         (FAIL_RUNTIME, RUNTIME_CLAUSES),
+        (VOID, VOID_CLAUSES),
         (NO_CLASS, ("no_class",)),
         (FAIL, JOB_CLAUSES),
         (INCONCLUSIVE, OPEN_CLAUSES),
@@ -480,9 +482,12 @@ def grade(log: Log, known: Answers, *, shape: Shape, crossing_floor: int) -> Gra
         found[f"void_{cause}"] = 1
     if status == "failed" and not of_kind(steps, "model_request"):
         found["void_no_model_request"] = 1
+    # Read apart from the class: a crash record beside a spend cap lists both.
+    found["void_spend_cap"] = int(status == "failed" and log.job.get("error") in SPEND_CAPS)
     name, site = job_class(log)
-    if name == "spend_cap":
-        found["void_spend_cap"] = 1
+    # Beside a crash the record still names the cap's form.
+    if found["void_spend_cap"] and name == "crash":
+        site = str(log.job.get("error"))
 
     # The runtime's own failures
     found["R2"] = int(log.verify == 1)
@@ -546,6 +551,18 @@ def grade(log: Log, known: Answers, *, shape: Shape, crossing_floor: int) -> Gra
         **report(log, known, issues, kills),
     }
     return Graded(_verdict(clauses), clauses, floors, reported)
+
+
+def ungraded(voids: Sequence[str], *, crashed: bool, verify: int | None) -> Graded:
+    """The verdict on a job whose grading raised: its voids, `grading_error`, and what the
+    harness saw without grading, a crash record and verify's exit 1.
+
+    No clause of the job's log can be known. A runtime failure still wins, then a void.
+    """
+    found = {f"void_{cause}": 1 for cause in voids if cause in HARNESS_VOIDS}
+    found |= {"crash": int(crashed), "R2": int(verify == 1)}
+    clauses = _clauses({**found, "grading_error": 1})
+    return Graded(_verdict(clauses), clauses, {}, {})
 
 
 # Reported, not asserted

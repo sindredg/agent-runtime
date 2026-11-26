@@ -3,10 +3,14 @@
 The first five tests are the job's own: each reads one count of the record
 and has one assert with a fixed message, so a failure prints the count and
 the message and nothing of the job. They run in modes `must-fail` and
-`graded`, which run one job. The next holds the fake provider's run to its
-pass line. The test of mode `counts` asks only that every job ended and was
-recorded. The last looks for the job's answers in what the session printed,
-recorded and kept, in every mode and on both providers.
+`graded`, which run one job.
+
+The next test holds the fake provider's run to its pass line, and the one
+after it a `graded` run to PASS: any other verdict, VOID included, is red.
+The test of mode `counts` asks only that every job ended and was recorded.
+
+The last looks for the job's answers in what the session printed, recorded
+and kept, in every mode and on both providers.
 
 The session's jobs run once, when the first test asks for their records.
 """
@@ -60,6 +64,14 @@ def test_fake_run_pass_line(record: dict[str, Any]) -> None:
     missed = pass_line_misses(record)
     # The names are fixed, and pytest would cut a long list short.
     assert missed == [], f"the fake provider's run misses: {', '.join(missed)}"
+
+
+def test_a_graded_run_is_green_only_on_pass(record: dict[str, Any], stack: Stack) -> None:
+    """Mode `graded`: the verdict is PASS. Every other verdict, VOID included, is red."""
+    if stack.mode != rules.GRADED:
+        pytest.skip(f"a test of mode {rules.GRADED}")
+    verdict = record["verdict"]
+    assert verdict == grader.PASS, "the graded job's verdict is not PASS"
 
 
 def test_every_job_of_a_counts_run_ends_and_is_recorded(

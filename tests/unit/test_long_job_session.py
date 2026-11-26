@@ -426,6 +426,7 @@ def test_the_record_names_its_run(
     )
     assert record["seed"] == "committed"
     assert record["where"] in ("local Docker Compose", "GitHub Actions")
+    assert record["grading_error"] is None
 
 
 def test_the_record_and_its_printed_line_hold_no_workflow_command(
@@ -727,6 +728,7 @@ def test_the_tests_of_the_run_collect_without_the_harness() -> None:
     assert [line.split("::")[1] for line in collected] == [
         *JOB_TESTS,
         "test_fake_run_pass_line",
+        "test_a_graded_run_is_green_only_on_pass",
         "test_every_job_of_a_counts_run_ends_and_is_recorded",
         "test_no_answer_is_in_the_record_the_output_or_the_saved_logs",
     ]
@@ -1039,13 +1041,13 @@ def test_a_session_drops_the_sdks_own_settings_first(
 # Every mode runs a test of its own: no session is green with every test skipped
 
 
-def run_file_in_mode(directory: Path, mode: str, provider: str) -> str:
+def run_file_in_mode(directory: Path, mode: str, provider: str, verdict: str = "PASS") -> str:
     """Run the whole run file on a made-up session of `mode`, with the harness's own fixtures."""
     directory.mkdir()
     (directory / "logs").mkdir()
     (directory / "logs" / "worker.log").write_text("nothing of the job\n")
     graded = {
-        "verdict": "PASS",
+        "verdict": verdict,
         "clauses": {},
         "floors": {"made": 7, "cleared": 2, "windows": 3, "summaries": 7},
         "provider": provider,
@@ -1100,10 +1102,10 @@ def run_file_in_mode(directory: Path, mode: str, provider: str) -> str:
 @pytest.mark.parametrize(
     ("mode", "provider", "summary"),
     [
-        ("must-fail", "fake provider", "7 passed, 1 skipped"),
-        ("must-fail", "Claude API", "6 passed, 2 skipped"),
-        ("graded", "Claude API", "6 passed, 2 skipped"),
-        ("counts", "Claude API", "2 passed, 6 skipped"),
+        ("must-fail", "fake provider", "7 passed, 2 skipped"),
+        ("must-fail", "Claude API", "6 passed, 3 skipped"),
+        ("graded", "Claude API", "7 passed, 2 skipped"),
+        ("counts", "Claude API", "2 passed, 7 skipped"),
     ],
 )
 def test_each_mode_runs_tests_of_its_own_and_the_answers_test_on_every_provider(
@@ -1113,3 +1115,71 @@ def test_each_mode_runs_tests_of_its_own_and_the_answers_test_on_every_provider(
 
     assert f" {summary} " in output, output[-3000:]
     assert "test_no_answer_is_in_the_record_the_output_or_the_saved_logs PASSED" in output
+
+
+@pytest.mark.parametrize("verdict", ["VOID", "FAIL_RUNTIME", "NO_CLASS", "FAIL", "INCONCLUSIVE"])
+def test_a_graded_session_is_red_on_every_verdict_but_pass(tmp_path: Path, verdict: str) -> None:
+    output = run_file_in_mode(tmp_path / "session", "graded", "Claude API", verdict)
+
+    assert " 1 failed, 6 passed, 2 skipped " in output, output[-3000:]
+    assert "::test_a_graded_run_is_green_only_on_pass FAILED" in output
+    assert "AssertionError: the graded job's verdict is not PASS" in output
+
+
+# An error inside grading
+
+
+def grading_fails(*args: Any) -> Any:
+    raise KeyError("MARKER-OF-THE-TEST")
+
+
+def test_an_error_inside_grading_keeps_its_type_only_and_a_crash_beside_it(
+    harness: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(harness, "graded", grading_fails)
+    found = stack(harness, tmp_path, Docker(), Api())
+    seen = harness.Seen(crashed=True)
+    record = harness.record_line(found, harness.rules.SHORT, seen, SimpleNamespace())
+
+    # No clause of the job's log is known; the crash the harness saw still is.
+    assert (record["verdict"], record["clauses"]) == (
+        "FAIL_RUNTIME",
+        {"crash": 1, "grading_error": 1},
+    )
+    assert record["crashed"] is True
+    assert (record["grading_error"], record["harness_error"], record["voids"]) == (
+        "KeyError",
+        None,
+        [],
+    )
+    assert "MARKER-OF-THE-TEST" not in json.dumps(record)
+
+
+def test_an_error_inside_grading_beside_a_void_of_the_run_is_void_with_both_listed(
+    harness: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(harness, "graded", grading_fails)
+    alone = harness.record_line(
+        stack(harness, tmp_path / "alone", Docker(), Api()),
+        harness.rules.SHORT,
+        harness.Seen(),
+        SimpleNamespace(),
+    )
+    assert (alone["verdict"], alone["clauses"]) == ("INCONCLUSIVE", {"grading_error": 1})
+    failed_verify = harness.record_line(
+        stack(harness, tmp_path / "verify", Docker(), Api()),
+        harness.rules.SHORT,
+        harness.Seen(verify=1),
+        SimpleNamespace(),
+    )
+    assert (failed_verify["verdict"], failed_verify["clauses"]) == (
+        "FAIL_RUNTIME",
+        {"R2": 1, "grading_error": 1},
+    )
+    seen = harness.Seen(harness_error="TimeoutError", voids=["harness_error"])
+    found = stack(harness, tmp_path, Docker(), Api())
+    record = harness.record_line(found, harness.rules.SHORT, seen, SimpleNamespace())
+
+    assert record["verdict"] == "VOID"
+    assert record["clauses"] == {"void_harness_error": 1, "grading_error": 1}
+    assert (record["grading_error"], record["harness_error"]) == ("KeyError", "TimeoutError")
