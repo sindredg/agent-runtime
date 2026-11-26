@@ -393,6 +393,7 @@ QUIET = {
     "hadolint",
     "checkmake",
     "Docker socket group",
+    "Paths outside the docs",
     "Validate the compose files",
     "Call the API from the host",
     "Gitea is stopped after the demo",

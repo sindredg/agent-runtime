@@ -81,8 +81,8 @@ fake provider, with the job of the committed public seed's short shape.
    checks the tracker and the clock, and grades the job.
 
 It takes about 5 minutes, and `make up` afterwards brings the normal stack
-back. CI runs it on every pull request in the job `Long job harness (fake
-provider)`, which is not a required check.
+back. CI runs it on every pull request that changes more than `docs/`, in the
+job `Long job harness (fake provider)`, which is not a required check.
 
 The run passes when the verdict is PASS, the three kills landed, no
 question was asked, the job stored at least six summaries, and none of the

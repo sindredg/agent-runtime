@@ -48,8 +48,11 @@ long-up:
 # shell holds. Keeps the database: a job left unfinished by an earlier
 # session stops it, and `make clean` removes it. Results and worker logs in
 # .long/. `make up` afterwards brings the normal stack back.
+# LONG_TESTS, names of tests in tests/long/test_long_job.py, runs only those;
+# CI splits the suite over runners with it. Unset, the whole suite runs.
+LONG_SELECTED = $(if $(LONG_TESTS),$(addprefix tests/long/test_long_job.py::,$(LONG_TESTS)),tests/long)
 long: long-up
-	uv run --frozen pytest -v -s tests/long
+	uv run --frozen pytest -v -s $(LONG_SELECTED)
 
 # The long-job harness on the same stack and the fake provider: the job of
 # the committed public seed's access review (36 files), with the fake

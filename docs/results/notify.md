@@ -13,7 +13,7 @@ The three chaos tests also ran in the [full run](README.md#the-run) at
 ## Every question reaches the receiver
 
 Tested. `tests/chaos/test_notify.py`, three tests in the chaos suite, a
-required check on every pull request. Each is judged by the fake receiver's
+required check, run on every pull request that changes more than `docs/`. Each is judged by the fake receiver's
 own log of the POSTs it was sent, against each job's `approval_requested`
 steps.
 
