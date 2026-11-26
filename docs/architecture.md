@@ -129,6 +129,7 @@ Only a tool call with an intent and no result needs more: see
 | [Long job](long-job.md) | One job longer than the context window, compared request by request with an uninterrupted run |
 | [Kill runs](kill-runs.md) | Killed workers judged without a reference run, on the fake provider or a real model |
 | [Access review generator](access-review.md) | A synthetic organisation rendered as one job, its two keys and the commitment command |
+| [Long-job grader](long-job-grader.md) | That job on the long stack, killed three times and graded by its outcome |
 | [Results](results/README.md) | The evidence behind each guarantee |
 | [Runs against the Claude API](results/api.md) | Eight jobs with a real model |
 | [Known limits](limits.md) | What is accepted and what is not built |

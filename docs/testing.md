@@ -29,7 +29,7 @@ flowchart LR
 | `tests/chaos` | `make chaos` | Workers that are killed, paused, crashed or stopped while jobs run |
 | `tests/lab` | `make lab` | A worker stopped in a call to Gitea ([Lab demo](lab-demo.md)) |
 | `tests/kills` | `make kills` | Killed workers, judged without a reference run ([Kill runs](kill-runs.md)) |
-| `tests/long` | `make long` | A job longer than its context window, stopped and taken over at its summaries ([Long job](long-job.md)) |
+| `tests/long`, `tests/long_job` | `make long`, `make long-job` | A job longer than its context window, taken over at its summaries ([Long job](long-job.md)), or graded by its outcome ([Long-job grader](long-job-grader.md)) |
 | `tests/notify_timing` | `make notify-timing` | G12's timed run: each parked job's question reaches the fake receiver within 5 s |
 | `tests/contract` | the Manual runs workflow | The fake provider against the Claude API ([The contract test](contract-test.md)) |
 
