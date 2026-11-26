@@ -89,16 +89,44 @@ question was asked, the job stored at least six summaries, and none of the
 job's answers is in the record, the captured output or the saved logs.
 
 The session stops before any stack call for an unknown provider, mode or
-phase, for a token budget in a must-fail run, and for `LONG_JOB_PROVIDER=claude`:
-a keyed run is not built. It stops before the job is submitted unless every
-worker calls the fake provider.
+phase, for a token budget in a must-fail run, and for every keyed run that
+`rules.refusals` refuses. It stops before the job is submitted unless every
+worker calls the run's provider.
+
+## On the Claude API
+
+Every run on the Claude API is refused today: the pass line is proposed and
+the token bound of keyed long jobs is not set.
+
+| Path | What it runs |
+|---|---|
+| `make long-job-claude LONG_JOB_MODEL=claude-haiku-5-5` | Mode `counts` or `graded` on the long stack with the Claude overlay. |
+| `scripts/long_job_keyed.py check` | The run's refusals, before the key or any stack. |
+| `scripts/long_job_keyed.py corpus-count` | The tokens of a seed's whole corpus. |
+| Entry `long-notices-dropped` | Mode `must-fail`: a control job, then a job whose first summary drops the notices ([ADR 0034](adr/0034-judge-a-keyed-long-job-entry-by-a-control-and-an-edited-job.md)). |
+
+- **`counts`** runs short jobs one after another, with no kill, and records
+  their counts with no verdict.
+- **`graded`** runs one full-shape job with the three kills. After the job
+  it counts the stored text with `CLAUDE_API_KEY` from the environment.
+- A keyed run reads its seed from `LONG_JOB_SEED`, writes no scenario and
+  records `seed: private`. Its own answers are looked for in every record,
+  output and saved log.
+- The workflow job `long-job` prints the records only: no service log, no
+  saved worker log, no artifact. A failure is read from its record.
+- On the fake provider `counts` runs one job, and `graded` is INCONCLUSIVE:
+  it has no count.
 
 ## What it writes
 
-`.long-job/<time>/` holds the scenario, the workers' saved logs and
-`results.jsonl`: one line per job with the verdict, every clause with its
-count, the floors, the kills and the reported counts. Every line holds
-counts and fixed words only: no title, id, code or text of the job.
+`.long-job/<time>/` holds the scenario on the fake provider, the workers'
+saved logs and `results.jsonl`.
+
+- A graded job's line has the verdict, every clause with its count, the
+  floors, the kills and the reported counts.
+- A `counts` session writes a line per job and a line of their sum.
+- Every line holds counts and fixed words only: no title, id, code or text
+  of the job.
 
 ## Limits
 
@@ -106,3 +134,6 @@ counts and fixed words only: no title, id, code or text of the job.
   the kills and the grader end to end, not how a model reviews.
 - The failure classes, NO CLASS and the floors are proposed, like the
   numbers.
+- The keyed paths are tested with stubs and recorders only. The fake's
+  reviewer does not follow an edited summary, so the entry's edited job
+  shows nothing on the fake provider.

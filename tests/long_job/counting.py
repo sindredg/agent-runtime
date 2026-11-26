@@ -2,8 +2,9 @@
 
 The text of the steps is put together in seq order, cut into chunks at step
 boundaries, and each chunk is counted as one user message. What counts the
-tokens is a callable the caller brings. This module makes no request, reads
-no key and imports no client.
+tokens is a callable the caller brings. Loading this module imports no
+client and reads no key. Only `keyed_client` builds one, when it is called,
+for a run on the Claude API.
 
 Counted: the content of a `tool_result`, error results too; the text blocks
 and the tool inputs of a `model_response`; the text blocks of a `summary`.
@@ -12,7 +13,8 @@ and a step whose content was dropped.
 """
 
 import json
-from collections.abc import Callable, Sequence
+import os
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -134,3 +136,40 @@ def counter(client: Any) -> Counter:
         return int(client.messages.count_tokens(**asked).input_tokens)
 
     return count
+
+
+# What the SDK reads from the process's environment besides the key: a log of
+# every request, and another address. Neither is kept.
+SDK_SETTINGS = ("ANTHROPIC_LOG", "ANTHROPIC_BASE_URL")
+
+
+def keyed_client(env: Mapping[str, str]) -> Any:
+    """The Messages client of a count on the Claude API, with the key of `env`.
+
+    Only a run whose `LONG_JOB_PROVIDER` is `claude` gets one: on any other
+    provider this raises before the SDK is imported. The SDK's own settings
+    are dropped from the process first, and the address is the runtime's.
+    A missing key raises KeyError with the variable's name, never a value.
+    """
+    if env.get("LONG_JOB_PROVIDER", "") != "claude":
+        raise ValueError("a keyed client is built for a run on the Claude API only")
+    key = env.get("CLAUDE_API_KEY", "")
+    if not key:
+        raise KeyError("CLAUDE_API_KEY")
+    for name in SDK_SETTINGS:
+        os.environ.pop(name, None)
+    # Imported here, so loading this module imports neither.
+    import anthropic
+
+    from runtime.provider.messages import CLAUDE_API_URL
+
+    return anthropic.Anthropic(api_key=key, base_url=CLAUDE_API_URL)
+
+
+def failure(error: BaseException) -> dict[str, Any]:
+    """A failed count, reduced to the error's type and its HTTP status. No text of it is kept."""
+    status = getattr(error, "status_code", None)
+    return {
+        "type": type(error).__name__,
+        "status": status if isinstance(status, int) and not isinstance(status, bool) else None,
+    }

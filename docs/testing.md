@@ -1,8 +1,8 @@
 # Testing
 
 Nine suites, each with its own needs. Nothing here calls a paid API except
-the contract test and `make kills-claude`, which are started by hand
-([ADR 0020](adr/0020-run-recorded-kill-and-api-runs-in-a-manual-workflow.md)).
+the contract test, `make kills-claude` and `make long-job-claude`, which are
+started by hand ([ADR 0020](adr/0020-run-recorded-kill-and-api-runs-in-a-manual-workflow.md)).
 
 ```mermaid
 flowchart LR
@@ -13,7 +13,8 @@ flowchart LR
     L[tests/lab] --> LS[make lab:<br/>Gitea, two workers,<br/>a failpoint]
     R[tests/kills] --> RS[make kills:<br/>three workers, 6 s lease,<br/>a failpoint]
     R -.->|make kills-claude| KEY
-    G[tests/long] --> GS[make long:<br/>two workers, no sandbox,<br/>a context window]
+    G[tests/long, tests/long_job] --> GS[make long, make long-job:<br/>two workers, no sandbox,<br/>a context window]
+    G -.->|make long-job-claude| KEY
     T[tests/notify_timing] --> S
     K[tests/contract] --> S
     K --> KEY[a Claude API key]
@@ -74,12 +75,12 @@ mechanism switched off, which had to fail. The outcomes are in
 | `ESCAPE_DOCKER_DEFAULTS=1` | The escape attempts run as root with Docker's default container settings |
 | `ESCAPE_NO_RULES=1` | The scope tests run with a guard that has no rules |
 | `make switched-off SWITCHED_OFF=<name>` | One named entry of `scripts/switched_off.py`: its edits, its tests, and a verdict per test ([ADR 0021](adr/0021-run-switched-off-runs-from-a-reviewed-list.md)) |
-| `make switched-off-rehearsal SWITCHED_OFF=<name>` | An entry of the Claude API on the fake provider: every step, no key. Not a result. |
+| `make switched-off-rehearsal SWITCHED_OFF=<name>` | An entry of the Claude API on the fake provider, no key, not a result. Every step, or the long-job entry's control job only. |
 
 Recorded switched-off runs start from the Manual runs workflow, from `main`.
-An entry names its provider. One on the Claude API runs in the job that
-holds the key, and is [judged by its record](kill-runs.md#a-switched-off-run-on-the-claude-api)
-([ADR 0022](adr/0022-run-switched-off-entries-on-the-claude-api-from-the-list.md)).
+An entry names its provider. One on the Claude API runs in a job that holds the key, and is
+[judged by its record](kill-runs.md#a-switched-off-run-on-the-claude-api) ([ADR 0022](adr/0022-run-switched-off-entries-on-the-claude-api-from-the-list.md)),
+or by a control and an edited job ([ADR 0034](adr/0034-judge-a-keyed-long-job-entry-by-a-control-and-an-edited-job.md)).
 
 `suite: switched-off-all` runs every entry of the fake provider from `main`,
 one job and one verdict each. The names come from `main`'s list, and no job
@@ -114,9 +115,8 @@ and do nothing unless switched on.
 | Sandbox timeout | 10 s, so a takeover during a sandboxed call waits 40 s, not 60 s |
 | `CHAOS_LOG_DIR` | `/chaos` in the worker, mounted from `./.chaos` on the host |
 
-The tests that pause or stop a worker use the default 30 s lease. Each chaos
-test writes its result to `.chaos/results.jsonl` with a `verdict`: `passed`,
-`failed`, or `void` when the machine's clock was set during the run.
+The tests that pause or stop a worker use the default 30 s lease. Each chaos test writes its
+result to `.chaos/results.jsonl` with a `verdict`: `passed`, `failed`, or `void` when the clock was set.
 
 ## The fakes
 

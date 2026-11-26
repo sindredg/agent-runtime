@@ -26,7 +26,8 @@ flowchart LR
 ## The Claude API
 
 The fake provider is the default. The Claude API takes its own command,
-and only the [kill runs](kill-runs.md) can be started against it.
+and only the [kill runs](kill-runs.md) and the
+[long-job harness](long-job-grader.md#on-the-claude-api) start against it.
 
 ```mermaid
 flowchart LR
@@ -37,20 +38,21 @@ flowchart LR
     A -->|refused before the first test| T
     KC[make kills-claude KILLS_MODEL=...] -->|adds docker-compose.claude.yml| KA[kill runs on the Claude API]
     K --> KC
-    G[claude-api environment secret,<br/>Manual runs workflow] --> KC
+    G[claude-api environment secret,<br/>Manual runs workflow] --> KC & LJ
+    LJ[make long-job-claude LONG_JOB_MODEL=...] -->|adds docker-compose.claude.yml| LA[long-job harness on the Claude API]
 ```
 
-- Only `docker-compose.claude.yml` reads `CLAUDE_API_KEY`, so the key can
-  stay in `.env`. `CLAUDE_MODEL` defaults to `claude-haiku-5-5`.
-- Recorded runs get the key from the `claude-api` environment of the
-  Manual runs workflow, from `main` only, after a reviewer approves
+- The stack reads `CLAUDE_API_KEY` through `docker-compose.claude.yml`
+  only, so it can stay in `.env`. The long-job harness in mode `graded`
+  also counts tokens with it, so that run needs it in the environment.
+- Recorded runs get the key, and the long-job harness its private
+  `LONG_JOB_SEED`, from the `claude-api` environment of the Manual runs
+  workflow, from `main` only, after a reviewer approves
   ([ADR 0020](adr/0020-run-recorded-kill-and-api-runs-in-a-manual-workflow.md)).
-- `make kills-claude` has no default model: it does not start without
-  `KILLS_MODEL`.
+- `CLAUDE_MODEL` defaults to `claude-haiku-5-5`. `make kills-claude` and
+  `make long-job-claude` have no default: they need `KILLS_MODEL` or `LONG_JOB_MODEL`.
 - `make up-claude` ends by printing the worker's provider URL and model.
   A result from that stack names both.
-- `scripts/check_fake_provider.py` does the refusing: it reads each
-  worker's `ANTHROPIC_BASE_URL`, and never the whole environment.
 
 ## Worker: job and provider
 
@@ -141,10 +143,8 @@ random one each run) from the shell. Compose reads the port from `.env` too.
 | `SWITCHED_OFF` | none | The entry of `scripts/switched_off.py` that `make switched-off` runs |
 | `SWITCHED_OFF_PROVIDER` | `fake` | `claude` lets an entry of the Claude API start. Every job then costs money. |
 
-Read by the [kill runs](kill-runs.md) and the
-[switched-off runs](testing.md#must-fail-runs), not by a service. A
-switched-off run sets the `KILLS_*` variables from its entry and passes on
-none it was given.
+Read by the [kill runs](kill-runs.md) and the [switched-off runs](testing.md#must-fail-runs),
+not by a service. A switched-off run sets the `KILLS_*` variables from its entry and ignores any it was given.
 
 The switches for failure tests (`FAILPOINT`, `FAILPOINT_TOOL`, `FAILPOINT_SUMMARY`,
 `CHAOS_TOOLS`, `CHAOS_LOG_DIR`) are in [Testing](testing.md#failure-switches).

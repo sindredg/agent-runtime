@@ -368,6 +368,7 @@ TARGETS = (
     "long-up",
     "long",
     "long-job",
+    "long-job-claude",
 )
 # What runs tests or the stack, or prints stored text: pytest, one of the
 # targets, a container's logs, or a record file.
@@ -398,7 +399,9 @@ QUIET = {
     "Stop the stack",
     "Refuse the contract test",
     "Refuse a switched-off run off main",
+    "Refuse a long-job run off main",
     "Check the model name",
+    "Check the numbers",
     "Check the entry against the provider",
     "Check the entry against the provider and the model",
     "Names",
@@ -551,7 +554,9 @@ def test_every_step_with_a_run_stops_workflow_commands_unless_it_prints_nothing_
     }
     assert ("ci.yml", "integration", "Integration tests") in wrapped
     assert ("manual-runs.yml", "claude", "Contract test") in wrapped
-    assert len(wrapped) == 35
+    # It prints the run's refusals, so it is wrapped like any step that prints.
+    assert ("manual-runs.yml", "long-job", "Check the run") in wrapped
+    assert len(wrapped) == 40
 
 
 def test_the_reader_takes_any_indentation() -> None:
@@ -615,7 +620,7 @@ def test_setup_uv_runs_without_its_problem_matchers() -> None:
         for file, step in every_step()
         if step.uses.startswith("astral-sh/setup-uv@")
     ]
-    assert len(setups) == 13
+    assert len(setups) == 14
     assert [setup for setup in setups if setup[2] != "false"] == []
 
 

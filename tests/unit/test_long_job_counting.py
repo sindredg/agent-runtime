@@ -11,7 +11,7 @@ import json
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
@@ -319,3 +319,99 @@ def test_a_count_through_the_counter_is_the_same_as_through_the_stub(
 
     assert through_client == count(counting, rules, steps, Stub())
     assert BASELINE == 8
+
+
+# The client of a keyed count: built with a recorder in place of the SDK's class
+
+NOT_A_KEY = "sk-ant-not-a-key-of-the-tests"
+
+
+class Recorder:
+    """Stands in for `anthropic.Anthropic`: keeps how it was built, and is never a client."""
+
+    built: ClassVar[list[dict[str, Any]]] = []
+
+    def __init__(self, **given: Any) -> None:
+        Recorder.built.append(given)
+
+
+def raised(call: Any) -> BaseException | None:
+    """What `call` raised, or None: a call that does not raise fails an assert, not pytest."""
+    try:
+        call()
+    except Exception as error:
+        return error
+    return None
+
+
+@pytest.fixture
+def recorder(monkeypatch: pytest.MonkeyPatch) -> type[Recorder]:
+    import anthropic
+
+    Recorder.built = []
+    monkeypatch.setattr(anthropic, "Anthropic", Recorder)
+    return Recorder
+
+
+def test_the_keyed_client_is_built_once_with_the_key_and_the_runtimes_address(
+    counting: ModuleType,
+    recorder: type[Recorder],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from runtime.provider.messages import CLAUDE_API_URL
+
+    monkeypatch.setenv("ANTHROPIC_LOG", "debug")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:9")
+    client = counting.keyed_client({"LONG_JOB_PROVIDER": "claude", "CLAUDE_API_KEY": NOT_A_KEY})
+    printed = capsys.readouterr()
+
+    assert isinstance(client, Recorder)
+    assert recorder.built == [{"api_key": NOT_A_KEY, "base_url": CLAUDE_API_URL}]
+    assert CLAUDE_API_URL == "https://api.anthropic.com"
+    # The SDK would log every request, or send it elsewhere, with these.
+    assert not {"ANTHROPIC_LOG", "ANTHROPIC_BASE_URL"} & set(__import__("os").environ)
+    assert NOT_A_KEY not in printed.out + printed.err
+
+
+@pytest.mark.parametrize("provider", [None, "", "fake", "Claude", "claude "])
+def test_no_keyed_client_is_built_off_the_claude_api(
+    counting: ModuleType, recorder: type[Recorder], provider: str | None
+) -> None:
+    env = {"CLAUDE_API_KEY": NOT_A_KEY}
+    if provider is not None:
+        env["LONG_JOB_PROVIDER"] = provider
+    refused = raised(lambda: counting.keyed_client(env))
+
+    assert type(refused) is ValueError and "Claude API only" in str(refused)
+    assert recorder.built == []
+    assert NOT_A_KEY not in str(refused)
+
+
+def test_no_keyed_client_is_built_without_a_key(
+    counting: ModuleType, recorder: type[Recorder]
+) -> None:
+    for env in (
+        {"LONG_JOB_PROVIDER": "claude"},
+        {"LONG_JOB_PROVIDER": "claude", "CLAUDE_API_KEY": ""},
+    ):
+        refused = raised(lambda env=env: counting.keyed_client(env))
+        assert type(refused) is KeyError and "CLAUDE_API_KEY" in str(refused)
+    assert recorder.built == []
+
+
+def test_a_failed_count_is_kept_as_its_type_and_status_only(counting: ModuleType) -> None:
+    import anthropic
+    import httpx2
+
+    words = f"the request of {MARKER} was refused for key {NOT_A_KEY}"
+    request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages/count_tokens")
+    refused = anthropic.RateLimitError(
+        words, response=httpx2.Response(429, request=request), body={"error": words}
+    )
+    lost = anthropic.APIConnectionError(message=words, request=request)
+
+    assert counting.failure(refused) == {"type": "RateLimitError", "status": 429}
+    assert counting.failure(lost) == {"type": "APIConnectionError", "status": None}
+    assert counting.failure(ValueError(words)) == {"type": "ValueError", "status": None}
+    assert words not in json.dumps([counting.failure(refused), counting.failure(lost)])

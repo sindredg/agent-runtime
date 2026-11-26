@@ -1,9 +1,11 @@
-"""The long-job harness on the fake provider, without a stack.
+"""The long-job harness, without a stack and without a key.
 
 `tests/long_job/conftest.py` is imported as pytest imports it. Docker is a
 stub that records each command, and the API a mock transport that records
 each request: the session's refusals, the worker check, what is submitted
-and written, the kills, the pass line and the record are checked here.
+and written, the kills, the pass line and the record are checked here. The
+keyed sessions run against the same stubs, with a seed of the tests' own and
+a recorder in place of the SDK's client.
 """
 
 import importlib
@@ -15,8 +17,8 @@ import sys
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from types import ModuleType
-from typing import Any
+from types import ModuleType, SimpleNamespace
+from typing import Any, ClassVar
 
 import httpx2
 import pytest
@@ -53,7 +55,7 @@ JOB_TESTS = {
     "test_every_issue_after_the_first_summary_holds_the_reference_code": (
         "an issue after the first summary lacks the reference code"
     ),
-    "test_the_log_holds": "the log, the tools or the issues break a rule, or a worker crashed",
+    "test_the_log_holds": "the log, the tools or the issues break a rule, or the runtime failed",
     "test_the_run_shows_enough": "the run is under a floor of the pass line",
 }
 
@@ -138,11 +140,20 @@ def must_fail_env(monkeypatch: pytest.MonkeyPatch, **more: str) -> None:
 # What a session may start with
 
 
-def test_a_keyed_run_is_not_built(harness: ModuleType) -> None:
-    assert harness.keyed_problem({"LONG_JOB_PROVIDER": "claude"}) == "A keyed run is not built."
-    for provider in ("", "fake", "Claude", "claude "):
-        assert harness.keyed_problem({"LONG_JOB_PROVIDER": provider}) is None
-    assert harness.keyed_problem({}) is None
+def test_every_keyed_session_is_refused_while_the_line_is_proposed(harness: ModuleType) -> None:
+    """Each mode on the Claude API, with every input the run asks for given."""
+    budgets = {"counts": "1500000", "graded": "20000000", "must-fail": ""}
+    for mode, budget in budgets.items():
+        env = {
+            "LONG_JOB_PROVIDER": "claude",
+            "LONG_JOB_MODE": mode,
+            "LONG_JOB_PHASE": "control",
+            "LONG_JOB_SEED": OTHER_SEED,
+            "LONG_JOB_TOKEN_BUDGET": budget,
+        }
+        found = harness.session_problems(env, ROOT)
+        assert "The pass line is proposed." in found, mode
+        assert OTHER_SEED not in " ".join(found)
 
 
 def test_a_must_fail_session_on_the_fake_provider_may_start(harness: ModuleType) -> None:
@@ -201,14 +212,14 @@ def start_session(
     return said, docker
 
 
-def test_a_keyed_session_stops_with_that_sentence_before_any_stack_call(
+def test_a_keyed_session_stops_on_its_refusals_before_any_stack_call(
     harness: ModuleType, clean_env: pytest.MonkeyPatch
 ) -> None:
     must_fail_env(clean_env, LONG_JOB_PROVIDER="claude", LONG_JOB_SEED=OTHER_SEED)
     said, docker = start_session(harness, clean_env)
 
-    assert ("A keyed run is not built." in said, docker.calls) == (True, [])
-    assert "The pass line is proposed." in said
+    assert ("The pass line is proposed." in said, docker.calls) == (True, [])
+    assert said.startswith("Not run: ")
     assert OTHER_SEED not in said
 
 
@@ -287,8 +298,14 @@ def test_a_stack_on_another_provider_is_sent_no_job(
     harness: ModuleType, clean_env: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     for provider, wrong in (("fake", CLAUDE_URL), ("claude", FAKE_URL)):
+        env = {"LONG_JOB_SEED": OTHER_SEED}
         found = stack(
-            harness, tmp_path / provider, Docker(url=wrong), api := Api(), provider=provider
+            harness,
+            tmp_path / provider,
+            Docker(url=wrong),
+            api := Api(),
+            provider=provider,
+            env=env,
         )
         record = found.run()
 
@@ -670,6 +687,19 @@ def test_a_record_with_no_floor_measured_fails_only_the_test_of_the_floors(
     assert f"AssertionError: {JOB_TESTS['test_the_run_shows_enough']}" in output
 
 
+@pytest.mark.parametrize("clause", ["R2", "R5", "R6", "crash", "runtime"])
+def test_a_runtime_failure_of_the_job_fails_only_the_test_of_the_log(
+    tmp_path: Path, clause: str
+) -> None:
+    """A job the runtime failed (its class "runtime") breaks the log as a crash does."""
+    record = {"clauses": {clause: 1}, "floors": {"made": 7}, "verdict": "FAIL_RUNTIME"}
+    code, output = run_job_tests(tmp_path, record)
+
+    assert code == 1, output[-2000:]
+    assert "1 failed, 4 passed" in output
+    assert f"AssertionError: {JOB_TESTS['test_the_log_holds']}" in output
+
+
 def test_the_tests_of_the_run_collect_without_the_harness() -> None:
     """As the switched-off list collects its tests: with `--noconftest`, off the stack."""
     done = subprocess.run(  # noqa: S603 - a fixed command
@@ -697,6 +727,7 @@ def test_the_tests_of_the_run_collect_without_the_harness() -> None:
     assert [line.split("::")[1] for line in collected] == [
         *JOB_TESTS,
         "test_fake_run_pass_line",
+        "test_every_job_of_a_counts_run_ends_and_is_recorded",
         "test_no_answer_is_in_the_record_the_output_or_the_saved_logs",
     ]
 
@@ -708,3 +739,377 @@ def test_every_assert_of_the_jobs_own_tests_is_one_line_with_its_message() -> No
         body = text.split(f"def {name}(", 1)[1].split("\ndef ", 1)[0]
         (line,) = [line for line in body.splitlines() if line.strip().startswith("assert ")]
         assert re.fullmatch(rf'    assert \w+ == 0, "{re.escape(message)}"', line), line
+
+
+# A keyed session: Docker, the API and the count stubbed, a seed of the tests' own
+
+NOT_A_KEY = "sk-ant-not-a-key-of-the-tests"
+
+
+def keyed_env(mode: str, **more: str) -> dict[str, str]:
+    """The environment of a keyed run as `make long-job-claude` gives it, with a test seed."""
+    return {
+        "PATH": os.environ["PATH"],
+        "LONG_JOB_PROVIDER": "claude",
+        "LONG_JOB_MODE": mode,
+        "LONG_JOB_PHASE": "control",
+        "LONG_JOB_SEED": OTHER_SEED,
+        "CLAUDE_API_KEY": NOT_A_KEY,
+        **more,
+    }
+
+
+def job_steps(review: Any, job_id: str) -> list[dict[str, Any]]:
+    """A finished job that read a corpus file and filed one issue, its answers in its steps."""
+    key = answer_key(review)
+    path, text = list(review.files.items())[1]
+    title = f"{key.made[0]}: access to remove, {review.reference_code}"
+    when = datetime(2026, 11, 26, 12, 0, tzinfo=UTC)
+    tools = ["read_file", "create_issue"]
+
+    def step(seq: int, kind: str, **payload: Any) -> dict[str, Any]:
+        created = (when + timedelta(seconds=seq)).isoformat()
+        return {
+            "seq": seq,
+            "kind": kind,
+            "payload": payload,
+            "lease_epoch": 1,
+            "created_at": created,
+        }
+
+    def use(number: int, name: str, given: dict[str, Any]) -> dict[str, Any]:
+        return {"type": "tool_use", "id": f"toolu_{number}", "name": name, "input": given}
+
+    usage = {"input_tokens": 1000, "output_tokens": 50}
+    issue = {"title": title, "body": f"Found in {path}."}
+    return [
+        step(1, "model_request", tools=tools, max_tokens=32000, summary_trigger=20000),
+        step(2, "model_response", content=[use(1, "read_file", {"path": path})], usage=usage),
+        step(3, "tool_intent", tool_use_id="toolu_1", name="read_file", input={"path": path}),
+        step(4, "tool_result", tool_use_id="toolu_1", content=text, is_error=False),
+        step(5, "model_request", tools=tools, max_tokens=32000, summary_trigger=20000),
+        step(6, "model_response", content=[use(2, "create_issue", issue)], usage=usage),
+        step(7, "tool_intent", tool_use_id="toolu_2", name="create_issue", input=issue),
+        step(8, "tool_result", tool_use_id="toolu_2", content="issue 100001", is_error=False),
+        step(9, "model_request", tools=tools, max_tokens=32000, summary_trigger=20000),
+        step(10, "model_response", content=[{"type": "text", "text": "Done."}], usage=usage),
+    ]
+
+
+class Finished:
+    """The API and the tracker of a stack whose every job succeeds at once."""
+
+    def __init__(self, review: Any) -> None:
+        self.review = review
+        self.requests: list[httpx2.Request] = []
+        self.jobs: list[str] = []
+
+    def __call__(self, request: httpx2.Request) -> httpx2.Response:
+        self.requests.append(request)
+        path = request.url.path
+        if request.method == "POST" and path == "/jobs":
+            self.jobs.append(f"job-{len(self.jobs) + 1}")
+            return httpx2.Response(201, json={"id": self.jobs[-1]})
+        if path == "/jobs":
+            return httpx2.Response(200, json={"jobs": [self.view(job) for job in self.jobs]})
+        if path == "/issues":
+            title = job_steps(self.review, "")[5]["payload"]["content"][0]["input"]["title"]
+            return httpx2.Response(
+                200, json=[{"operation_id": f"{j}:toolu_2", "title": title} for j in self.jobs]
+            )
+        job = path.split("/")[2]
+        if path.endswith("/steps"):
+            after = int(request.url.params.get("after", 0))
+            steps = [s for s in job_steps(self.review, job) if s["seq"] > after]
+            return httpx2.Response(200, json={"steps": steps})
+        return httpx2.Response(200, json=self.view(job))
+
+    def view(self, job: str) -> dict[str, Any]:
+        return {"id": job, "status": "succeeded", "takeovers": 0, "spec": {"prompt": "x"}}
+
+    def posted(self) -> list[dict[str, Any]]:
+        return [
+            json.loads(r.content)
+            for r in self.requests
+            if r.method == "POST" and r.url.path == "/jobs"
+        ]
+
+
+class Counted:
+    """Stands in for `anthropic.Anthropic`: keeps how it was built, and counts bytes plus 7."""
+
+    built: ClassVar[list[dict[str, Any]]] = []
+    fails: ClassVar[Exception | None] = None
+
+    def __init__(self, **given: Any) -> None:
+        Counted.built.append(given)
+        self.messages = self
+
+    def count_tokens(self, *, model: str, messages: list[dict[str, Any]]) -> Any:
+        if Counted.fails is not None:
+            raise Counted.fails
+        return SimpleNamespace(input_tokens=len(messages[0]["content"].encode()) + 7)
+
+
+def keyed_session(
+    harness: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    directory: Path,
+    env: dict[str, str],
+    shape: Any = SHORT,
+) -> tuple[list[dict[str, Any]], Docker, Finished, Any]:
+    """Run a keyed session on the stubs. Returns its lines, docker, the API and the review."""
+    import anthropic
+
+    Counted.built = []
+    monkeypatch.setattr(anthropic, "Anthropic", Counted)
+    monkeypatch.setattr(harness, "verify", lambda job_id: 0)
+    review = generate(bytes.fromhex(OTHER_SEED), shape)
+    docker, api = Docker(url=CLAUDE_URL), Finished(review)
+    client = httpx2.Client(transport=httpx2.MockTransport(api), base_url="http://api")
+    found = harness.Stack(
+        directory,
+        provider="claude",
+        mode=env["LONG_JOB_MODE"],
+        command=docker,
+        api=client,
+        tracker=client,
+        env=env,
+    )
+    lines = found.run_counts() if found.mode == "counts" else [found.run()]
+    found.hang_up()
+    assert found.markers == harness.markers(review)
+    return lines, docker, api, review
+
+
+def written_text(directory: Path) -> str:
+    return "\n".join(
+        path.read_text(encoding="utf-8") for path in sorted(directory.rglob("*")) if path.is_file()
+    )
+
+
+def test_a_keyed_session_runs_its_own_seed_writes_no_scenario_and_keeps_no_answer(
+    harness: ModuleType,
+    clean_env: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    lines, docker, api, review = keyed_session(harness, clean_env, tmp_path, keyed_env("must-fail"))
+    (record,) = lines
+    printed = capsys.readouterr()
+    (body,) = api.posted()
+    (compose,) = [
+        env for call, env in zip(docker.calls, docker.envs, strict=False) if "compose" in call
+    ]
+    answers = harness.markers(review)
+    committed = harness.markers(generate(read_seed(SEED_FILE), SHORT))
+
+    assert (body["model"], body["token_budget"], body["timeout_seconds"]) == (
+        "claude-haiku-5-5",
+        1_500_000,
+        1_800,
+    )
+    # The job is the seed's own, not the committed seed's.
+    assert body["files"] == review.files
+    assert set(answers) - set(committed)
+    assert docker.calls[0][:9] == (*harness.COMPOSE, "-f", "docker-compose.claude.yml", "up")
+    assert {key: compose.get(key) for key in SETTINGS} == {
+        "LONG_SCENARIO_DIR": "",
+        "SUMMARY_TRIGGER": "20000",
+        "FAILPOINT": "after_summary",
+        "FAILPOINT_SUMMARY": "",
+        "FAKE_TRACKER_FIRST_ISSUE": "",
+    }
+    assert [key for key in compose if key.startswith("LONG_JOB_")] == []
+    assert not (tmp_path / "scenarios").exists()
+    assert (record["seed"], record["provider"], record["model"]) == (
+        "private",
+        "Claude API",
+        "claude-haiku-5-5",
+    )
+    # The job ran and was graded: its answers were in its steps and titles.
+    assert (record["harness_error"], record["clauses"].get("R7", 0)) == (None, 0)
+    texts = [written_text(tmp_path), json.dumps(record), printed.out + printed.err]
+    assert harness.markers_in(texts, answers) == 0
+    assert [OTHER_SEED in text for text in texts] == [False] * 3
+    # A must-fail job is not counted: no client is built.
+    assert Counted.built == []
+
+
+def test_a_keyed_graded_session_counts_the_job_once_with_the_key_on_the_full_shape(
+    harness: ModuleType,
+    clean_env: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from access_review import FULL
+    from runtime.provider.messages import CLAUDE_API_URL
+
+    env = keyed_env("graded", LONG_JOB_TOKEN_BUDGET="2000000")  # noqa: S106 - a count of tokens
+    (record,), docker, api, review = keyed_session(harness, clean_env, tmp_path, env, FULL)
+    printed = capsys.readouterr()
+    compose = docker.envs[0]
+
+    assert (compose["SUMMARY_TRIGGER"], compose["FAILPOINT"]) == ("80000", "after_summary")
+    assert api.posted()[0]["token_budget"] == 2_000_000
+    assert (record["shape"], record["token_budget"]) == ("full", 2_000_000)
+    assert Counted.built == [{"api_key": NOT_A_KEY, "base_url": CLAUDE_API_URL}]
+    crossing = record["counts"]["crossing"]
+    assert crossing is not None and crossing["total"] > 0 and not crossing["partial"]
+    assert (record["count_error"], record["clauses"].get("count_failed", 0)) == (None, 0)
+    texts = [written_text(tmp_path), json.dumps(record), printed.out + printed.err]
+    assert [NOT_A_KEY in text for text in texts] == [False] * 3
+    assert harness.markers_in(texts, harness.markers(review)) == 0
+
+
+def test_a_failed_count_is_recorded_as_its_type_and_status(
+    harness: ModuleType, clean_env: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import anthropic
+
+    from access_review import FULL
+
+    words = f"refused the count for {NOT_A_KEY}"
+    request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages/count_tokens")
+    Counted.fails = anthropic.RateLimitError(
+        words, response=httpx2.Response(429, request=request), body=None
+    )
+    try:
+        env = keyed_env("graded", LONG_JOB_TOKEN_BUDGET="2000000")  # noqa: S106 - tokens
+        (record,), _, _, _ = keyed_session(harness, clean_env, tmp_path, env, FULL)
+    finally:
+        Counted.fails = None
+
+    assert record["count_error"] == {"type": "RateLimitError", "status": 429}
+    assert record["clauses"]["count_failed"] == 1
+    assert record["verdict"] == "INCONCLUSIVE"
+    assert words not in json.dumps(record)
+
+
+def test_a_counts_session_runs_its_jobs_in_turn_with_no_kill_and_sums_them(
+    harness: ModuleType, clean_env: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    clean_env.setattr(harness.rules, "COUNTS_JOBS", 2)
+    env = keyed_env("counts", LONG_JOB_TOKEN_BUDGET="1000000", LONG_JOB_JOBS="2")  # noqa: S106
+    lines, docker, api, _ = keyed_session(harness, clean_env, tmp_path, env)
+
+    assert [body["token_budget"] for body in api.posted()] == [1_000_000, 1_000_000]
+    assert [line["job"] for line in lines] == [1, 2, "total"]
+    assert [line["status"] for line in lines[:2]] == ["succeeded", "succeeded"]
+    assert [line.get("verdict") for line in lines] == [None, None, None]
+    assert lines[2]["counts"]["jobs"] == 2
+    assert lines[2]["counts"]["final"] == 2
+    assert docker.envs[0]["FAILPOINT"] == ""
+    assert not [call for call in docker.calls if call[1:2] in (("kill",), ("start",))]
+    on_disk = (tmp_path / "results.jsonl").read_text().splitlines()
+    assert [json.loads(line) for line in on_disk] == lines
+
+
+def test_a_counts_job_whose_wait_would_end_after_the_session_is_not_sent(
+    harness: ModuleType, clean_env: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    clean_env.setattr(harness.rules, "COUNTS_JOBS", 3)
+    asked: list[float] = []
+
+    def may_submit(ready: float | None, now: float, line: Any) -> bool:
+        asked.append(now)
+        return len(asked) == 1
+
+    clean_env.setattr(harness, "may_submit", may_submit)
+    env = keyed_env("counts", LONG_JOB_TOKEN_BUDGET="1000000", LONG_JOB_JOBS="3")  # noqa: S106
+    lines, _, api, _ = keyed_session(harness, clean_env, tmp_path, env)
+
+    assert len(api.posted()) == 1
+    assert [line["job"] for line in lines] == [1, 2, "total"]
+    assert lines[1]["harness_error"] == "NotStarted"
+    assert lines[2]["not_started"] == 2
+
+
+def test_a_session_drops_the_sdks_own_settings_first(
+    harness: ModuleType, clean_env: pytest.MonkeyPatch
+) -> None:
+    must_fail_env(clean_env)
+    clean_env.setenv("ANTHROPIC_LOG", "debug")
+    clean_env.setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:9")
+    start_session(harness, clean_env)
+
+    assert not {"ANTHROPIC_LOG", "ANTHROPIC_BASE_URL"} & set(os.environ)
+
+
+# Every mode runs a test of its own: no session is green with every test skipped
+
+
+def run_file_in_mode(directory: Path, mode: str, provider: str) -> str:
+    """Run the whole run file on a made-up session of `mode`, with the harness's own fixtures."""
+    directory.mkdir()
+    (directory / "logs").mkdir()
+    (directory / "logs" / "worker.log").write_text("nothing of the job\n")
+    graded = {
+        "verdict": "PASS",
+        "clauses": {},
+        "floors": {"made": 7, "cleared": 2, "windows": 3, "summaries": 7},
+        "provider": provider,
+        "failpoint_lines": 1,
+        "takeovers": 3,
+        "questions": 0,
+        "counts": {"kills": [{"landed": True, "window": 2}, {"landed": True, "window": 4}]},
+    }
+    lines = [{"job": 1, "status": "succeeded"}, {"job": "total"}] if mode == "counts" else [graded]
+    (directory / "results.jsonl").write_text("".join(json.dumps(x) + "\n" for x in lines))
+    (directory / "sample_stack.py").write_text(
+        "import json\nfrom types import SimpleNamespace\n\nimport pytest\n\n"
+        "from long_job.conftest import pytest_runtest_logreport, record, records\n\n\n"
+        '@pytest.fixture(scope="session")\n'
+        "def stack():\n"
+        f"    lines = {lines!r}\n"
+        "    for line in lines:\n"
+        "        print('RESULT ' + json.dumps(line))\n"
+        "    return SimpleNamespace(\n"
+        f"        mode={mode!r}, directory=__import__('pathlib').Path({str(directory)!r}),\n"
+        "        logs=['worker.log'], markers=['MARKER-OF-THE-TEST'], records=lines,\n"
+        f"        record=None if {mode!r} == 'counts' else lines[0],\n"
+        "    )\n"
+    )
+    env = {
+        **{name: value for name, value in os.environ.items() if not name.startswith("PYTEST_")},
+        "PYTHONPATH": os.pathsep.join([str(directory), str(ROOT / "tests")]),
+    }
+    done = subprocess.run(  # noqa: S603 - the test's own command
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            *makefile_flags("long-job"),
+            "--noconftest",
+            "-p",
+            "sample_stack",
+            "-p",
+            "no:cacheprovider",
+            str(RUN_FILE.relative_to(ROOT)),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+        timeout=120,
+    )
+    return done.stdout + done.stderr
+
+
+@pytest.mark.parametrize(
+    ("mode", "provider", "summary"),
+    [
+        ("must-fail", "fake provider", "7 passed, 1 skipped"),
+        ("must-fail", "Claude API", "6 passed, 2 skipped"),
+        ("graded", "Claude API", "6 passed, 2 skipped"),
+        ("counts", "Claude API", "2 passed, 6 skipped"),
+    ],
+)
+def test_each_mode_runs_tests_of_its_own_and_the_answers_test_on_every_provider(
+    tmp_path: Path, mode: str, provider: str, summary: str
+) -> None:
+    output = run_file_in_mode(tmp_path / "session", mode, provider)
+
+    assert f" {summary} " in output, output[-3000:]
+    assert "test_no_answer_is_in_the_record_the_output_or_the_saved_logs PASSED" in output

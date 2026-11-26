@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="776" height="404" viewBox="0 0 776 404" role="img" aria-labelledby="long-must-fail-title long-must-fail-desc">
+  <title id="long-must-fail-title">The two jobs of the long-job list entry</title>
+  <desc id="long-must-fail-desc">The control job runs the checkout as it is and must pass; otherwise the run is a finding and no edit is written. Only then is the first summary edited to drop the notices, the stack is built again, and the edited job is graded: it passes when R7, R8 and R9 fire with the floors met, is a finding when one does not fire, a floor is missed or a runtime failure shows in either job, and is inconclusive on a void or with no record of this run.</desc>
+  <defs>
+    <marker id="long-must-fail-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="m0 0 8 4-8 4z" fill="#bdc8d6"/>
+    </marker>
+  </defs>
+  <rect width="776" height="404" rx="8" fill="#0d1117"/>
+  <g fill="none" stroke="#bdc8d6" stroke-width="1.5" marker-end="url(#long-must-fail-arrow)">
+    <path d="M156 80v38"/>
+    <path d="M156 176v38"/>
+    <path d="M296 52H358"/>
+    <path d="M296 230h12a8 8 0 0 0 8-8V176a8 8 0 0 1 8-8h34"/>
+    <path d="M296 244H358"/>
+    <path d="M296 258h32a8 8 0 0 1 8 8v46a8 8 0 0 0 8 8h14"/>
+  </g>
+  <g fill="#1b2531" stroke="#788798">
+    <rect x="16" y="24" width="280" height="56" rx="5"/>
+    <rect x="16" y="120" width="280" height="56" rx="5"/>
+    <rect x="16" y="216" width="280" height="56" rx="5"/>
+    <rect x="360" y="24" width="400" height="56" rx="5"/>
+    <rect x="360" y="216" width="400" height="56" rx="5"/>
+    <rect x="360" y="292" width="400" height="56" rx="5"/>
+  </g>
+  <rect x="360" y="140" width="400" height="56" rx="5" fill="#3b2b25" stroke="#ffb991"/>
+  <g font-family="system-ui, sans-serif" fill="#eef2f6">
+    <g font-size="16" font-weight="600">
+      <text x="32" y="48">Control job</text>
+      <text x="32" y="144">Write the edit</text>
+      <text x="32" y="240">Edited job</text>
+      <text x="376" y="48">FINDING</text>
+      <text x="376" y="164" fill="#ffb991">PASS</text>
+      <text x="376" y="240">FINDING</text>
+      <text x="376" y="316">INCONCLUSIVE</text>
+    </g>
+    <g font-size="14" fill="#d6dfe9">
+      <text x="32" y="69">The checkout as it is, graded</text>
+      <text x="32" y="165">First summary: the task and rules only</text>
+      <text x="32" y="261">The stack built again, graded</text>
+      <text x="376" y="69">The control did not pass. No edit is written.</text>
+      <text x="376" y="185" fill="#ffb991">R7, R8 and R9 fire, and the floors are met</text>
+      <text x="376" y="261">One of them did not fire, or a floor is missed</text>
+      <text x="376" y="337">A void in either job, or no record of this run</text>
+      <text x="168" y="104">PASS</text>
+      <text x="310" y="44">else</text>
+    </g>
+    <text x="388" y="384" font-size="14" fill="#d6dfe9" text-anchor="middle">A runtime failure in either job (R2, R5, R6, a crash, a runtime error) is a FINDING.</text>
+  </g>
+</svg>

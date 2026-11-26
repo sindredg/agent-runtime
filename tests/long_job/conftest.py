@@ -1,21 +1,28 @@
-"""The long-job harness: one generated access review, run as a job on the long stack and graded.
+"""The long-job harness: a generated access review, run as jobs on the long stack.
 
 The stack is the compose stack with docker-compose.long.yml on top. `make
 long-job` starts it and runs these tests on the fake provider, which plays
 the scripted reviewer of `rules.scripted_reviewer` over the job of the
-committed public seed. The harness writes that scenario, starts the fake
-provider and the workers on it with the fake's trigger and the
-`after_summary` failpoint, submits the job, kills the worker that holds it
-twice more, and grades the job with `grader.grade`.
+committed public seed. `make long-job-claude` adds docker-compose.claude.yml
+and runs them on the Claude API, with `rules.MODEL` and the seed of
+LONG_JOB_SEED. Only that run reads LONG_JOB_SEED, and it writes no scenario.
+
+The harness starts the workers with the shape's trigger (the fake's own on
+the fake provider) and the `after_summary` failpoint, submits the job, kills
+the worker that holds it twice more, and grades the job with `grader.grade`.
+That is mode `must-fail` (short shape) and mode `graded` (full shape; a
+keyed run also counts the job's text with `counting.keyed_client`). Mode
+`counts` runs short jobs one after another, with no kill, and reports
+`grader.counts` with no verdict.
 
 LONG_JOB_PROVIDER names the provider, LONG_JOB_MODE the mode and
 LONG_JOB_PHASE the phase. The session ends before any stack call when
-`rules.refusals` refuses the run, when the provider is `claude` (a keyed run
-is not built), when a must-fail run is given a token budget, or when the
-mode or the phase is not known. It ends before the first submission unless
-every worker calls the run's provider.
+`rules.refusals` refuses the run (every keyed run today), when a must-fail
+run is given a token budget, or when the mode or the phase is not known. It
+ends before the first submission unless every worker calls the run's
+provider.
 
-Each session writes its scenario, its record and the workers' logs to
+Each session writes its scenario, its records and the workers' logs to
 `.long-job/<time>/`. What it prints and records are counts and fixed
 sentences: no title, id, code or other text of the job. An error of the
 harness is kept as its type's name only.
@@ -36,14 +43,16 @@ from typing import Any, Protocol
 import httpx2
 import pytest
 
-from access_review import Review, answer_key, generate, read_seed, spec
+from access_review import Review, answer_key, generate, parse_seed, read_seed, spec
 from runtime.logs import json_safe, text_safe
 from runtime.provider.messages import CLAUDE_API_URL
 
-from . import grader, rules
+from . import counting, grader, rules
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 COMPOSE = ("docker", "compose", "-f", "docker-compose.yml", "-f", "docker-compose.long.yml")
+# On top of it for a run on the Claude API: the workers get the key there.
+CLAUDE_OVERLAY = ("-f", "docker-compose.claude.yml")
 # The provider URL every worker must have, by the run's provider.
 URLS = {"fake": "http://fake-provider:8000", rules.CLAUDE: CLAUDE_API_URL}
 # The workers and the lease of the long stack, in seconds: the default.
@@ -55,7 +64,6 @@ PHASE = "LONG_JOB_PHASE"
 # `control`: the checkout as it is. `edited`: a mechanism is switched off.
 PHASES = ("control", "edited")
 # Fixed sentences that stop a session. None quotes a value.
-KEYED_NOT_BUILT = "A keyed run is not built."
 BAD_PHASE = "The phase is not control or edited."
 # The first kill: the worker that stores the job's first summary stops there.
 FAILPOINT = "after_summary"
@@ -73,9 +81,12 @@ CANCELLED = 120.0
 # before the run is void. Leases end by the wall clock.
 CLOCK_STEP_LIMIT = 1.0
 PAGE = 1000
-# The name of the record's run, and the number of jobs a session runs.
+# The name of the record's run, and the number of jobs a graded session runs.
 RECORD_TEST = "long-job"
 RUNS = 1
+# The jobs of a `counts` session while `rules.COUNTS_JOBS` is not set. A keyed
+# one is refused then; one on the fake provider runs this many.
+FAKE_COUNTS_JOBS = 1
 PROVIDER_NAMES = {"fake": "fake provider", rules.CLAUDE: "Claude API"}
 # The containers of a service, found by the labels compose sets.
 SERVICE = ("--filter", "label=com.docker.compose.project=agent-runtime", "--filter")
@@ -90,22 +101,15 @@ NOT_STARTED = "`docker start` failed"
 # What a session may start with
 
 
-def keyed_problem(env: Mapping[str, str]) -> str | None:
-    """Why a run on the Claude API cannot start: none is built. None on any other provider."""
-    return KEYED_NOT_BUILT if env.get(rules.PROVIDER, "") == rules.CLAUDE else None
-
-
 def session_problems(env: Mapping[str, str], root: Path) -> list[str]:
     """Every reason the session stops before its first stack call, as fixed sentences.
 
     `rules.refusals` is asked on every provider, the fake included, so a
     provider that is neither the fake nor `claude` is refused. On the fake
-    it reads no seed and no key.
+    it reads no seed and no key. On the Claude API it refuses every run
+    while the pass line is proposed.
     """
     found = list(rules.refusals(env, root))
-    keyed = keyed_problem(env)
-    if keyed is not None:
-        found.append(keyed)
     mode = env.get(rules.MODE, "")
     if mode not in rules.MODES:
         found.append(rules.BAD_MODE)
@@ -131,16 +135,49 @@ def may_submit(ready: float | None, now: float, line: rules.Line) -> bool:
 # What the session submits and writes
 
 
-def committed_review(root: Path, line: rules.Line) -> Review:
-    """The job of the committed public seed in the line's shape. No other seed is read."""
-    return generate(read_seed(root / rules.PUBLIC_SEED_FILE), rules.SHAPES[line.name])
+def run_seed(env: Mapping[str, str], provider: str, root: Path) -> bytes:
+    """The seed of the session's job.
+
+    On the Claude API it is LONG_JOB_SEED, and nothing else. On the fake
+    provider it is the committed public seed, and LONG_JOB_SEED is never
+    read: a private seed would land in the scenario file.
+    """
+    if provider == rules.CLAUDE:
+        return parse_seed(env.get(rules.SEED, ""))
+    return read_seed(root / rules.PUBLIC_SEED_FILE)
 
 
-def submission(review: Review, line: rules.Line) -> dict[str, Any]:
-    """The body of `POST /jobs`: the review for the fake's reviewer, with the shape's limits."""
+def run_model(provider: str) -> str:
+    """The model of the session's jobs: the line's on the Claude API, the fake's on the fake."""
+    return rules.MODEL if provider == rules.CLAUDE else rules.FAKE_MODEL
+
+
+def run_budget(env: Mapping[str, str], mode: str, provider: str) -> int:
+    """The tokens each job of the session is given.
+
+    The short cap in mode `must-fail` on both providers, where a given
+    budget stops the session first. The given LONG_JOB_TOKEN_BUDGET on the
+    Claude API in the other modes, which `rules.refusals` has checked. The
+    shape's cap on the fake provider.
+    """
+    line = rules.MODES[mode]
+    if mode == rules.MUST_FAIL or provider != rules.CLAUDE:
+        return line.budget_cap
+    return int(env[rules.BUDGET])
+
+
+def counts_jobs() -> int:
+    """How many jobs a `counts` session runs, one after another."""
+    return rules.COUNTS_JOBS if rules.COUNTS_JOBS is not None else FAKE_COUNTS_JOBS
+
+
+def submission(
+    review: Review, line: rules.Line, *, model: str = rules.FAKE_MODEL, budget: int | None = None
+) -> dict[str, Any]:
+    """The body of `POST /jobs`: the review with its model, its budget and the shape's timeout."""
     return {
-        **spec(review, rules.FAKE_MODEL),
-        "token_budget": line.budget_cap,
+        **spec(review, model),
+        "token_budget": line.budget_cap if budget is None else budget,
         "timeout_seconds": line.timeout_seconds,
     }
 
@@ -150,20 +187,32 @@ def scenario_files(review: Review) -> dict[str, dict[str, Any]]:
     return {rules.FAKE_MODEL: rules.scripted_reviewer(review, delay_seconds=rules.DELAY)}
 
 
-def compose_env(environ: Mapping[str, str], *, scenario_dir: str) -> dict[str, str]:
+def compose_env(
+    environ: Mapping[str, str],
+    *,
+    scenario_dir: str,
+    trigger: int = rules.FAKE_TRIGGER,
+    failpoint: str = FAILPOINT,
+) -> dict[str, str]:
     """The environment of one compose call: `environ` with every setting of the long stack set.
 
     The run's own `LONG_JOB_*` variables are left out: no container needs
-    them, and a seed in them must reach nothing.
+    them, and a seed in them must reach nothing. An empty `scenario_dir` is
+    the fake provider's packaged scenarios, for a run that writes none.
     """
     return {
         **{name: value for name, value in environ.items() if not name.startswith("LONG_JOB_")},
         "LONG_SCENARIO_DIR": scenario_dir,
-        "SUMMARY_TRIGGER": str(rules.FAKE_TRIGGER),
-        "FAILPOINT": FAILPOINT,
+        "SUMMARY_TRIGGER": str(trigger),
+        "FAILPOINT": failpoint,
         "FAILPOINT_SUMMARY": "",
         "FAKE_TRACKER_FIRST_ISSUE": "",
     }
+
+
+def compose_files(provider: str) -> tuple[str, ...]:
+    """The compose command of the long stack, with the Claude overlay on the Claude API."""
+    return (*COMPOSE, *CLAUDE_OVERLAY) if provider == rules.CLAUDE else COMPOSE
 
 
 def markers(review: Review) -> list[str]:
@@ -360,6 +409,11 @@ class Seen:
     submission_status: int | None = None
     not_started: int = 0
     cancelled: bool = False
+    # The crossing count of a keyed graded job, or why it failed: the
+    # error's type and HTTP status only.
+    count: counting.Count | None = None
+    count_failed: bool = False
+    count_error: dict[str, Any] | None = None
 
 
 def first_request(steps: Sequence[Mapping[str, Any]]) -> Mapping[str, Any]:
@@ -390,12 +444,18 @@ class Stack:
         command: Command | None = None,
         api: httpx2.Client | None = None,
         tracker: httpx2.Client | None = None,
+        env: Mapping[str, str] | None = None,
     ) -> None:
         self.directory = directory
         self.scenarios = directory / "scenarios"
         self.provider = provider
         self.mode = mode
         self.phase = phase
+        # The run's environment: the seed, the budget and the key are read
+        # from it, and compose gets it without the run's own variables.
+        self.env: Mapping[str, str] = os.environ if env is None else env
+        # The tokens each job is given, once the session has read them.
+        self.budget: int | None = None
         self.command = command or docker
         self.api = api or httpx2.Client(
             base_url=os.environ.get("RUNTIME_API_URL", "http://127.0.0.1:8000"), timeout=10
@@ -410,6 +470,8 @@ class Stack:
         self.logs: list[str] = []
         self.markers: list[str] = []
         self.record: dict[str, Any] | None = None
+        # Every line the session wrote, in order.
+        self.records: list[dict[str, Any]] = []
 
     def hang_up(self) -> None:
         for client in (self.api, self.tracker):
@@ -418,9 +480,21 @@ class Stack:
     # The stack
 
     def compose(self, *args: str, check: bool = True) -> str:
-        """One compose call on the long stack, with every setting of the harness named."""
-        env = compose_env(os.environ, scenario_dir=str(self.scenarios))
-        return self.command(*COMPOSE, *args, env=env, check=check)
+        """One compose call on the long stack, with every setting of the harness named.
+
+        On the Claude API: the Claude overlay, the shape's trigger and the
+        packaged scenarios. On the fake: the session's scenario and the
+        fake's trigger. The failpoint in every mode but `counts`, which
+        kills nothing.
+        """
+        keyed = self.provider == rules.CLAUDE
+        env = compose_env(
+            self.env,
+            scenario_dir="" if keyed else str(self.scenarios),
+            trigger=rules.MODES[self.mode].trigger if keyed else rules.FAKE_TRIGGER,
+            failpoint="" if self.mode == rules.COUNTS else FAILPOINT,
+        )
+        return self.command(*compose_files(self.provider), *args, env=env, check=check)
 
     def write_scenarios(self, review: Review) -> None:
         """The session's scenario files. The fake provider reads them once, when it starts."""
@@ -431,7 +505,7 @@ class Stack:
             )
 
     def up(self) -> None:
-        """The whole stack on the session's scenario, the fake's trigger and the failpoint."""
+        """The whole stack with the run's settings: see `compose`."""
         self.compose("up", "--detach", "--wait", "--no-build")
         self.containers = list(self.workers())
 
@@ -663,38 +737,96 @@ class Stack:
             lines.append(since(text, started))
         return "\n".join(lines)
 
-    # The session's one job
+    # The session's jobs
 
     def run(self) -> dict[str, Any]:
-        """Run the session's job, grade it, write its record and return it. Never raises.
+        """Run the session's one job, grade it, write its record and return it. Never raises.
 
         Every error of the harness is kept as its type's name, and makes the
         run void.
         """
+        self.record = self.jobs(1)[0]
+        return self.record
+
+    def run_counts(self) -> list[dict[str, Any]]:
+        """Run the jobs of a `counts` session one after another, with no kill. Never raises.
+
+        Each job is submitted only while `rules.may_start` allows it. Each
+        gets a line of its counts, and the session a last line of their sum.
+        No verdict.
+        """
+        return self.jobs(counts_jobs())
+
+    def jobs(self, number: int) -> list[dict[str, Any]]:
+        """Bring the stack up, run `number` jobs in turn, keep the logs, and write the lines."""
         line = rules.MODES[self.mode]
-        seen = Seen()
+        seens = [Seen() for _ in range(number)]
+        ids: list[str | None] = [None] * number
         known: grader.Answers | None = None
-        job_id: str | None = None
         tracker = None
         started = datetime.now(UTC)
         wall, monotonic = time.time(), time.monotonic()
-        submitted = monotonic
         try:
-            review = committed_review(REPO_ROOT, line)
+            self.budget = run_budget(self.env, self.mode, self.provider)
+            seed = run_seed(self.env, self.provider, REPO_ROOT)
+            review = generate(seed, rules.SHAPES[line.name])
             known = grader.answers(review)
             self.markers = markers(review)
-            plans = plan(read_seed(REPO_ROOT / rules.PUBLIC_SEED_FILE), line)
-            self.write_scenarios(review)
+            if self.provider != rules.CLAUDE:
+                # The fake provider's reviewer. A keyed run writes none.
+                self.write_scenarios(review)
             self.up()
             if self.wrong_workers() is not None:
                 raise WrongStack
             tracker = self.tracker_start()
             ready = time.monotonic()
-            if not may_submit(ready, ready, line):
+        except Exception as error:
+            # The type only: the text could quote a record of the job.
+            seens[0].harness_error = type(error).__name__
+        else:
+            for at, seen in enumerate(seens):
+                # The first job is sent at the moment the stack is ready: a
+                # full-shape job's wait is the whole session.
+                now = ready if at == 0 else time.monotonic()
+                job_id = ids[at] = self.one_job(review, seed, line, (ready, now), seen)
+                if job_id is not None:
+                    self.after_job(job_id, tracker, seen)
+                if seen.not_started:
+                    seen.not_started = number - at
+                    break
+        self.keep_logs(started, ids, seens)
+        drift = (time.time() - wall) - (time.monotonic() - monotonic)
+        for seen in seens:
+            if abs(drift) > CLOCK_STEP_LIMIT:
+                seen.voids.append("clock")
+            if seen.harness_error is not None:
+                seen.voids.append("harness_error")
+        if self.mode != rules.COUNTS:
+            return [self.write(record_line(self, line, seens[0], known))]
+        return self.write_counts(line, seens, ids, known)
+
+    def one_job(
+        self,
+        review: Review,
+        seed: bytes,
+        line: rules.Line,
+        clock: tuple[float, float],
+        seen: Seen,
+    ) -> str | None:
+        """Submit one job if its wait ends in time, and follow it to its end. Its id, if sent.
+
+        `clock` is the moment the stack was ready and the moment of this
+        submission, both monotonic.
+        """
+        job_id: str | None = None
+        ready, submitted = clock
+        try:
+            if not may_submit(ready, submitted, line):
                 seen.not_started = 1
                 raise NotStarted
-            submitted = time.monotonic()
-            job_id = self.submit(submission(review, line))
+            plans = [] if self.mode == rules.COUNTS else plan(seed, line)
+            body = submission(review, line, model=run_model(self.provider), budget=self.budget)
+            job_id = self.submit(body)
             self.follow(job_id, line, seen, plans)
             seen.seconds = round(time.monotonic() - submitted, 1)
         except SubmissionRefused as refused:
@@ -703,27 +835,69 @@ class Stack:
         except Exception as error:
             # The type only: the text could quote a record of the job.
             seen.harness_error = type(error).__name__
-        if job_id is not None:
-            try:
-                self.read_after(job_id, seen)
-                if tracker is not None and self.tracker_start() != tracker:
-                    seen.voids.append("tracker_restart")
-            except Exception as error:
-                seen.harness_error = seen.harness_error or type(error).__name__
-        if self.containers:
-            try:
-                text = self.save_logs(started)
-                seen.failpoint_lines = failpoint_lines(text)
-                seen.crashed = job_id is not None and rules.crashed(text, job_id)
-            except Exception as error:
-                seen.harness_error = seen.harness_error or type(error).__name__
-        drift = (time.time() - wall) - (time.monotonic() - monotonic)
-        if abs(drift) > CLOCK_STEP_LIMIT:
-            seen.voids.append("clock")
-        if seen.harness_error is not None:
-            seen.voids.append("harness_error")
-        self.record = self.write(record_line(self, line, seen, known))
-        return self.record
+        return job_id
+
+    def after_job(self, job_id: str, tracker: str | None, seen: Seen) -> None:
+        """What is read after a job's end, and the crossing count of a graded one."""
+        try:
+            self.read_after(job_id, seen)
+            if tracker is not None and self.tracker_start() != tracker:
+                seen.voids.append("tracker_restart")
+        except Exception as error:
+            seen.harness_error = seen.harness_error or type(error).__name__
+        if self.mode == rules.GRADED:
+            self.count(seen)
+
+    def count(self, seen: Seen) -> None:
+        """The crossing count of the job's stored steps, on the Claude API only.
+
+        The client is built here, after the job, with the run's key. A
+        count that fails is kept as the error's type and HTTP status. On the
+        fake provider there is no count.
+        """
+        if self.provider != rules.CLAUDE:
+            return
+        try:
+            count = counting.counter(counting.keyed_client(self.env))
+            seen.count = counting.crossing(
+                seen.steps, count, model=rules.MODEL, chunk_bytes=rules.CHUNK_BYTES
+            )
+        except Exception as error:
+            seen.count_failed = True
+            seen.count_error = counting.failure(error)
+
+    def keep_logs(self, started: datetime, ids: Sequence[str | None], seens: list[Seen]) -> None:
+        """Save the workers' logs once; read the failpoint lines and each job's crash in them."""
+        if not self.containers:
+            return
+        try:
+            text = self.save_logs(started)
+        except Exception as error:
+            seens[0].harness_error = seens[0].harness_error or type(error).__name__
+            return
+        for job_id, seen in zip(ids, seens, strict=True):
+            seen.failpoint_lines = failpoint_lines(text)
+            seen.crashed = job_id is not None and rules.crashed(text, job_id)
+
+    def write_counts(
+        self,
+        line: rules.Line,
+        seens: list[Seen],
+        ids: Sequence[str | None],
+        known: grader.Answers | None,
+    ) -> list[dict[str, Any]]:
+        """One line per job that was sent or failed to be, then the sum of their counts."""
+        logs = [log_of(seen) for seen in seens]
+        report = grader.counts(logs, known) if known is not None else None
+        written = []
+        for at, (job_id, seen) in enumerate(zip(ids, seens, strict=True)):
+            if job_id is None and seen.harness_error is None:
+                continue
+            counted = None if report is None else report["jobs"][at]
+            written.append(self.write(counts_line(self, line, seen, at + 1, counted)))
+        total = None if report is None else report["total"]
+        written.append(self.write(total_line(self, line, seens, total)))
+        return written
 
     def write(self, record: dict[str, Any]) -> dict[str, Any]:
         """Append the record to results.jsonl and print it. Returns it as it was written."""
@@ -733,6 +907,7 @@ class Stack:
             file.write(line + "\n")
         show(f"\nRESULT {line}")
         written: dict[str, Any] = json.loads(line)
+        self.records.append(written)
         return written
 
 
@@ -752,8 +927,8 @@ def verify(job_id: str) -> int | None:
     return done.returncode
 
 
-def graded(seen: Seen, known: grader.Answers, line: rules.Line) -> grader.Graded:
-    log = grader.Log(
+def log_of(seen: Seen) -> grader.Log:
+    return grader.Log(
         job=seen.job,
         steps=seen.steps,
         issues=seen.issues,
@@ -761,12 +936,55 @@ def graded(seen: Seen, known: grader.Answers, line: rules.Line) -> grader.Graded
         kills=seen.kills,
         failpoint_lines=seen.failpoint_lines,
         verify=seen.verify,
-        count=None,
+        count=seen.count,
+        count_failed=seen.count_failed,
         voids=tuple(dict.fromkeys(seen.voids)),
         crashed=seen.crashed,
         seconds=seen.seconds,
     )
-    return grader.grade(log, known, shape=line, crossing_floor=rules.CROSSING_FLOOR)
+
+
+def graded(seen: Seen, known: grader.Answers, line: rules.Line) -> grader.Graded:
+    return grader.grade(log_of(seen), known, shape=line, crossing_floor=rules.CROSSING_FLOOR)
+
+
+def run_fields(stack: Stack, line: rules.Line) -> dict[str, Any]:
+    """What every line of a session says of its run: the settings, the commit and where."""
+    return {
+        "test": RECORD_TEST,
+        "mode": stack.mode,
+        "phase": stack.phase,
+        "shape": line.name,
+        "commit": commit(),
+        "at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "provider": PROVIDER_NAMES[stack.provider],
+        "model": run_model(stack.provider),
+        "workers": WORKERS,
+        "lease_seconds": LEASE,
+        "token_budget": stack.budget,
+        "machine": f"{platform.system()} {platform.machine()}, {os.cpu_count()} CPUs",
+        "where": "GitHub Actions" if os.environ.get("GITHUB_ACTIONS") else "local Docker Compose",
+        "seed": "private" if stack.provider == rules.CLAUDE else "committed",
+    }
+
+
+def job_fields(seen: Seen) -> dict[str, Any]:
+    """What a line says of one job as the harness saw it: counts, classes and seconds."""
+    request = first_request(seen.steps)
+    return {
+        "max_tokens": request.get("max_tokens"),
+        "summary_trigger": request.get("summary_trigger"),
+        "crashed": seen.crashed,
+        "failpoint_lines": seen.failpoint_lines,
+        "takeovers": seen.job.get("takeovers"),
+        "questions": len(seen.questions),
+        "verify": seen.verify,
+        "seconds": seen.seconds,
+        "not_started": seen.not_started,
+        "cancelled_at_deadline": seen.cancelled,
+        "harness_error": seen.harness_error,
+        "submission_status": seen.submission_status,
+    }
 
 
 def record_line(
@@ -783,41 +1001,51 @@ def record_line(
             voids = list(dict.fromkeys([*voids, "harness_error"]))
     if result is None:
         result = grader.Graded(grader.VOID, {f"void_{cause}": 1 for cause in voids}, {}, {})
-    request = first_request(seen.steps)
+    fields = job_fields(seen)
     return {
-        "test": RECORD_TEST,
+        **run_fields(stack, line),
         "runs": RUNS,
-        "mode": stack.mode,
-        "phase": stack.phase,
-        "shape": line.name,
-        "commit": commit(),
-        "at": datetime.now(UTC).isoformat(timespec="seconds"),
-        "provider": PROVIDER_NAMES[stack.provider],
-        "model": rules.MODEL if stack.provider == rules.CLAUDE else rules.FAKE_MODEL,
-        "workers": WORKERS,
-        "lease_seconds": LEASE,
-        "token_budget": line.budget_cap,
-        "machine": f"{platform.system()} {platform.machine()}, {os.cpu_count()} CPUs",
-        "where": "GitHub Actions" if os.environ.get("GITHUB_ACTIONS") else "local Docker Compose",
-        "seed": "committed",
-        "max_tokens": request.get("max_tokens"),
-        "summary_trigger": request.get("summary_trigger"),
+        "max_tokens": fields.pop("max_tokens"),
+        "summary_trigger": fields.pop("summary_trigger"),
         "verdict": result.verdict,
         "clauses": result.clauses,
         "floors": result.floors,
         "voids": voids,
-        "crashed": seen.crashed,
-        "failpoint_lines": seen.failpoint_lines,
-        "takeovers": seen.job.get("takeovers"),
-        "questions": len(seen.questions),
-        "verify": seen.verify,
-        "seconds": seen.seconds,
-        "not_started": seen.not_started,
-        "cancelled_at_deadline": seen.cancelled,
-        "harness_error": seen.harness_error,
-        "submission_status": seen.submission_status,
+        **fields,
+        "count_error": seen.count_error,
         "counts": result.counts,
         "worker_logs": stack.logs,
+    }
+
+
+def counts_line(
+    stack: Stack, line: rules.Line, seen: Seen, number: int, counted: dict[str, Any] | None
+) -> dict[str, Any]:
+    """A line of a `counts` session for its job `number`: no verdict, the job's counts."""
+    return {
+        **run_fields(stack, line),
+        "runs": counts_jobs(),
+        "job": number,
+        "status": seen.job.get("status"),
+        "error": seen.job.get("error"),
+        "voids": list(dict.fromkeys(seen.voids)),
+        **job_fields(seen),
+        "counts": counted,
+        "worker_logs": stack.logs,
+    }
+
+
+def total_line(
+    stack: Stack, line: rules.Line, seens: Sequence[Seen], total: dict[str, Any] | None
+) -> dict[str, Any]:
+    """The last line of a `counts` session: the sum of its jobs' counts, and the jobs not run."""
+    return {
+        **run_fields(stack, line),
+        "runs": counts_jobs(),
+        "job": "total",
+        "not_started": sum(seen.not_started for seen in seens),
+        "harness_error": seens[0].harness_error if seens else None,
+        "counts": total,
     }
 
 
@@ -845,22 +1073,35 @@ def stack(request: pytest.FixtureRequest) -> Iterator[Stack]:
 
 
 @pytest.fixture(scope="session")
-def record(stack: Stack) -> dict[str, Any]:
-    """The record of the session's one job: counts, the verdict and the clauses. Run once."""
-    if stack.mode != rules.MUST_FAIL:
-        pytest.skip(f"a test of mode {rules.MUST_FAIL}")
-    if stack.record is None:
-        stack.run()
+def records(stack: Stack) -> list[dict[str, Any]]:
+    """Every line the session wrote. Its jobs run once, when a test first asks for this."""
+    if not stack.records:
+        if stack.mode == rules.COUNTS:
+            stack.run_counts()
+        else:
+            stack.run()
+    return stack.records
+
+
+@pytest.fixture(scope="session")
+def record(stack: Stack, records: list[dict[str, Any]]) -> dict[str, Any]:
+    """The record of the session's one graded job: counts, the verdict and the clauses."""
+    if stack.mode == rules.COUNTS:
+        pytest.skip(f"a test of one graded job, not of mode {rules.COUNTS}")
     assert stack.record is not None
     return stack.record
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:
     """End the session unless the run may start, before any stack call; then check the workers."""
+    # Settings of the SDK the count would otherwise read: a request log, another address.
+    for name in counting.SDK_SETTINGS:
+        os.environ.pop(name, None)
     problems = session_problems(os.environ, REPO_ROOT)
     if problems:
         pytest.exit(f"Not run: {' '.join(problems)}", returncode=pytest.ExitCode.USAGE_ERROR)
     provider = os.environ.get(rules.PROVIDER, "") or "fake"
+    target = "long-job-claude" if provider == rules.CLAUDE else "long-job"
     directory = REPO_ROOT / RECORDS / datetime.now(UTC).strftime("%Y-%m-%dT%H%M%SZ")
     stack = Stack(
         directory, provider=provider, mode=os.environ[rules.MODE], phase=os.environ[PHASE]
@@ -876,7 +1117,7 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     if wrong is not None:
         stack.hang_up()
         pytest.exit(
-            f"Not run: {wrong}. Start the stack with `make long-job`.",
+            f"Not run: {wrong}. Start the stack with `make {target}`.",
             returncode=pytest.ExitCode.USAGE_ERROR,
         )
     try:
@@ -891,7 +1132,7 @@ def pytest_sessionstart(session: pytest.Session) -> None:
         stack.hang_up()
         pytest.exit(
             f"Not run: {left} jobs of an earlier session are not final. Remove them with"
-            " `make clean`, then `make long-job`.",
+            f" `make clean`, then `make {target}`.",
             returncode=pytest.ExitCode.USAGE_ERROR,
         )
     session.config.stash[_STACK] = stack
