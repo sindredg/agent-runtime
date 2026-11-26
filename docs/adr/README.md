@@ -47,6 +47,7 @@ Read [the queue](0002-postgres-as-the-job-queue.md),
 | [0031](0031-stop-a-job-that-repeats-one-call-with-the-same-result.md) | Stop a job that repeats one call with the same result five times in a row | [Yes](../halt.md#a-job-that-repeats-itself) |
 | [0032](0032-seed-files-up-to-8-mib.md) | Seed a job's workspace with up to 8 MiB of files, the same limit for every job | Yes |
 | [0033](0033-summarise-a-long-conversation-as-a-step.md) | Summarise a long conversation as a step and start the next context window from it. Amends 0028. | Yes, migration 0012. Off unless `SUMMARY_TRIGGER` is set. |
+| [0034](0034-judge-a-keyed-long-job-entry-by-a-control-and-an-edited-job.md) | Judge a keyed long-job entry by a control job and an edited job. Extends 0022. | Yes. Refused until the token bound of keyed long jobs is set. |
 
 There is no record 0024: it was withdrawn before anything was built.
 
