@@ -6,7 +6,8 @@ off from `1f57ee4`, unless a line names another commit. The run's conditions
 are on the [Results](README.md) page. What a job may reach is on
 [Scope and sandbox](sandbox.md).
 
-The checks this page has evidence for, around one round of a job:
+The budget, approval and tool-output checks around one round of a job. The
+backoff and the repeat stop have their own sections:
 
 ```mermaid
 flowchart LR
@@ -100,6 +101,27 @@ integration suite.
 
 With the mechanism off, each of the three failed 5 tests: a 429 treated as an
 error, `retry-after` ignored, the claim ignoring `not_before`.
+
+## A job that repeats itself
+
+Tested at `76f0c09`, on the fake provider, in the integration suite of
+[CI run 45890486073](https://github.com/sindredg/agent-runtime/actions/runs/45890486073),
+on a GitHub-hosted runner: 4 of 4 tests of `test_repeat_stop.py` passed, 1 run
+each, one worker at a time. The stop is described in [Halt](../halt.md#a-job-that-repeats-itself)
+and [ADR 0031](../adr/0031-stop-a-job-that-repeats-one-call-with-the-same-result.md).
+
+![Each tool result with the same call and result as the one before adds one to a count. Before the next model call, a count of five fails the job and the call is not sent.](../diagrams/repeat-stop.svg)
+
+- A job that reads one unchanged file ends `failed` after the fifth result.
+  The fake provider received 5 model calls: the sixth was never sent.
+- A worker that takes over after the fourth result stops the job after the
+  fifth: the count comes from the step log.
+- Four repeats and then a different result, or the same read of a file that
+  changes between reads, do not stop the job.
+
+With the stop off, both stop tests fail on the number of calls the fake
+received: [`repeat-stop-off`](switched-off.md#run-at-377304c), from `main`
+at `377304c`, 2 of 2.
 
 ## Bad tool output
 
