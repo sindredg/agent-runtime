@@ -23,7 +23,7 @@ flowchart LR
 
 | Suite | Run with | Covers |
 |---|---|---|
-| `tests/unit` | `make test` | Each module by itself: replay, the decisions, budget, scope rules, settings, the CLI, the fakes |
+| `tests/unit` | `make test` | Each module by itself: replay, the decisions, budget, scope rules, settings, the CLI, the fakes, the access-review generator |
 | `tests/integration` | `make up`, then `make integration` | The store on real Postgres, the worker against the fakes, the API over HTTP, the sandbox against Docker |
 | `tests/escape` | `make escape` | Attempts to get out of the sandbox, and scoped calls against two targets |
 | `tests/chaos` | `make chaos` | Workers that are killed, paused, crashed or stopped while jobs run |

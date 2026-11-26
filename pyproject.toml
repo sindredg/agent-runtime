@@ -35,6 +35,7 @@ dev = [
     # asyncpg ships no type information; mypy --strict needs these.
     "asyncpg-stubs==0.32.0",
     # The workspace members, so tests can import them.
+    "access-review",
     "fake-provider",
     "fake-receiver",
     "fake-tracker",
@@ -55,6 +56,7 @@ build-backend = "uv_build"
 
 [tool.uv.workspace]
 members = [
+    "packages/access_review",
     "packages/allowed_hosts",
     "services/fake_provider",
     "services/fake_receiver",
@@ -62,6 +64,7 @@ members = [
 ]
 
 [tool.uv.sources]
+access-review = { workspace = true }
 allowed-hosts = { workspace = true }
 fake-provider = { workspace = true }
 fake-receiver = { workspace = true }
@@ -80,6 +83,7 @@ line-length = 100
 src = [
     "src",
     "tests",
+    "packages/access_review/src",
     "packages/allowed_hosts/src",
     "services/fake_provider/src",
     "services/fake_receiver/src",
@@ -102,6 +106,7 @@ files = [
     "tests",
     "migrations",
     "scripts",
+    "packages/access_review/src",
     "packages/allowed_hosts/src",
     "services/fake_provider/src",
     "services/fake_receiver/src",

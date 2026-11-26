@@ -4,12 +4,18 @@ requires-python = "==3.15.*"
 
 [manifest]
 members = [
+    "access-review",
     "agent-runtime",
     "allowed-hosts",
     "fake-provider",
     "fake-receiver",
     "fake-tracker",
 ]
+
+[[package]]
+name = "access-review"
+version = "0.0.0"
+source = { editable = "packages/access_review" }
 
 [[package]]
 name = "agent-runtime"
@@ -29,6 +35,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "access-review" },
     { name = "asyncpg-stubs" },
     { name = "fake-provider" },
     { name = "fake-receiver" },
@@ -56,6 +63,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "access-review", editable = "packages/access_review" },
     { name = "asyncpg-stubs", specifier = "==0.32.0" },
     { name = "fake-provider", editable = "services/fake_provider" },
     { name = "fake-receiver", editable = "services/fake_receiver" },

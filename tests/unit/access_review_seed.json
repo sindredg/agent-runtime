@@ -1,0 +1,14 @@
+{
+  "seed": "a293cd91b056f5789a07201fa7bb0b6d",
+  "generator": 1,
+  "shapes": {
+    "full": {
+      "job": "sha256:2d2219a3eb8098a1489ffc04b7141365ca4ed9b59609942ab85cf0bb621ad24a",
+      "commitment": "sha256:01b9ae8da3eea9dc98b309d2820f99eb844822d5031b4ab1785f900dfe86c568"
+    },
+    "short": {
+      "job": "sha256:9698cadd58442979b43a9eb9193991703d026d83a3c725115eac8fb1f52e30fd",
+      "commitment": "sha256:803c8463dcf3c9deb3d66a752c8f81e803c2a0a77152b2d1f7c048a879cf68a1"
+    }
+  }
+}
