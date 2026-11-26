@@ -474,7 +474,9 @@ def test_the_kill_aims_at_the_worker_that_holds_the_job(
     owner = f"{WORKER_IDS[1][:12]}-7"
 
     def answer(request: httpx2.Request) -> httpx2.Response:
-        return httpx2.Response(200, json={"status": "running", "lease_owner": owner, "spec": {}})
+        return httpx2.Response(
+            200, json={"status": "running", "lease_owner": owner, "lease_epoch": 4, "spec": {}}
+        )
 
     client = httpx2.Client(transport=httpx2.MockTransport(answer), base_url="http://api")
     found = harness.Stack(tmp_path, command=docker, api=client, tracker=client)
@@ -488,7 +490,9 @@ def test_the_kill_aims_at_the_worker_that_holds_the_job(
         ("docker", "kill", WORKER_IDS[1]),
         ("docker", "start", WORKER_IDS[1]),
     ]
-    assert (kill.target, kill.epoch, kill.held, kill.problem) == (28, 3, True, None)
+    # The epoch is the view's, read with its owner, not the last step's: the
+    # job was taken over after that step.
+    assert (kill.target, kill.epoch, kill.held, kill.problem) == (28, 4, True, None)
     assert kill.latency is not None and kill.latency >= 1.0
 
 

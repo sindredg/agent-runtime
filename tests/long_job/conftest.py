@@ -529,6 +529,16 @@ class Stack:
                 return found
             after = steps[-1]["seq"]
 
+    def lease(self, job_id: str) -> tuple[str | None, int | None]:
+        """The job's lease owner and lease epoch, read together from one view. Nothing else is
+        kept."""
+        view = self.api.get(f"/jobs/{job_id}").raise_for_status().json()
+        owner, epoch = view.get("lease_owner"), view.get("lease_epoch")
+        return (
+            owner if isinstance(owner, str) else None,
+            epoch if isinstance(epoch, int) else None,
+        )
+
     def holder(self, owner: str | None) -> str | None:
         """The worker container whose worker id `owner` is. A worker's id starts with its host name,
         the first 12 characters of its container's id."""
@@ -541,13 +551,14 @@ class Stack:
     ) -> grader.Kill:
         """Kill the worker that holds the job and start it again.
 
-        The kill ends the lease epoch of the last step read. `held` says
-        whether the killed container held the job's lease; `latency` is the
-        seconds from that step's `created_at` to the return of `docker kill`.
+        The kill ends the lease epoch the job's view names with its owner,
+        read together: a takeover after the last step read is then the
+        epoch killed. `held` says whether the killed container held the
+        job's lease; `latency` is the seconds from the last step's
+        `created_at` to the return of `docker kill`.
         """
         last = steps[-1]
-        epoch = int(last["lease_epoch"])
-        owner = self.job(job_id)["lease_owner"]
+        owner, epoch = self.lease(job_id)
         target = self.holder(owner)
         if target is None:
             return grader.Kill(planned.target, epoch, held=False, problem=NO_HOLDER)
