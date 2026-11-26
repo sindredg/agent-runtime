@@ -411,10 +411,14 @@ def test_the_base_job_is_built_as_its_description_says() -> None:
 def test_the_clause_names_are_fixed(grader: ModuleType) -> None:
     assert grader.RUNTIME_CLAUSES == ("R2", "R5", "R6", "crash", "runtime")
     assert grader.JOB_CLAUSES == ("R1", "R3", "R7", "R8", "R9")
+    assert "grading_error" in grader.OPEN_CLAUSES
     assert len(set(grader.CLAUSES)) == len(grader.CLAUSES)
-    assert {*grader.RUNTIME_CLAUSES, *grader.JOB_CLAUSES, "no_class"} < set(grader.CLAUSES)
     assert "R4" not in grader.CLAUSES
-    assert grader.VERDICTS == ("VOID", "FAIL_RUNTIME", "NO_CLASS", "FAIL", "INCONCLUSIVE", "PASS")
+    assert grader.VERDICTS == ("FAIL_RUNTIME", "VOID", "NO_CLASS", "FAIL", "INCONCLUSIVE", "PASS")
+    # Reported in the order of the verdicts.
+    groups = (grader.RUNTIME_CLAUSES, grader.VOID_CLAUSES, ("no_class",), grader.JOB_CLAUSES)
+    in_order = (*(name for group in groups for name in group), *grader.OPEN_CLAUSES)
+    assert in_order == grader.CLAUSES
 
 
 def test_the_error_classes_and_statuses_the_grader_names_are_the_reduced_jobs_own(
@@ -644,6 +648,19 @@ def test_issues_in_two_windows_after_the_first_summary_miss_the_floor(
     assert found.verdict == "INCONCLUSIVE"
 
 
+def test_a_malformed_issue_in_a_new_window_does_not_count_toward_the_floor(
+    grader: ModuleType, rules: ModuleType
+) -> None:
+    """Issues in two windows, and one in a third whose title holds no known id."""
+    windows = with_action(issues_in_two_windows(plan()), 3, issue(M[3], f"remove access {CODE}"))
+    found = graded(grader, rules, windows)
+
+    assert names(found) == ["floor_windows"]
+    assert found.floors == {"made": 6, "cleared": 2, "windows": 2, "summaries": 6}
+    assert found.counts["titles"]["malformed"] == 1
+    assert found.verdict == "INCONCLUSIVE"
+
+
 def test_a_short_job_with_five_summaries_misses_its_floor_and_a_full_job_has_none(
     grader: ModuleType, rules: ModuleType
 ) -> None:
@@ -674,11 +691,53 @@ def test_a_failure_of_the_runtime_wins_over_one_of_the_job_and_both_are_listed(
 
 
 @pytest.mark.parametrize("cause", ["clock", "tracker_restart", "harness_error"])
-def test_a_void_wins_over_every_failure(grader: ModuleType, rules: ModuleType, cause: str) -> None:
+def test_a_failure_of_the_runtime_wins_over_a_void_which_is_still_listed(
+    grader: ModuleType, rules: ModuleType, cause: str
+) -> None:
     found = graded(grader, rules, without_issue(plan(), M[1]), voids=(cause,), verify=1)
 
-    assert names(found) == [f"void_{cause}", "R2", "R7"]
+    assert names(found) == ["R2", f"void_{cause}", "R7"]
+    assert found.verdict == "FAIL_RUNTIME"
+
+
+@pytest.mark.parametrize("cause", ["clock", "tracker_restart", "harness_error"])
+def test_a_void_wins_over_a_failure_of_the_job(
+    grader: ModuleType, rules: ModuleType, cause: str
+) -> None:
+    found = graded(grader, rules, without_issue(plan(), M[1]), voids=(cause,))
+
+    assert names(found) == [f"void_{cause}", "R7"]
     assert found.verdict == "VOID"
+
+
+@pytest.mark.parametrize(
+    ("change", "clause", "error"),
+    [
+        ({"crashed": True}, "crash", "spend_cap"),
+        ({"crashed": True}, "crash", "stream_spend_cap"),
+        ({"verify": 1}, "R2", "spend_cap"),
+    ],
+)
+def test_a_failure_of_the_runtime_beside_a_spend_cap_wins_and_both_are_listed(
+    grader: ModuleType, rules: ModuleType, change: dict[str, Any], clause: str, error: str
+) -> None:
+    """The record still names the cap's form."""
+    found = classed(grader, rules, ("response", "tool_use"), job=view("failed", error), **change)
+
+    assert names(found) == [clause, "void_spend_cap"]
+    assert found.counts["site"] == error
+    assert found.verdict == "FAIL_RUNTIME"
+
+
+def test_a_grading_error_is_inconclusive_and_a_void_of_the_run_still_wins(
+    grader: ModuleType,
+) -> None:
+    alone = grader.ungraded(())
+    beside = grader.ungraded(("tracker_restart",))
+
+    assert (alone.verdict, names(alone)) == ("INCONCLUSIVE", ["grading_error"])
+    assert (beside.verdict, names(beside)) == ("VOID", ["void_tracker_restart", "grading_error"])
+    assert (alone.floors, alone.counts) == ({}, {})
 
 
 def test_a_failure_wins_over_a_missed_floor_which_is_still_listed(
@@ -1000,7 +1059,6 @@ def test_a_job_failed_by_a_spend_cap_is_void(
         (REFUSED, view("failed", "refusal")),
         (("response", "end_turn"), view("failed", "deadline")),
         (("response", "tool_use"), view("failed", "budget")),
-        (("response", "tool_use"), view("failed", "spend_cap")),
     ],
 )
 def test_a_crash_record_is_a_failure_of_the_runtime_whatever_the_job_ended_as(
@@ -1013,7 +1071,7 @@ def test_a_crash_record_is_a_failure_of_the_runtime_whatever_the_job_ended_as(
     assert found.verdict == "FAIL_RUNTIME"
 
 
-def test_a_failed_job_with_no_model_request_is_void_also_when_it_crashed(
+def test_a_failed_job_with_no_model_request_is_void_unless_the_runtime_failed_it(
     grader: ModuleType, rules: ModuleType
 ) -> None:
     empty = Made([], [], [])
@@ -1026,14 +1084,17 @@ def test_a_failed_job_with_no_model_request_is_void_also_when_it_crashed(
             crossing_floor=rules.CROSSING_FLOOR,
         )
 
+    failed = grade(job=view("failed", "other", 0))
     crashed = grade(job=view("failed", "other", 0), crashed=True)
     not_offered = grade(job=view("failed", "not_offered", 0))
     cancelled = grade(job=view("cancelled", "none", 0))
 
-    assert names(crashed)[:2] == ["void_no_model_request", "crash"]
-    assert crashed.verdict == "VOID"
-    assert names(not_offered)[:2] == ["void_no_model_request", "runtime"]
-    assert not_offered.verdict == "VOID"
+    assert names(failed)[:2] == ["void_no_model_request", "no_class"]
+    assert failed.verdict == "VOID"
+    assert names(crashed)[:2] == ["crash", "void_no_model_request"]
+    assert crashed.verdict == "FAIL_RUNTIME"
+    assert names(not_offered)[:2] == ["runtime", "void_no_model_request"]
+    assert not_offered.verdict == "FAIL_RUNTIME"
     # Only a failed job: one cancelled before its first call has no class.
     assert names(cancelled)[0] == "no_class"
     assert cancelled.verdict == "NO_CLASS"
@@ -1138,6 +1199,18 @@ def test_the_stored_text_of_a_spend_cap_is_classed_void_and_its_look_alikes_are_
     # The cap's text on a job that is not failed is no void.
     assert verdict(cap, "cancelled") == ("NO_CLASS", ["no_class"])
     assert verdict(cap, "succeeded") == ("PASS", [])
+
+
+def test_a_spend_cap_inside_a_stream_is_void_and_names_its_form(
+    grader: ModuleType, rules: ModuleType
+) -> None:
+    stream_cap = provider_failure(lambda r: broken_stream(error_code=CAP))
+    job = rules.reduced({"status": "failed", "error": stream_cap, "takeovers": 3})
+    found = classed(grader, rules, ("response", "tool_use"), job=job)
+
+    assert job["error"] == "stream_spend_cap"
+    assert (found.verdict, names(found)) == ("VOID", ["void_spend_cap"])
+    assert (found.counts["class"], found.counts["site"]) == ("spend_cap", "stream_spend_cap")
 
 
 def test_the_stores_texts_are_classed_as_two_of_the_five(
@@ -1542,7 +1615,7 @@ def test_a_verdict_holds_counts_and_names_and_no_text_of_the_job(
     )
     written = json.dumps(dataclasses.asdict(found))
 
-    assert names(found) == ["void_clock", "R2", "no_class", "R7", "R8", "R9"]
+    assert names(found) == ["R2", "void_clock", "no_class", "R7", "R8", "R9"]
     for held in (*M, C1, C2, K1, K2, X0, CODE, "holder has left", "access records", "both"):
         assert held not in written
 

@@ -743,7 +743,8 @@ class Stack:
         """Run the session's one job, grade it, write its record and return it. Never raises.
 
         Every error of the harness is kept as its type's name, and makes the
-        run void.
+        run void. An error inside grading is kept the same way, and makes the
+        run INCONCLUSIVE unless a void already holds.
         """
         self.record = self.jobs(1)[0]
         return self.record
@@ -990,15 +991,21 @@ def job_fields(seen: Seen) -> dict[str, Any]:
 def record_line(
     stack: Stack, line: rules.Line, seen: Seen, known: grader.Answers | None
 ) -> dict[str, Any]:
-    """The session's record: its settings, the verdict, every clause, the floors and counts only."""
+    """The session's record: its settings, the verdict, every clause, the floors and counts only.
+
+    An error inside grading is no void: it is kept as its type's name, and
+    the verdict is INCONCLUSIVE unless a void of the run already holds.
+    """
     voids = list(dict.fromkeys(seen.voids))
     result: grader.Graded | None = None
+    grading_error: str | None = None
     if known is not None:
         try:
             result = graded(seen, known, line)
         except Exception as error:
-            seen.harness_error = seen.harness_error or type(error).__name__
-            voids = list(dict.fromkeys([*voids, "harness_error"]))
+            # The type only: the text could quote a record of the job.
+            grading_error = type(error).__name__
+            result = grader.ungraded(voids)
     if result is None:
         result = grader.Graded(grader.VOID, {f"void_{cause}": 1 for cause in voids}, {}, {})
     fields = job_fields(seen)
@@ -1011,6 +1018,7 @@ def record_line(
         "clauses": result.clauses,
         "floors": result.floors,
         "voids": voids,
+        "grading_error": grading_error,
         **fields,
         "count_error": seen.count_error,
         "counts": result.counts,
