@@ -449,12 +449,12 @@ def test_a_runtime_failure_in_either_job_is_a_finding_even_beside_a_void(
 
 
 def test_a_crash_the_grade_could_not_count_is_a_finding_too() -> None:
-    """A record whose grade threw holds only the grading error, and still says a worker
-    crashed."""
+    """A job never graded, after a harness error, has no clause of its own, and its record
+    still says a worker crashed."""
     control = record(
-        verdict="INCONCLUSIVE",
-        clauses={"grading_error": 1},
-        grading_error="KeyError",
+        verdict="VOID",
+        clauses={"void_harness_error": 1},
+        voids=["harness_error"],
         floors={},
         crashed=True,
     )
