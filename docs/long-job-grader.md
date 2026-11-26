@@ -9,7 +9,7 @@ Status: **configured, not tested**. The numbers of the pass line are
 proposed and live in `tests/long_job/rules.py`. No job has run on a real
 model.
 
-![The grader checks six outcomes from top to bottom and the first that matches is the verdict: void, a runtime failure, no class, an outcome failure, inconclusive, and pass. Every clause that holds is listed with its count, whatever the verdict.](diagrams/long-job-verdict.svg)
+![The grader checks six outcomes from top to bottom and the first that matches is the verdict: a runtime failure, void, no class, an outcome failure, inconclusive, and pass. Every clause that holds is listed with its count, whatever the verdict.](diagrams/long-job-verdict.svg)
 
 ## The clauses
 
@@ -25,8 +25,14 @@ model.
 | R9 | An issue placed after the first summary lacks the reference code. |
 
 A runtime failure is also a crash record for the job in a worker's log, or
-a job that failed on a runtime error. VOID covers a clock step, a tracker
-restart, a harness error, a failed job with no request and a spend cap.
+a job that failed on a runtime error. It wins over a void, which stays
+listed. VOID covers a clock step, a tracker restart, a harness error, a
+failed job with no request and a spend cap.
+
+- A spend cap's `counts.site` names its form: `spend_cap` for a 429 answer,
+  `stream_spend_cap` for one inside a stream.
+- On a job that did not succeed, R7, R8 and R9 are still listed. They are
+  no evidence about the model.
 
 ## Counted grants and titles
 
@@ -52,7 +58,10 @@ When no failure holds, the run must still show enough:
   two harness kills landed in different windows, and the job was taken
   over at least three times;
 - on the full shape, a count that is there and whole;
-- `runtime verify` exits 0 or 1.
+- `runtime verify` exits 0 or 1;
+- grading did not raise. An error inside grading lists `grading_error` and
+  keeps its type name in the record's field of that name. A crash or
+  verify's exit 1 still makes it FAIL_RUNTIME, and a void of the run VOID.
 
 ## The count
 
@@ -108,14 +117,15 @@ the token bound of keyed long jobs is not set.
 - **`counts`** runs short jobs one after another, with no kill, and records
   their counts with no verdict.
 - **`graded`** runs one full-shape job with the three kills. After the job
-  it counts the stored text with `CLAUDE_API_KEY` from the environment.
+  it counts the stored text with `CLAUDE_API_KEY` from the environment. The
+  session is green only on PASS: any other verdict, VOID included, fails it.
 - A keyed run reads its seed from `LONG_JOB_SEED`, writes no scenario and
   records `seed: private`. Its own answers are looked for in every record,
   output and saved log.
 - The workflow job `long-job` prints the records only: no service log, no
   saved worker log, no artifact. A failure is read from its record.
-- On the fake provider `counts` runs one job, and `graded` is INCONCLUSIVE:
-  it has no count.
+- On the fake provider `counts` runs one job. `graded` has no count, so it
+  is INCONCLUSIVE and its session is red.
 
 ## What it writes
 
@@ -123,7 +133,7 @@ the token bound of keyed long jobs is not set.
 saved logs and `results.jsonl`.
 
 - A graded job's line has the verdict, every clause with its count, the
-  floors, the kills and the reported counts.
+  floors, the kills, the reported counts and `grading_error`.
 - A `counts` session writes a line per job and a line of their sum.
 - Every line holds counts and fixed words only: no title, id, code or text
   of the job.

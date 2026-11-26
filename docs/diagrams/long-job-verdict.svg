@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="776" height="536" viewBox="0 0 776 536" role="img" aria-labelledby="long-job-verdict-title long-job-verdict-desc">
   <title id="long-job-verdict-title">How a long job's verdict is chosen</title>
-  <desc id="long-job-verdict-desc">The grader checks six outcomes from top to bottom and the first that matches is the verdict: void, a runtime failure, no class, an outcome failure, inconclusive, and pass. Every clause that holds is listed with its count, whatever the verdict.</desc>
+  <desc id="long-job-verdict-desc">The grader checks six outcomes from top to bottom and the first that matches is the verdict: a runtime failure, void, no class, an outcome failure, inconclusive, and pass. Every clause that holds is listed with its count, whatever the verdict.</desc>
   <defs>
     <marker id="long-job-verdict-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
       <path d="m0 0 8 4-8 4z" fill="#bdc8d6"/>
@@ -15,28 +15,28 @@
     <path d="M64 400v22"/>
   </g>
   <g fill="#1b2531" stroke="#788798">
-    <rect x="16" y="24" width="744" height="56" rx="5"/>
+    <rect x="16" y="104" width="744" height="56" rx="5"/>
     <rect x="16" y="184" width="744" height="56" rx="5"/>
     <rect x="16" y="264" width="744" height="56" rx="5"/>
     <rect x="16" y="344" width="744" height="56" rx="5"/>
   </g>
-  <rect x="16" y="104" width="744" height="56" rx="5" fill="#3b2b25" stroke="#ffb991"/>
+  <rect x="16" y="24" width="744" height="56" rx="5" fill="#3b2b25" stroke="#ffb991"/>
   <rect x="16" y="424" width="744" height="56" rx="5" fill="#1b2531" stroke="#eef2f6"/>
   <g font-family="system-ui, sans-serif" fill="#eef2f6">
     <g font-size="16" font-weight="600">
-      <text x="32" y="48">VOID</text>
-      <text x="32" y="128" fill="#ffb991">FAIL, runtime</text>
+      <text x="32" y="128">VOID</text>
+      <text x="32" y="48" fill="#ffb991">FAIL, runtime</text>
       <text x="32" y="208">NO CLASS</text>
       <text x="32" y="288">FAIL, outcome</text>
       <text x="32" y="368">INCONCLUSIVE</text>
       <text x="32" y="448">PASS</text>
     </g>
     <g font-size="14" fill="#d6dfe9">
-      <text x="32" y="69">The run shows nothing: a clock step, a tracker restart, a harness error, no model call, a spend cap</text>
-      <text x="32" y="149" fill="#ffb991">R2 the log fails verify, R5 the tools changed, R6 an issue opened twice, a crash, a runtime error</text>
+      <text x="32" y="149">The run shows nothing: a clock step, a tracker restart, a harness error, no model call, a spend cap</text>
+      <text x="32" y="69" fill="#ffb991">R2 the log fails verify, R5 the tools changed, R6 an issue opened twice, a crash, a runtime error</text>
       <text x="32" y="229">The job did not succeed, and no class covers how it stopped</text>
       <text x="32" y="309">R1 not succeeded, R3 too little text crossed, R7 R8 R9 the notices and the code</text>
-      <text x="32" y="389">A floor missed, a kill that did not land, the count missing or partial</text>
+      <text x="32" y="389">A floor missed, a kill that did not land, the count missing or partial, verify unsure, grading raised</text>
       <text x="32" y="469">None of the above</text>
       <text x="76" y="94">no</text>
       <text x="76" y="174">no</text>
