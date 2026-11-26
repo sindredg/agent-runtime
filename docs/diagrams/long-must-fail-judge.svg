@@ -48,7 +48,7 @@
       <text x="76" y="334">no</text>
       <text x="76" y="414">no</text>
       <text x="76" y="494">no</text>
-      <text x="388" y="612" text-anchor="middle">Checked top to bottom; the first match is the verdict. Highlighted: the two outcomes ADR 0036 adds.</text>
+      <text x="388" y="612" text-anchor="middle">Checked top to bottom; the first match is the verdict. Highlighted: the two outcomes ADR 0036 changes.</text>
     </g>
   </g>
 </svg>
