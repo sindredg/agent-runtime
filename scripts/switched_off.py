@@ -2147,6 +2147,15 @@ def _listed(record: Mapping[str, Any], names: tuple[str, ...]) -> list[str]:
     return [name for name in names if name in held]
 
 
+def _runtime(record: Mapping[str, Any]) -> list[str]:
+    """The runtime's own failures a record names: its clauses, and a worker's crash record even
+    where the job could not be graded."""
+    found = _listed(record, RUNTIME_CLAUSES)
+    if record.get("crashed") is True and "crash" not in found:
+        found.append("crash")
+    return found
+
+
 def _void(record: Mapping[str, Any]) -> bool:
     voided = any(name.startswith("void_") for name in _clauses(record))
     return record.get("verdict") == "VOID" or voided or bool(record.get("voids"))
@@ -2212,7 +2221,7 @@ def judge_verdicts(
     broken = [
         f"{name}: the runtime failed the job: {', '.join(found)}"
         for name, record in records.items()
-        if (found := _listed(record, RUNTIME_CLAUSES))
+        if (found := _runtime(record))
     ]
     if broken:
         return "FINDING", [*lines, *broken]

@@ -108,8 +108,8 @@ def test_the_edit_holds_the_text_of_the_harness_as_a_literal() -> None:
     assert switched_off.NOTICES_DROPPED == rules.NOTICES_DROPPED
     assert repr(rules.NOTICES_DROPPED) in edit.new
     assert (edit.path, edit.old) == (switched_off.AGENT, switched_off.SUMMARY_MESSAGE)
-    texts = switched_off.edited_files(LONG.edits)
-    compile(texts[switched_off.AGENT], switched_off.AGENT, "exec")
+    # The edit matches the worker once and the edited worker compiles.
+    assert [problem for problem in switched_off.check() if problem.startswith(NAME)] == []
 
 
 @pytest.mark.parametrize(
@@ -401,6 +401,14 @@ def test_a_runtime_failure_in_either_job_is_a_finding_even_beside_a_void(
         )
     assert found == "FINDING", reasons
     assert f"{where}: the runtime failed the job: {clause}" in reasons
+
+
+def test_a_crash_the_grade_could_not_count_is_a_finding_too() -> None:
+    """A record made void before grading has no clause, and still says a worker crashed."""
+    control = record(verdict="VOID", clauses={"void_harness_error": 1}, floors={}, crashed=True)
+    found, reasons = judged(phase("control", control, (RUN_SHOWS,)))
+    assert found == "FINDING", reasons
+    assert "control: the runtime failed the job: crash" in reasons
 
 
 def test_the_control_half_stops_after_the_control() -> None:

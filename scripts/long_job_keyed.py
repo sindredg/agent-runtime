@@ -58,7 +58,8 @@ def check(env: Mapping[str, str], root: Path = ROOT) -> list[str]:
 
 
 def corpus_refusals(env: Mapping[str, str], root: Path, rules: ModuleType) -> list[str]:
-    """Why a corpus count may not start: the provider, then refusals 3, 5 and 6 of the run.
+    """Why a corpus count may not start: the provider, a proposed pass line, no seed, the
+    public seed.
 
     The mode, the budget and the commitment are not asked: the count comes
     before any of them is set.

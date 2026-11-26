@@ -110,7 +110,7 @@ def test_check_refuses_every_keyed_run_today_and_quotes_nothing(
 
 
 def test_check_refuses_a_seed_whose_job_fails_its_checks(modules: Modules) -> None:
-    """Refusal 8, with a seed whose generated job is made to fail a check."""
+    """With a seed whose generated job is made to fail a check of the generator."""
     rules = modules["rules"]
     given = env(LONG_JOB_MODE="must-fail", LONG_JOB_SEED=OTHER_SEED)
 
@@ -141,12 +141,12 @@ def opened(modules: Modules) -> None:
         # A key and no provider: no client.
         ({"CLAUDE_API_KEY": NOT_A_KEY, "LONG_JOB_SEED": OTHER_SEED}, True, "NOT_CLAUDE"),
         (env(LONG_JOB_PROVIDER="fake", LONG_JOB_SEED=OTHER_SEED), True, "NOT_CLAUDE"),
-        # Refusal 3: the pass line is proposed.
+        # The pass line is proposed.
         (env(LONG_JOB_SEED=OTHER_SEED), False, "PROPOSED"),
-        # Refusal 5: no seed, or not a seed.
+        # No seed, or not a seed.
         (env(), True, "NO_SEED"),
         (env(LONG_JOB_SEED="not a seed"), True, "NO_SEED"),
-        # Refusal 6: the committed public seed, also in capitals and padded.
+        # The committed public seed, also in capitals and padded.
         (env(LONG_JOB_SEED=PUBLIC), True, "PUBLIC_SEED"),
         (env(LONG_JOB_SEED=f"  {PUBLIC.upper()}\n"), True, "PUBLIC_SEED"),
     ],
