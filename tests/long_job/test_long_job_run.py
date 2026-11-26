@@ -56,7 +56,8 @@ def test_fake_run_pass_line(record: dict[str, Any]) -> None:
     if record["provider"] != "fake provider":
         pytest.skip("the pass line of the fake provider's run")
     missed = pass_line_misses(record)
-    assert missed == [], "the fake provider's run misses its pass line"
+    # The names are fixed, and pytest would cut a long list short.
+    assert missed == [], f"the fake provider's run misses: {', '.join(missed)}"
 
 
 def test_no_answer_is_in_the_record_the_output_or_the_saved_logs(
