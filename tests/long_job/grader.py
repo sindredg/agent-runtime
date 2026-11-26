@@ -553,12 +553,14 @@ def grade(log: Log, known: Answers, *, shape: Shape, crossing_floor: int) -> Gra
     return Graded(_verdict(clauses), clauses, floors, reported)
 
 
-def ungraded(voids: Sequence[str]) -> Graded:
-    """The verdict on a job whose grading raised: its voids and `grading_error`.
+def ungraded(voids: Sequence[str], *, crashed: bool, verify: int | None) -> Graded:
+    """The verdict on a job whose grading raised: its voids, `grading_error`, and what the
+    harness saw without grading, a crash record and verify's exit 1.
 
-    No clause of the job can be known. A void still wins.
+    No clause of the job's log can be known. A runtime failure still wins, then a void.
     """
     found = {f"void_{cause}": 1 for cause in voids if cause in HARNESS_VOIDS}
+    found |= {"crash": int(crashed), "R2": int(verify == 1)}
     clauses = _clauses({**found, "grading_error": 1})
     return Graded(_verdict(clauses), clauses, {}, {})
 

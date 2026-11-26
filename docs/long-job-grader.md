@@ -60,8 +60,8 @@ When no failure holds, the run must still show enough:
 - on the full shape, a count that is there and whole;
 - `runtime verify` exits 0 or 1;
 - grading did not raise. An error inside grading lists `grading_error` and
-  keeps its type name in the record's field of that name. A void of the run
-  still wins. A crash beside it shows only in the record's `crashed` field.
+  keeps its type name in the record's field of that name. A crash or
+  verify's exit 1 still makes it FAIL_RUNTIME, and a void of the run VOID.
 
 ## The count
 
@@ -133,7 +133,7 @@ the token bound of keyed long jobs is not set.
 saved logs and `results.jsonl`.
 
 - A graded job's line has the verdict, every clause with its count, the
-  floors, the kills and the reported counts.
+  floors, the kills, the reported counts and `grading_error`.
 - A `counts` session writes a line per job and a line of their sum.
 - Every line holds counts and fixed words only: no title, id, code or text
   of the job.

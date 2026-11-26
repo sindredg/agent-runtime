@@ -732,14 +732,25 @@ def test_a_failure_of_the_runtime_beside_a_spend_cap_wins_and_both_are_listed(
 def test_a_grading_error_is_inconclusive_and_a_void_of_the_run_still_wins(
     grader: ModuleType,
 ) -> None:
-    alone = grader.ungraded(())
-    beside = grader.ungraded(("tracker_restart",))
+    def ungraded(voids: tuple[str, ...] = (), crashed: bool = False, verify: int = 0) -> Any:
+        return grader.ungraded(voids, crashed=crashed, verify=verify)
+
+    alone = ungraded()
+    beside = ungraded(("tracker_restart",))
 
     assert (alone.verdict, names(alone)) == ("INCONCLUSIVE", ["grading_error"])
     assert (beside.verdict, names(beside)) == ("VOID", ["void_tracker_restart", "grading_error"])
     assert (alone.floors, alone.counts) == ({}, {})
     # Only the harness's own causes: a cause the grader reads from the job is not taken.
-    assert names(grader.ungraded(("spend_cap",))) == ["grading_error"]
+    assert names(ungraded(("spend_cap",))) == ["grading_error"]
+    # What the harness saw without grading is still a failure of the runtime.
+    crashed = ungraded(("clock",), crashed=True)
+    assert (crashed.verdict, names(crashed)) == (
+        "FAIL_RUNTIME",
+        ["crash", "void_clock", "grading_error"],
+    )
+    assert names(ungraded(verify=1)) == ["R2", "grading_error"]
+    assert ungraded(verify=2).verdict == "INCONCLUSIVE"
 
 
 def test_a_failure_wins_over_a_missed_floor_which_is_still_listed(

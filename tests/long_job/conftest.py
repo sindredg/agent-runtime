@@ -744,7 +744,7 @@ class Stack:
 
         Every error of the harness is kept as its type's name, and makes the
         run void. An error inside grading is kept the same way, and makes the
-        run INCONCLUSIVE unless a void already holds.
+        run INCONCLUSIVE unless a crash, verify's exit 1 or a void holds.
         """
         self.record = self.jobs(1)[0]
         return self.record
@@ -994,7 +994,7 @@ def record_line(
     """The session's record: its settings, the verdict, every clause, the floors and counts only.
 
     An error inside grading is no void: it is kept as its type's name, and
-    the verdict is INCONCLUSIVE unless a void of the run already holds.
+    the verdict is INCONCLUSIVE unless a crash, verify's exit 1 or a void holds.
     """
     voids = list(dict.fromkeys(seen.voids))
     result: grader.Graded | None = None
@@ -1005,7 +1005,7 @@ def record_line(
         except Exception as error:
             # The type only: the text could quote a record of the job.
             grading_error = type(error).__name__
-            result = grader.ungraded(voids)
+            result = grader.ungraded(voids, crashed=seen.crashed, verify=seen.verify)
     if result is None:
         result = grader.Graded(grader.VOID, {f"void_{cause}": 1 for cause in voids}, {}, {})
     fields = job_fields(seen)

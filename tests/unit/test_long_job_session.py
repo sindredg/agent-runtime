@@ -1133,7 +1133,7 @@ def grading_fails(*args: Any) -> Any:
     raise KeyError("MARKER-OF-THE-TEST")
 
 
-def test_an_error_inside_grading_is_inconclusive_and_kept_as_its_type_only(
+def test_an_error_inside_grading_keeps_its_type_only_and_a_crash_beside_it(
     harness: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setattr(harness, "graded", grading_fails)
@@ -1141,8 +1141,11 @@ def test_an_error_inside_grading_is_inconclusive_and_kept_as_its_type_only(
     seen = harness.Seen(crashed=True)
     record = harness.record_line(found, harness.rules.SHORT, seen, SimpleNamespace())
 
-    assert (record["verdict"], record["clauses"]) == ("INCONCLUSIVE", {"grading_error": 1})
-    # No clause of the job is known: the crash stays in the record's field.
+    # No clause of the job's log is known; the crash the harness saw still is.
+    assert (record["verdict"], record["clauses"]) == (
+        "FAIL_RUNTIME",
+        {"crash": 1, "grading_error": 1},
+    )
     assert record["crashed"] is True
     assert (record["grading_error"], record["harness_error"], record["voids"]) == (
         "KeyError",
@@ -1156,6 +1159,13 @@ def test_an_error_inside_grading_beside_a_void_of_the_run_is_void_with_both_list
     harness: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setattr(harness, "graded", grading_fails)
+    alone = harness.record_line(
+        stack(harness, tmp_path / "alone", Docker(), Api()),
+        harness.rules.SHORT,
+        harness.Seen(),
+        SimpleNamespace(),
+    )
+    assert (alone["verdict"], alone["clauses"]) == ("INCONCLUSIVE", {"grading_error": 1})
     seen = harness.Seen(harness_error="TimeoutError", voids=["harness_error"])
     found = stack(harness, tmp_path, Docker(), Api())
     record = harness.record_line(found, harness.rules.SHORT, seen, SimpleNamespace())
