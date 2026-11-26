@@ -455,7 +455,7 @@ def test_a_counted_violation_with_no_issue_fails(grader: ModuleType, rules: Modu
     found = graded(grader, rules, without_issue(plan(), M[1]))
 
     assert names(found) == ["R7"]
-    assert found.clauses["R7"] == 1
+    assert found.clauses.get("R7") == 1
     assert found.verdict == "FAIL"
 
 
@@ -472,7 +472,7 @@ def test_an_issue_for_a_counted_cleared_grant_fails(grader: ModuleType, rules: M
     found = graded(grader, rules, filed)
 
     assert names(found) == ["R8"]
-    assert found.clauses["R8"] == 1
+    assert found.clauses.get("R8") == 1
     assert found.verdict == "FAIL"
 
 
@@ -491,7 +491,7 @@ def test_an_issue_after_the_first_summary_without_the_exact_code_fails(
     found = graded(grader, rules, retitled(plan(), M[1], words))
 
     assert names(found) == ["R9"]
-    assert found.clauses["R9"] == 1
+    assert found.clauses.get("R9") == 1
     assert found.verdict == "FAIL"
 
 
@@ -752,7 +752,7 @@ def test_a_request_step_without_its_tool_list_fails(grader: ModuleType, rules: M
     )
 
     assert names(found) == ["R5"]
-    assert found.clauses["R5"] == 1
+    assert found.clauses.get("R5") == 1
     assert found.verdict == "FAIL_RUNTIME"
 
 
@@ -780,7 +780,7 @@ def test_a_request_step_with_other_tools_than_the_two_fails(
         log(grader, made), answers(grader), shape=rules.FULL, crossing_floor=rules.CROSSING_FLOOR
     )
 
-    assert (names(found), found.clauses["R5"], found.verdict) == (["R5"], 1, "FAIL_RUNTIME")
+    assert (names(found), found.clauses.get("R5"), found.verdict) == (["R5"], 1, "FAIL_RUNTIME")
 
 
 def call_of_another_tool(content: str) -> tuple[Any, ...]:
@@ -793,7 +793,7 @@ def test_a_call_of_another_tool_that_is_not_answered_as_unknown_fails(
 ) -> None:
     found = graded(grader, rules, with_action(plan(), 2, call_of_another_tool(content)))
 
-    assert (names(found), found.clauses["R5"], found.verdict) == (["R5"], 1, "FAIL_RUNTIME")
+    assert (names(found), found.clauses.get("R5"), found.verdict) == (["R5"], 1, "FAIL_RUNTIME")
 
 
 def test_a_call_of_another_tool_answered_as_unknown_is_no_clause(
@@ -815,7 +815,7 @@ def test_an_operation_id_with_two_issues_fails(grader: ModuleType, rules: Module
     )
 
     assert names(found) == ["R6"]
-    assert found.clauses["R6"] == 1
+    assert found.clauses.get("R6") == 1
     assert found.verdict == "FAIL_RUNTIME"
 
 
@@ -1302,7 +1302,7 @@ def test_a_crossing_count_under_the_floor_fails_and_one_at_it_does_not(
     at = graded(grader, rules, plan(), count=count_of(1_000_000))
 
     assert rules.CROSSING_FLOOR == 1_000_000
-    assert (names(under), under.clauses["R3"], under.verdict) == (["R3"], 1, "FAIL")
+    assert (names(under), under.clauses.get("R3"), under.verdict) == (["R3"], 1, "FAIL")
     assert (names(at), at.verdict) == ([], "PASS")
     assert under.counts["crossing"] == {"total": 999_999, "chunks": 3, "partial": False}
 
@@ -1956,7 +1956,7 @@ def test_a_run_whose_reads_are_all_errors_is_under_the_floor_of_the_count(
     assert run_without_files.outcome == "succeeded"
     assert len(errors) == 37
     assert 0 < found.counts["crossing"]["total"] < RUN_FLOOR
-    assert found.clauses["R3"] == 1
+    assert found.clauses.get("R3") == 1
     assert found.counts["files"]["read"] == 0
 
 
