@@ -32,6 +32,7 @@ from access_review import (
     problems,
     read_seed,
 )
+from access_review.commit import SeedError
 
 # The pass line
 
@@ -250,7 +251,7 @@ def _seed_refusals(seed: bytes, mode: str, root: Path) -> list[str]:
     found = []
     try:
         public: bytes | None = read_seed(root / PUBLIC_SEED_FILE)
-    except ValueError:
+    except SeedError:
         public = None
     if public is None or seed == public:
         found.append(PUBLIC_SEED)
@@ -286,7 +287,8 @@ def refusals(env: Mapping[str, str], root: Path) -> list[str]:
     found += _bound(env, mode, budget)
     try:
         seed = parse_seed(env.get(SEED, ""))
-    except ValueError:
+    except SeedError:
+        # The error's text is a fixed sentence too, but only this one is given.
         return [*found, NO_SEED]
     return found + _seed_refusals(seed, mode, root)
 

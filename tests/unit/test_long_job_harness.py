@@ -82,7 +82,7 @@ def rules() -> Iterator[ModuleType]:
     sys.modules["long_job_rules"] = module
     spec.loader.exec_module(module)
     made: dict[tuple[bytes, str], Any] = {}
-    checked: dict[int, list[str]] = {}
+    checked: dict[tuple[bytes, str], list[str]] = {}
     real_generate, real_problems = module.generate, module.problems
 
     def generate_once(seed: bytes, shape: Any) -> Any:
@@ -91,10 +91,15 @@ def rules() -> Iterator[ModuleType]:
         return made[seed, shape.name]
 
     def problems_once(review: Any) -> list[str]:
-        # By identity: `made` keeps every review alive, so no id is reused.
-        if id(review) not in checked:
-            checked[id(review)] = real_problems(review)
-        return checked[id(review)]
+        # Only a review that `generate_once` keeps is checked once. Any other,
+        # such as one a test changed, is checked each time.
+        key = next((key for key, kept in made.items() if kept is review), None)
+        if key is None:
+            found: list[str] = real_problems(review)
+            return found
+        if key not in checked:
+            checked[key] = real_problems(review)
+        return checked[key]
 
     module.generate, module.problems = generate_once, problems_once  # type: ignore[attr-defined]
     yield module

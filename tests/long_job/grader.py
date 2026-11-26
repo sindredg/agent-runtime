@@ -26,7 +26,7 @@ import hashlib
 import itertools
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any, Protocol
 
@@ -67,6 +67,33 @@ R1_CLASSES = (*STOP_REASONS, *STOP_ERRORS)
 # The reduced errors that are a runtime error by themselves.
 RUNTIME_ERRORS = ("not_offered", "message_mismatch")
 SPEND_CAPS = ("spend_cap", "stream_spend_cap")
+# Every class a reduced job's error can have, and every status of a job.
+# Where a job with no class stopped is one of these names, or `other`.
+ERRORS = (
+    "none",
+    *STOP_ERRORS,
+    *RUNTIME_ERRORS,
+    *SPEND_CAPS,
+    "provider_error",
+    "summary_problem",
+    "response_problem",
+    "oversize",
+    "repeat",
+    "budget",
+    "max_tokens",
+    "refusal",
+    "stop_reason",
+    "other",
+)
+STATUSES = (
+    "queued",
+    "running",
+    "waiting",
+    "needs_approval",
+    "succeeded",
+    "failed",
+    "cancelled",
+)
 NOT_STORED = "it cannot be stored"
 EMPTY_SUMMARY = "it has no text"
 
@@ -223,6 +250,11 @@ def answers(review: Review) -> Answers:
 # The steps
 
 
+def in_order(log: Log) -> Log:
+    """The log with its steps in seq order, whatever order they came in."""
+    return replace(log, steps=sorted(log.steps, key=lambda step: step["seq"]))
+
+
 def of_kind(steps: Steps, *kinds: str) -> list[dict[str, Any]]:
     return [step for step in steps if step["kind"] in kinds]
 
@@ -332,7 +364,9 @@ def job_class(log: Log) -> tuple[str | None, str | None]:
         return str(error), None
     if error in RUNTIME_ERRORS or str(answer.get("problem", "")).startswith(NOT_STORED):
         return "runtime", None
-    return "no_class", str(error) if status == "failed" else str(status)
+    site = error if status == "failed" else status
+    known = ERRORS if status == "failed" else STATUSES
+    return "no_class", str(site) if site in known else "other"
 
 
 # The clauses
@@ -425,6 +459,7 @@ def _verdict(clauses: Mapping[str, int]) -> str:
 
 def grade(log: Log, known: Answers, *, shape: Shape, crossing_floor: int) -> Graded:
     """The verdict on one job, every clause that holds, the floors and the reported counts."""
+    log = in_order(log)
     found: dict[str, int] = {}
     steps = log.steps
     summaries = [step["seq"] for step in of_kind(steps, "summary")]
@@ -691,7 +726,7 @@ def _per_byte(tokens: int, size: int) -> float | None:
 
 
 def job_counts(log: Log, known: Answers) -> dict[str, Any]:
-    steps = log.steps
+    steps = in_order(log).steps
     tokens, size = window_tokens(steps)
     made, seconds = calls(steps)
     responses = of_kind(steps, "model_response")

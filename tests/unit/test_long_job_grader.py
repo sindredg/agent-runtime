@@ -17,6 +17,7 @@ the fake tracker, with the generated job of the committed seed.
 import asyncio
 import copy
 import dataclasses
+import functools
 import hashlib
 import importlib.util
 import json
@@ -73,6 +74,7 @@ WHERE[M[6]] = 10
 FACT = {K1: 2, K2: 7}
 
 
+@functools.cache
 def load(name: str) -> ModuleType:
     spec = importlib.util.spec_from_file_location(f"long_job_{name}_graded", SUITE / f"{name}.py")
     assert spec is not None
@@ -325,6 +327,8 @@ def answers(grader: ModuleType) -> Any:
 
 def view(status: str = "succeeded", error: str = "none", takeovers: int = 3) -> dict[str, Any]:
     """A job as the harness reduces it: counts, a status and the class of its error."""
+    # Only a class the reduce function can give: a made-up name would test nothing.
+    assert error in load("rules").ERROR_CLASSES
     return {
         "status": status,
         "takeovers": takeovers,
@@ -411,6 +415,37 @@ def test_the_clause_names_are_fixed(grader: ModuleType) -> None:
     assert {*grader.RUNTIME_CLAUSES, *grader.JOB_CLAUSES, "no_class"} < set(grader.CLAUSES)
     assert "R4" not in grader.CLAUSES
     assert grader.VERDICTS == ("VOID", "FAIL_RUNTIME", "NO_CLASS", "FAIL", "INCONCLUSIVE", "PASS")
+
+
+def test_the_error_classes_and_statuses_the_grader_names_are_the_reduced_jobs_own(
+    grader: ModuleType, rules: ModuleType
+) -> None:
+    """The grader reads a class by its name, so a name `rules` does not give would never match."""
+    assert set(grader.ERRORS) == set(rules.ERROR_CLASSES)
+    assert len(grader.ERRORS) == len(rules.ERROR_CLASSES)
+    named = {*grader.STOP_ERRORS, *grader.RUNTIME_ERRORS, *grader.SPEND_CAPS}
+    assert named <= set(rules.ERROR_CLASSES)
+    assert len(named) == 7
+    assert set(grader.STATUSES) == {status.value for status in JobStatus}
+    assert set(grader.FINAL) < set(grader.STATUSES)
+
+
+def test_steps_are_graded_in_seq_order_whatever_order_they_come_in(
+    grader: ModuleType, rules: ModuleType
+) -> None:
+    made = build(without_issue(plan(), M[1]))
+    backwards = dataclasses.replace(made, steps=made.steps[::-1])
+
+    def grade(given: Made) -> Any:
+        return grader.grade(
+            log(grader, given),
+            answers(grader),
+            shape=rules.FULL,
+            crossing_floor=rules.CROSSING_FLOOR,
+        )
+
+    assert grade(backwards) == grade(made)
+    assert names(grade(backwards)) == ["R7"]
 
 
 # R7, R8, R9 and what a title holds
@@ -921,6 +956,26 @@ def test_every_other_failure_has_no_class(
     assert found.counts["class"] == "no_class"
     assert found.counts["site"] == site
     assert found.verdict == "NO_CLASS"
+
+
+@pytest.mark.parametrize(
+    "job",
+    [
+        {"status": "failed", "error": "ValueError: MARKER in an error that was not reduced"},
+        {"status": "MARKER", "error": "none"},
+        {"status": "failed", "error": None},
+        {"status": None, "error": "budget"},
+    ],
+)
+def test_where_a_job_with_no_class_stopped_is_a_known_name_or_other(
+    grader: ModuleType, rules: ModuleType, job: dict[str, Any]
+) -> None:
+    """A job view that was not reduced leaves none of its text in the verdict."""
+    found = classed(grader, rules, CALLING, job={**job, "takeovers": 3})
+
+    assert names(found) == ["no_class"]
+    assert found.counts["site"] == "other"
+    assert "MARKER" not in json.dumps(dataclasses.asdict(found))
 
 
 @pytest.mark.parametrize("error", ["spend_cap", "stream_spend_cap"])
@@ -1656,6 +1711,19 @@ def test_a_summary_of_exactly_16000_output_tokens_sets_no_flag(grader: ModuleTyp
     assert report["total"]["largest_summary"] == 16_000
     assert report["total"]["summary_over"] is False
     assert report["total"]["rereads"] == 0
+
+
+def test_the_report_reads_steps_in_seq_order_whatever_order_they_come_in(
+    grader: ModuleType,
+) -> None:
+    steps = second_counts_log()
+    there = grader.counts([counts_log(grader, steps, "failed", "summary_problem")], answers(grader))
+    back = grader.counts(
+        [counts_log(grader, steps[::-1], "failed", "summary_problem")], answers(grader)
+    )
+
+    assert back == there
+    assert there["total"]["calls"] == 5
 
 
 def test_a_job_that_is_not_final_is_counted_as_such(grader: ModuleType) -> None:
