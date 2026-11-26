@@ -335,6 +335,15 @@ class Recorder:
         Recorder.built.append(given)
 
 
+def raised(call: Any) -> BaseException | None:
+    """What `call` raised, or None: a call that does not raise fails an assert, not pytest."""
+    try:
+        call()
+    except Exception as error:
+        return error
+    return None
+
+
 @pytest.fixture
 def recorder(monkeypatch: pytest.MonkeyPatch) -> type[Recorder]:
     import anthropic
@@ -372,11 +381,11 @@ def test_no_keyed_client_is_built_off_the_claude_api(
     env = {"CLAUDE_API_KEY": NOT_A_KEY}
     if provider is not None:
         env["LONG_JOB_PROVIDER"] = provider
-    with pytest.raises(ValueError, match="Claude API only") as refused:
-        counting.keyed_client(env)
+    refused = raised(lambda: counting.keyed_client(env))
 
+    assert type(refused) is ValueError and "Claude API only" in str(refused)
     assert recorder.built == []
-    assert NOT_A_KEY not in str(refused.value)
+    assert NOT_A_KEY not in str(refused)
 
 
 def test_no_keyed_client_is_built_without_a_key(
@@ -386,8 +395,8 @@ def test_no_keyed_client_is_built_without_a_key(
         {"LONG_JOB_PROVIDER": "claude"},
         {"LONG_JOB_PROVIDER": "claude", "CLAUDE_API_KEY": ""},
     ):
-        with pytest.raises(KeyError, match="CLAUDE_API_KEY"):
-            counting.keyed_client(env)
+        refused = raised(lambda env=env: counting.keyed_client(env))
+        assert type(refused) is KeyError and "CLAUDE_API_KEY" in str(refused)
     assert recorder.built == []
 
 

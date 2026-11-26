@@ -494,7 +494,7 @@ def stub_run(
         happened.append(
             ("phase", (name, agent.read_text() != (ROOT / switched_off.AGENT).read_text()))
         )
-        return phase(name, outcomes[name])
+        return phase(name, outcomes.get(name))
 
     def sh(*args: str, env: Any) -> None:
         happened.append(("sh", list(args)))
