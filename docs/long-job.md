@@ -7,6 +7,9 @@ request the provider received with the run that nobody interrupted.
 
 Status: **configured, not tested**.
 
+A long job judged by its outcome instead of a reference run is on the
+[Long-job grader](long-job-grader.md) page.
+
 ![One job runs past its context window with nobody interrupting it and is the reference. A job whose worker is stopped or killed is taken over and must send the same requests. A job whose summary answer is bad, or whose next window opens at the trigger, must end failed; after a bad answer no tool runs.](diagrams/long-job-runs.svg)
 
 ## The stack

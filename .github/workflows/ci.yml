@@ -426,3 +426,50 @@ jobs:
       - name: Stop the stack
         if: always()
         run: make clean
+
+  long-job:
+    name: Long job harness (fake provider)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        with:
+          version: "0.13.8"
+          add-problem-matchers: false
+      - name: Sync the environment
+        run: uv sync --locked
+      - name: Docker socket group
+        run: echo "DOCKER_GID=$(stat -c %g /var/run/docker.sock)" >> "$GITHUB_ENV"
+      # The job of the committed public seed's access review, with the fake
+      # provider playing a reviewer that reads every file, killed three
+      # times and graded by its outcome. Prints counts only.
+      - name: Long job harness
+        run: |
+          exec 2>&1
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
+          make long-job
+          echo "::$token::"
+      - name: Results
+        if: always()
+        run: |
+          exec 2>&1
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
+          cat .long-job/*/results.jsonl 2>/dev/null || echo "No results, stopped before the job."
+          echo "::$token::"
+      - name: Service logs
+        if: failure()
+        run: |
+          exec 2>&1
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
+          cat .long-job/*/logs/*.log 2>/dev/null || echo "No saved worker logs."
+          docker compose -f docker-compose.yml -f docker-compose.long.yml logs --no-color
+          echo "::$token::"
+      - name: Stop the stack
+        if: always()
+        run: make clean
