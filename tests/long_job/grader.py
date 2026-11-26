@@ -671,11 +671,12 @@ def window_tokens(steps: Steps) -> tuple[int, int]:
     """(tokens, bytes) that tool results added to the input, summed over the windows.
 
     For a window: the input tokens of its last response less those of its
-    first, less the output tokens of every response before the last, over
-    the UTF-8 bytes of the tool results between the two. A window with
-    fewer than two responses is left out. The tokens also hold what a
-    request adds around each result, so tokens over bytes is at most the
-    tokens a byte of a result costs.
+    first, less the output tokens other than thinking of every response
+    before the last, over the UTF-8 bytes of the tool results between the
+    two. A window with fewer than two responses is left out. The tokens also
+    hold what a request adds around each result, and thinking is never
+    subtracted whether or not it is sent again, so tokens over bytes is at
+    most the tokens a byte of a result costs.
     """
     tokens = size = 0
     window: list[dict[str, Any]] = []
@@ -687,7 +688,10 @@ def window_tokens(steps: Steps) -> tuple[int, int]:
         if len(responses) >= 2:
             first, last = responses[0], responses[-1]
             tokens += usage(last, "input_tokens") - usage(first, "input_tokens")
-            tokens -= sum(usage(response, "output_tokens") for response in responses[:-1])
+            tokens -= sum(
+                usage(response, "output_tokens") - usage(response, "thinking_tokens")
+                for response in responses[:-1]
+            )
             size += sum(
                 len(str(result["payload"].get("content", "")).encode())
                 for result in of_kind(window, "tool_result")

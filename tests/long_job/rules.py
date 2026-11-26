@@ -171,10 +171,12 @@ SEED = "LONG_JOB_SEED"
 BUDGET = "LONG_JOB_TOKEN_BUDGET"
 JOBS = "LONG_JOB_JOBS"
 CLAUDE = "claude"
+FAKE = ("", "fake")
 PUBLIC_SEED_FILE = Path("tests/unit/access_review_seed.json")
 COMMITMENT_FILE = Path("tests/long_job/commitment.json")
 
 # Each is a fixed sentence. None quotes a value.
+BAD_PROVIDER = "The provider is not fake or claude."
 PROPOSED = "The pass line is proposed."
 BAD_MODE = "The mode is not counts, must-fail or graded."
 NO_BUDGET = "The token budget is not set."
@@ -269,12 +271,18 @@ def _seed_refusals(seed: bytes, mode: str, root: Path) -> list[str]:
 def refusals(env: Mapping[str, str], root: Path) -> list[str]:
     """Why a keyed run may not start, as fixed sentences. Empty on the fake provider.
 
+    A provider that is neither the fake (unset, empty or `fake`) nor `claude`
+    is refused, so a misspelt provider never passes as the fake.
+
     `env` is the run's environment and `root` the checkout. The seed is read
     from `env` alone and is in no sentence. The seed's own refusals are left
     out while the mode or the seed itself is refused.
     """
-    if env.get(PROVIDER) != CLAUDE:
+    provider = env.get(PROVIDER, "")
+    if provider in FAKE:
         return []
+    if provider != CLAUDE:
+        return [BAD_PROVIDER]
     found = []
     if LINE_FIXED is None:
         found.append(PROPOSED)

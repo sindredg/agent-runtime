@@ -292,6 +292,16 @@ def test_on_the_fake_provider_nothing_is_refused(rules: ModuleType, tmp_path: Pa
     ]
 
 
+@pytest.mark.parametrize("provider", ["Claude", "anthropic", "fake ", "claude-api", "none"])
+def test_a_provider_that_is_neither_the_fake_nor_claude_is_refused(
+    rules: ModuleType, tmp_path: Path, provider: str
+) -> None:
+    """A misspelt provider is not taken for the fake, whatever else the run sets."""
+    env = run_env("no-such-mode", LONG_JOB_PROVIDER=provider, LONG_JOB_SEED=None)
+
+    assert rules.refusals(env, tmp_path) == [rules.BAD_PROVIDER]
+
+
 @pytest.mark.usefixtures("open_line")
 @pytest.mark.parametrize("mode", [None, "", "Graded", "must_fail", "count"])
 def test_an_unknown_mode_is_refused(rules: ModuleType, tmp_path: Path, mode: str | None) -> None:
@@ -481,6 +491,7 @@ def test_no_refusal_quotes_a_value(rules: ModuleType, tmp_path: Path) -> None:
     sentences = {
         getattr(rules, name)
         for name in (
+            "BAD_PROVIDER",
             "PROPOSED",
             "BAD_MODE",
             "NO_BUDGET",
@@ -503,13 +514,14 @@ def test_no_refusal_quotes_a_value(rules: ModuleType, tmp_path: Path) -> None:
         run_env("must-fail", **{BUDGET: budget}, LONG_JOB_SEED=seed.upper()),
         run_env("graded", LONG_JOB_SEED=seed),
         run_env(mode),
+        run_env("counts", LONG_JOB_PROVIDER=mode),
     ]
     root = checkout(tmp_path)
     found = [sentence for env in runs for sentence in rules.refusals(env, root)]
 
-    assert len(sentences) == 12
+    assert len(sentences) == 13
     assert set(found) <= sentences
-    assert len(set(found)) >= 9
+    assert len(set(found)) >= 10
     for sentence in sentences:
         assert not [value for value in values if value.lower() in sentence.lower()]
         assert OTHER_SEED not in sentence

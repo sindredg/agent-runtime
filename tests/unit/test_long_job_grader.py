@@ -1618,6 +1618,20 @@ def second_counts_log() -> list[dict[str, Any]]:
     ]
 
 
+def test_thinking_is_not_taken_off_a_windows_tokens(grader: ModuleType) -> None:
+    """Thinking may not be in the next request, so taking it off could put the ratio under."""
+    steps = [
+        small(1, "model_request", 0),
+        small(2, "model_response", 1, content=reads("c"), usage=usage(100, 40, 30)),
+        small(3, "tool_result", 2, tool_use_id="t0", content="cccc", is_error=False),
+        small(4, "model_request", 3),
+        small(5, "model_response", 4, content=reads(), usage=usage(130, 5)),
+    ]
+
+    # 130 - 100 input tokens, less the 40 - 30 the model wrote that were not thinking.
+    assert grader.window_tokens(steps) == (20, 4)
+
+
 def counts_log(grader: ModuleType, steps: list[dict[str, Any]], status: str, error: str) -> Any:
     return grader.Log(
         job=view(status, error, 0),
