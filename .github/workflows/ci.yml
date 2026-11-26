@@ -41,6 +41,7 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
         run: |
+          exit 1
           if [ "$EVENT" = pull_request ]; then
             git diff --name-only --no-renames HEAD^1 HEAD \
               | python3 -I scripts/ci_paths.py >> "$GITHUB_OUTPUT"
