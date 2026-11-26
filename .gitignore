@@ -35,3 +35,6 @@ dist/
 
 # Results and worker logs written by the long-job suite.
 .long/
+
+# Results, scenarios and worker logs written by the long-job harness.
+.long-job/

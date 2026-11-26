@@ -1,5 +1,5 @@
 .PHONY: all up up-claude down clean logs test integration escape chaos lab kills kills-claude
-.PHONY: switched-off switched-off-rehearsal notify-timing long-up long
+.PHONY: switched-off switched-off-rehearsal notify-timing long-up long long-job
 
 # The group that owns the Docker socket. The worker joins it to start a
 # container for each sandboxed tool call. Every compose command needs it.
@@ -46,6 +46,18 @@ long-up:
 # .long/. `make up` afterwards brings the normal stack back.
 long: long-up
 	uv run --frozen pytest -v -s tests/long
+
+# The long-job harness on the same stack and the fake provider: the job of
+# the committed public seed's access review (36 files), with the fake
+# playing a reviewer that reads every file and opens an issue for each
+# violation. A worker stops at the first summary and the harness kills the
+# job's worker twice more; the job is then graded as a job on a real model
+# is. The harness sets the trigger, the scenario and the failpoint itself.
+# Prints counts only, and short tracebacks. Records and worker logs in
+# .long-job/. `make up` afterwards brings the normal stack back.
+long-job: long-up
+	LONG_JOB_PROVIDER=fake LONG_JOB_MODE=must-fail LONG_JOB_PHASE=control \
+		uv run --frozen pytest -v --tb=short tests/long_job
 
 # Stop the services and keep the database volume.
 down:
