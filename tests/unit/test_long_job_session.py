@@ -172,10 +172,18 @@ def test_each_refusal_of_a_session_on_the_fake_provider_alone(
     assert harness.session_problems({**env, **changed}, ROOT) == [sentence]
 
 
-def start_session(harness: ModuleType, monkeypatch: pytest.MonkeyPatch) -> tuple[str, Docker]:
-    """Start a session as pytest does, with docker recorded. Returns how it stopped."""
-    docker = Docker()
+def start_session(
+    harness: ModuleType, monkeypatch: pytest.MonkeyPatch, docker: Any = None
+) -> tuple[str, Any]:
+    """Start a session as pytest does, with docker recorded and no API reached.
+
+    Returns how it stopped: the exit's message, "the session started", or the
+    name of what escaped, so every outcome fails an assertion of the caller.
+    """
+    docker = Docker() if docker is None else docker
     monkeypatch.setattr(harness, "docker", docker)
+    # The job list of a stack that may be running on this machine is never read.
+    monkeypatch.setattr(harness.Stack, "unfinished", lambda _: 0)
 
     class Config:
         stash = pytest.Stash()
@@ -183,9 +191,14 @@ def start_session(harness: ModuleType, monkeypatch: pytest.MonkeyPatch) -> tuple
     class Session:
         config = Config()
 
-    with pytest.raises(pytest.exit.Exception) as stopped:
+    try:
         harness.pytest_sessionstart(Session())
-    return str(stopped.value.msg), docker
+        said = "the session started"
+    except pytest.exit.Exception as stopped:
+        said = str(stopped.msg)
+    except Exception as error:
+        said = f"{type(error).__name__} escaped"
+    return said, docker
 
 
 def test_a_keyed_session_stops_with_that_sentence_before_any_stack_call(
@@ -222,18 +235,9 @@ def test_a_session_that_may_start_checks_the_workers_first(
 ) -> None:
     """The stub has workers on the Claude API, so the worker check stops it."""
     must_fail_env(clean_env)
-    docker = Docker(url=CLAUDE_URL)
-    clean_env.setattr(harness, "docker", docker)
+    said, docker = start_session(harness, clean_env, Docker(url=CLAUDE_URL))
 
-    class Config:
-        stash = pytest.Stash()
-
-    class Session:
-        config = Config()
-
-    with pytest.raises(pytest.exit.Exception) as stopped:
-        harness.pytest_sessionstart(Session())
-    assert "this run needs http://fake-provider:8000" in str(stopped.value.msg)
+    assert "this run needs http://fake-provider:8000" in said
     assert [call[:2] for call in docker.calls] == [("docker", "ps"), ("docker", "exec")]
 
 
@@ -245,21 +249,8 @@ def test_a_session_stops_with_a_sentence_when_docker_does_not_answer(
     def broken(*args: str, **_: Any) -> str:
         raise RuntimeError(f"{' '.join(args[:3])} ... exited 1")
 
-    clean_env.setattr(harness, "docker", broken)
+    said, _ = start_session(harness, clean_env, broken)
 
-    class Config:
-        stash = pytest.Stash()
-
-    class Session:
-        config = Config()
-
-    try:
-        harness.pytest_sessionstart(Session())
-        said = "the session started"
-    except pytest.exit.Exception as stopped:
-        said = str(stopped.msg)
-    except Exception as error:
-        said = f"{type(error).__name__} escaped"
     assert said == "Not run: Docker did not answer (RuntimeError)."
 
 
