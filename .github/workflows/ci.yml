@@ -17,8 +17,8 @@ concurrency:
 # tests. setup-uv runs without its problem matchers.
 # tests/unit/test_workflow_commands.py checks both.
 #
-# A pull request that changes only files under docs/ runs the lint jobs and
-# `changes`, and skips the jobs that build or start the stack. A job skipped
+# A pull request into main that changes only files under docs/ runs the lint
+# jobs and `changes`, and skips the jobs that build or start the stack. A job skipped
 # by its `if` reports success, so the required checks still report. The gate
 # skips only on an explicit `false`: if `changes` fails, everything runs.
 # tests/unit/test_ci_jobs.py checks which jobs are gated.

@@ -48,7 +48,7 @@ flowchart LR
 - `NOTIFY_TIMING_JOBS` sets the jobs of the timed run (default 50).
   Recorded timed runs start from the Manual runs workflow, `suite: notify-timing`.
 - CI runs every suite above on the fake provider but the contract test and the
-  timed run. A pull request that changes only `docs/` runs lint and unit tests.
+  timed run; a docs-only pull request into main runs lint and unit tests only.
 - A workflow step that runs tests or the stack, or prints service logs or
   results, stops workflow commands while it runs. Printers of stored text
   also escape command markers.

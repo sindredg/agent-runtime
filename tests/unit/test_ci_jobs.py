@@ -1,9 +1,11 @@
 """Which CI jobs a pull request runs, and how the long job is split over runners.
 
-A pull request that changes only files under `docs/` skips the jobs that
-build or start the stack. Any doubt runs them: no path, a path outside
-`docs/`, a moved file, a push, or a failed `changes` job. The long job's
-tests are split over runners, each test on exactly one.
+A pull request into main that changes only files under `docs/` skips the
+jobs that build or start the stack. Any doubt runs them: no path, a path
+outside `docs/`, a moved file, another base, a push, or a failed `changes`
+job. The long job's tests are split over runners, each test on one, except
+the test that judges the uninterrupted job: it runs on every runner that
+compares with that job.
 """
 
 import ast
