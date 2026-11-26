@@ -2457,7 +2457,7 @@ def run_verdicts(name: str, entry: SwitchedOff, *, rehearsal: bool) -> int:
     """Run an entry of the long-job harness: the control, and only after it passed, the edit.
 
     On the Claude API the harness's own refusals of the run are asked
-    first, before any stack starts. A rehearsal runs the control on the
+    first, and the edit is matched, before any stack starts. A rehearsal runs the control on the
     fake provider with no edit, no key and no seed, and stops there.
     """
     provider = "fake" if rehearsal else entry.provider
@@ -2476,6 +2476,14 @@ def run_verdicts(name: str, entry: SwitchedOff, *, rehearsal: bool) -> int:
         return 1
     head = _git("rev-parse", "HEAD").strip()
     _say(f"commit {head}")
+    texts: dict[str, str] = {}
+    if not rehearsal:
+        # Matched before any job: a miss found after the control would waste a paid job.
+        try:
+            texts = edited_files(entry.edits, ROOT)
+        except ValueError as error:
+            print(f"not started: {error}", file=sys.stderr)
+            return 2
     phases = {"control": run_phase(entry, provider, "control")}
     verdict, reasons = judge_verdicts(
         entry, phases, head=head, provider=provider, rules=rules, control_only=True
@@ -2486,7 +2494,6 @@ def run_verdicts(name: str, entry: SwitchedOff, *, rehearsal: bool) -> int:
         _say(f"{verdict}: {name}")
         return 0 if verdict == "REHEARSAL OK" else 1
     if verdict == "PASS":
-        texts = edited_files(entry.edits)
         for path, text in texts.items():
             (ROOT / path).write_text(text)
         _sh("git", "--no-pager", "diff", "--", *texts, env=without_keys(os.environ))

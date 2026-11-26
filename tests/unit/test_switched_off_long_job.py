@@ -540,6 +540,20 @@ def test_a_failed_control_writes_no_edit_and_is_a_finding(
     assert capsys.readouterr().out.splitlines()[-1] == f"FINDING: {NAME}"
 
 
+def test_an_edit_that_matches_no_line_stops_the_run_before_the_control(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A miss found only after the control would have spent a job on the Claude API."""
+    happened = stub_run(monkeypatch, tmp_path, {"control": record(), "edited": edited()})
+    agent = tmp_path / switched_off.AGENT
+    (edit,) = LONG.edits
+    agent.write_text(agent.read_text().replace(edit.old, ""))
+
+    assert switched_off.run(NAME) == 2
+    assert happened == []
+    assert capsys.readouterr().err.startswith("not started: ")
+
+
 def test_a_passed_control_is_followed_by_the_edit_and_the_edited_job(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
