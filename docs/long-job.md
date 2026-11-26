@@ -132,5 +132,6 @@ back.
 - Results go to `.long/<time>/results.jsonl`, one line per run with its
   verdict, commit, seed and counts. The workers' logs and the session's
   scenario files are beside it.
-- CI runs the suite on every pull request in the job `Long job (fake
-  provider)`. It is not a required check.
+- CI runs the suite in the job `Long job (fake provider)`, split over three
+  runners: `LONG_TESTS` names the tests `make long` runs, and unset it runs
+  them all. It is not a required check.

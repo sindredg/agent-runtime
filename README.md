@@ -69,8 +69,8 @@ that such a run did not reach is named with its result.
 | Throughput scales with workers | Not measured | |
 
 The table's results are from one run of every suite at `4ed43c0`, on one
-machine, against the fake provider. CI runs the suites on each pull request,
-with 20 kills. Runs at other commits are named on [Results](docs/results/README.md).
+machine, against the fake provider. CI runs the suites on each pull request
+that changes more than `docs/`, with 20 kills. Runs at other commits are named on [Results](docs/results/README.md).
 
 The fake provider is compared with the Claude API by a contract test that is
 started by hand: [The contract test](docs/contract-test.md). Eight single
