@@ -21,7 +21,7 @@ Read [the queue](0002-postgres-as-the-job-queue.md),
 | [0004](0004-fence-writes-with-the-lease-epoch-and-a-row-lock.md) | Fence a worker's writes with the lease epoch and a row lock, and accept one gap | Yes |
 | [0005](0005-rerun-an-interrupted-tool-call-only-when-it-is-safe.md) | Rerun an interrupted tool call only when that is known to be safe. Otherwise ask a person. | Yes |
 | [0006](0006-count-takeovers-apart-from-claims.md) | Count takeovers apart from claims, and release the job when a worker is told to stop | Yes |
-| [0007](0007-security-agents-and-owasp-apts-as-the-yardstick.md) | Build for security agents, and measure the controls against OWASP APTS | [The APTS table](../apts.md) has the milestone 2 rows |
+| [0007](0007-security-agents-and-owasp-apts-as-the-yardstick.md) | Build for security agents, and measure the controls against OWASP APTS | [The APTS table](../apts.md). Narrowed by [0035](0035-prove-the-runtime-on-defensive-jobs-over-synthetic-data-first.md). |
 | [0008](0008-run-each-tool-call-in-its-own-container.md) | Run each tool call in its own container, started by the worker | For `run_shell` and `list_dir` |
 | [0009](0009-enforce-the-target-scope-in-the-network-namespace.md) | Enforce a job's target scope in the network namespace of its tools | For `run_shell` |
 | [0010](0010-one-halt-path-and-a-budget-bound.md) | Halt a job through one path, and bound a model call's tokens before it is sent | Yes |
@@ -48,6 +48,7 @@ Read [the queue](0002-postgres-as-the-job-queue.md),
 | [0032](0032-seed-files-up-to-8-mib.md) | Seed a job's workspace with up to 8 MiB of files, the same limit for every job | Yes |
 | [0033](0033-summarise-a-long-conversation-as-a-step.md) | Summarise a long conversation as a step and start the next context window from it. Amends 0028. | Yes, migration 0012. Off unless `SUMMARY_TRIGGER` is set. |
 | [0034](0034-judge-a-keyed-long-job-entry-by-a-control-and-an-edited-job.md) | Judge a keyed long-job entry by a control job and an edited job. Extends 0022. | Yes. Refused until the token bound of keyed long jobs is set. |
+| [0035](0035-prove-the-runtime-on-defensive-jobs-over-synthetic-data-first.md) | Prove the runtime on defensive jobs over synthetic data first. Narrows 0007. | The access review: [generator](../access-review.md) and [grader](../long-job-grader.md). The log investigation is planned. |
 
 There is no record 0024: it was withdrawn before anything was built.
 
