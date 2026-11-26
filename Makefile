@@ -1,5 +1,5 @@
 .PHONY: all up up-claude down clean logs test integration escape chaos lab kills kills-claude
-.PHONY: switched-off switched-off-rehearsal notify-timing long-up long long-job
+.PHONY: switched-off switched-off-rehearsal notify-timing long-up long long-job long-job-claude
 
 # The group that owns the Docker socket. The worker joins it to start a
 # container for each sandboxed tool call. Every compose command needs it.
@@ -10,6 +10,10 @@ export DOCKER_GID ?= $(shell stat -c %g /var/run/docker.sock)
 # the command line too. ifdef does not expand it either.
 ifdef KILLS_MODEL
 override export KILLS_MODEL := $(value KILLS_MODEL)
+endif
+# The same for the model of `make long-job-claude`.
+ifdef LONG_JOB_MODEL
+override export LONG_JOB_MODEL := $(value LONG_JOB_MODEL)
 endif
 
 # The default target runs the unit tests.
@@ -57,6 +61,22 @@ long: long-up
 # .long-job/. `make up` afterwards brings the normal stack back.
 long-job: long-up
 	LONG_JOB_PROVIDER=fake LONG_JOB_MODE=must-fail LONG_JOB_PHASE=control \
+		uv run --frozen pytest -v --tb=short tests/long_job
+
+# The harness on the Claude API: the long stack with docker-compose.claude.yml
+# on top, the model named here, the seed of LONG_JOB_SEED and the mode of
+# LONG_JOB_MODE: `make long-job-claude LONG_JOB_MODEL=claude-haiku-5-5`.
+# Every job costs money. Needs CLAUDE_API_KEY in the environment: the workers
+# get it through the overlay, and mode graded counts the job's text with it.
+# The first line asks scripts/long_job_keyed.py for the run's refusals,
+# before the model is read or any stack starts. Today it refuses every run:
+# the pass line is proposed. Recorded runs start from the Manual runs
+# workflow. `make up` afterwards brings the normal stack back.
+long-job-claude:
+	LONG_JOB_PROVIDER=claude uv run --frozen python scripts/long_job_keyed.py check
+	@case "$$LONG_JOB_MODEL" in claude-haiku-5-5) ;; *) echo "Name the model: make long-job-claude LONG_JOB_MODEL=claude-haiku-5-5" >&2; exit 1;; esac
+	docker compose -f docker-compose.yml -f docker-compose.long.yml -f docker-compose.claude.yml up --build --wait
+	LONG_JOB_PROVIDER=claude LONG_JOB_PHASE=control \
 		uv run --frozen pytest -v --tb=short tests/long_job
 
 # Stop the services and keep the database volume.
@@ -112,8 +132,10 @@ switched-off:
 	uv run --frozen python scripts/switched_off.py run "$$SWITCHED_OFF"
 
 # An entry of the Claude API on the fake provider: every step of the run, no
-# key, no cost, and no result. It passes only if the test passes and the
-# run's one record says that no job sent a rebuilt thinking block.
+# key, no cost, and no result. An entry of the kill runs passes only if the
+# test passes and the run's one record says that no job sent a rebuilt
+# thinking block. The entry of the long-job harness runs its control job
+# only, with no edit and no seed, and passes only if the control passes.
 switched-off-rehearsal:
 	uv run --frozen python scripts/switched_off.py rehearse "$$SWITCHED_OFF"
 

@@ -8,18 +8,26 @@ is a finding for the results page, not a reason to change the entry.
 
 The Manual runs workflow runs one entry, or every entry of the fake provider
 with one job each, on `main` (ADR 0021). An entry names its provider. One on
-the Claude API runs in the job that holds the key, and is judged by the kill
-runner's record as well (ADR 0022).
+the Claude API runs in a job that holds the key, and is judged by a record
+as well. On the kills stack that is the kill runner's record (ADR 0022). On
+the long stack it is the long-job harness's: two graded jobs, a control on
+the checkout as it is and, only after it passed, one with the edit made.
+Such an entry starts only while the token bound of keyed long jobs is set
+and its jobs fit it.
 
     python scripts/switched_off.py names          the entries, one per line
     python scripts/switched_off.py names fake     the entries of the fake provider, as a
                                                   JSON list: the workflow's matrix
     python scripts/switched_off.py check          the list still fits the code
-    python scripts/switched_off.py dispatch NAME PROVIDER [MODEL]
-                                                  refuse a start that is not the entry's
+    python scripts/switched_off.py dispatch NAME PROVIDER [MODEL [JOB]]
+                                                  refuse a start that is not the entry's;
+                                                  JOB is `long-job` for an entry of the
+                                                  long-job harness, and only for one
     python scripts/switched_off.py run NAME       edit the checkout, start the stack, run, judge
     python scripts/switched_off.py rehearse NAME  an entry of the Claude API on the fake
-                                                  provider: every step of `run`, and no result
+                                                  provider: every step of `run`, and no
+                                                  result. On the long stack: the control
+                                                  job only, with no edit
 
 `run` and `rehearse` change files in the checkout. Run them on a clean
 checkout and restore it with `git checkout -- .` afterwards.
@@ -36,7 +44,7 @@ import subprocess
 import sys
 import xml.etree.ElementTree as ET
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from types import ModuleType
 from typing import Any, Literal
@@ -112,7 +120,23 @@ LONG_RUNS_ISSUE = 237
 RECORD_SHAPED = "tests/unit/test_record_shaped_text.py"
 RECORD_SHAPED_STACK = "tests/integration/test_record_shaped_text_in_stack.py"
 RECORD_SHAPED_ISSUE = 160
-# The tests that a run with no stack, the lab's stack and the long stack may name.
+# The long-job harness: its tests, its rules and grader, where a session leaves its
+# records, the record's test, and the issue of its entry.
+LONG_JOB = "tests/long_job/test_long_job_run.py"
+LONG_JOB_TESTS = "tests/long_job/"
+LONG_JOB_RULES = "tests/long_job/rules.py"
+LONG_JOB_GRADER = "tests/long_job/grader.py"
+LONG_JOB_RECORDS = ".long-job"
+LONG_JOB_TEST = "long-job"
+LONG_JOB_ISSUE = 243
+# Run in each phase of such an entry beside its tests: the session's answers
+# in what it printed, recorded and kept. It is no test of the entry's.
+LONG_JOB_ANSWERS = f"{LONG_JOB}::test_no_answer_is_in_the_record_the_output_or_the_saved_logs"
+# How pytest runs a phase: short tracebacks, and output captured for the
+# answers test. A failure then prints its message and the count, no more.
+LONG_JOB_PYTEST = ("-v", "--tb=short")
+# The tests that a run with no stack, the lab's stack and the long stack may
+# name. On the Claude API the long stack runs the long-job harness instead.
 STACK_TESTS = {"none": "tests/unit/", "lab": "tests/lab/", "long": "tests/long/"}
 # What an edit may change: the product's code and its migrations, never a test,
 # the workflow or this script.
@@ -177,6 +201,20 @@ class Refusals:
 
 
 @dataclass(frozen=True)
+class Verdicts:
+    """What the two graded jobs of an entry of the long-job harness must show.
+
+    The control job runs the checkout as it is: its record's verdict is
+    `control` and every test of the entry passes. Only then is the edit
+    written. The edited job's record lists each clause of `fires`, and
+    meets every floor.
+    """
+
+    control: str = "PASS"
+    fires: tuple[str, ...] = ("R7", "R8", "R9")
+
+
+@dataclass(frozen=True)
 class SwitchedOff:
     issue: int
     what: str
@@ -185,17 +223,47 @@ class SwitchedOff:
     # workers and a short lease. `kills`: the kill runs' stack, three workers
     # and a 6 s lease. `lab`: the images built, and the lab's tests start the
     # stack with Gitea themselves. `long`: the stack of `make long-up`, for a
-    # job longer than the context window, on the fake provider.
+    # job longer than the context window; on the Claude API with its overlay too.
     stack: Literal["none", "up", "chaos", "kills", "lab", "long"]
     expect: tuple[Expect, ...]
     # `claude`: the run is on the Claude API, in the job that holds the key.
     provider: Literal["fake", "claude"] = "fake"
     # The model of a run on the Claude API.
     model: str | None = None
-    # The kills stack: the jobs of the test, and the most the run may submit.
+    # On the Claude API: the jobs of the run. On the kills stack the most the
+    # test may submit; on the long stack the control and the edited job.
     runs: int = 0
-    record: Refusals | None = None
+    record: Refusals | Verdicts | None = None
 
+
+# The first summary's text when its notices are dropped: the task and the rules
+# of the prompt, and a line that starts the reading again. Equal to
+# `NOTICES_DROPPED` of tests/long_job/rules.py; a unit test keeps the two equal.
+NOTICES_DROPPED = (
+    "Review the access records. Read index.txt, then read every file it lists, in the order"
+    " listed. Open one issue for each grant that is a violation.\n"
+    "\n"
+    "Rules:\n"
+    "1. A grant is a violation when its holder has left. A person has left when a leaver"
+    " notice names them, in any file, or when they are on a roster of their team and missing"
+    " from a later roster of that team.\n"
+    '2. A grant on a system marked "approval required" is a violation unless an approval'
+    " names its holder and that system. An approval is in the file of its grant.\n"
+    "3. Nothing else is a violation.\n"
+    "\n"
+    "Nothing is recorded as read. Continue through every file that index.txt lists, starting"
+    " with the first."
+)
+SUMMARY_MESSAGE = (
+    '                payload["message"] = opening_message(summary_text(response.content))\n'
+)
+# The job's first summary is stored as that text, and its message is built from
+# it: replay rebuilds the message from the stored text and compares the two.
+NOTICES_DROPPED_SUMMARY = (
+    "                if summaries == 0:  # switched off\n"
+    f'                    payload["content"] = [{{"type": "text", "text": {NOTICES_DROPPED!r}}}]\n'
+    '                payload["message"] = opening_message(summary_text(payload["content"]))\n'
+)
 
 NOTHING_TO_REPLAY = (
     "the kill comes before any completed step, so starting over is the same as resuming"
@@ -1311,6 +1379,41 @@ ENTRIES: dict[str, SwitchedOff] = {
             ),
         ),
     ),
+    # The long-job harness on the Claude API: two graded jobs (see `Verdicts`).
+    "long-notices-dropped": SwitchedOff(
+        issue=LONG_JOB_ISSUE,
+        what="the leaver notices and approvals in the job's first summary",
+        edits=(Edit(AGENT, SUMMARY_MESSAGE, NOTICES_DROPPED_SUMMARY),),
+        stack="long",
+        expect=(
+            Expect(
+                f"{LONG_JOB}::test_every_counted_violation_of_a_notice_has_an_issue",
+                "a counted notice-violating grant has no issue",
+            ),
+            Expect(
+                f"{LONG_JOB}::test_no_counted_grant_a_notice_clears_has_an_issue",
+                "a counted notice-cleared grant has an issue",
+            ),
+            Expect(
+                f"{LONG_JOB}::test_every_issue_after_the_first_summary_holds_the_reference_code",
+                "an issue after the first summary lacks the reference code",
+            ),
+            Expect(
+                f"{LONG_JOB}::test_the_log_holds",
+                None,
+                "the edit changes what the first summary says, not how the runtime keeps the job",
+            ),
+            Expect(
+                f"{LONG_JOB}::test_the_run_shows_enough",
+                None,
+                "the files are still read after the first summary; only the notices are lost",
+            ),
+        ),
+        provider="claude",
+        model="claude-haiku-5-5",
+        runs=2,
+        record=Verdicts(),
+    ),
     "tool-result-parse": SwitchedOff(
         issue=RECORD_SHAPED_ISSUE,
         what="a tool result as one string in the conversation: replay parses its lines into blocks",
@@ -1518,6 +1621,11 @@ def stack_commands(stack: str, provider: str) -> list[list[str]]:
         case "up":
             return [["make", "up"]]
         case "long":
+            if provider == "claude":
+                # As `make long-job-claude`: the Claude overlay reads the key.
+                compose = ["-f", "docker-compose.yml", "-f", "docker-compose.long.yml"]
+                compose += ["-f", "docker-compose.claude.yml"]
+                return [["docker", "compose", *compose, "up", "--build", "--wait"]]
             return [["make", "long-up"]]
         case "chaos":
             compose = ["-f", "docker-compose.yml", "-f", "docker-compose.chaos.yml"]
@@ -1536,17 +1644,31 @@ def stack_commands(stack: str, provider: str) -> list[list[str]]:
     raise ValueError(f"no stack {stack!r}")
 
 
-def kill_rules(root: Path = ROOT) -> ModuleType:
-    """`tests/kills/rules.py` of `root`, loaded by its path. It imports nothing of the stack."""
-    name = "switched_off_kill_rules"
-    spec = importlib.util.spec_from_file_location(name, root / KILL_RULES)
+def _load(name: str, path: str, root: Path) -> ModuleType:
+    spec = importlib.util.spec_from_file_location(name, root / path)
     if spec is None or spec.loader is None:
-        raise RuntimeError(f"{KILL_RULES} cannot be loaded")
+        raise RuntimeError(f"{path} cannot be loaded")
     module = importlib.util.module_from_spec(spec)
     # Registered before it runs: the dataclasses in it look their module up.
     sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def kill_rules(root: Path = ROOT) -> ModuleType:
+    """`tests/kills/rules.py` of `root`, loaded by its path. It imports nothing of the stack."""
+    return _load("switched_off_kill_rules", KILL_RULES, root)
+
+
+def long_job_rules(root: Path = ROOT) -> ModuleType:
+    """`tests/long_job/rules.py` of `root`, loaded by its path: the long bound, the short cap,
+    the refusals of a keyed run. It imports nothing of the stack and no SDK."""
+    return _load("switched_off_long_job_rules", LONG_JOB_RULES, root)
+
+
+def long_job_grader(root: Path = ROOT) -> ModuleType:
+    """`tests/long_job/grader.py` of `root`, loaded by its path: the names of its clauses."""
+    return _load("switched_off_long_job_grader", LONG_JOB_GRADER, root)
 
 
 def options(workflow: str, field: str) -> list[str]:
@@ -1654,27 +1776,48 @@ def edit_path_problems(entry: SwitchedOff) -> list[str]:
     ]
 
 
+def keyed_long(entry: SwitchedOff) -> bool:
+    """Whether the entry runs the long-job harness: the long stack on the Claude API."""
+    return entry.stack == "long" and entry.provider == "claude"
+
+
+def stack_tests(entry: SwitchedOff) -> str | None:
+    """The one test directory the entry's stack runs, or None for a stack that runs any."""
+    return LONG_JOB_TESTS if keyed_long(entry) else STACK_TESTS.get(entry.stack)
+
+
 def run_problems(entry: SwitchedOff, root: Path = ROOT) -> list[str]:
     """What is wrong with an entry's provider, stack, jobs and record. Empty when nothing is.
 
     An entry on the Claude API gets the key. So its model is one the
-    workflow offers, its stack is the kill runs', its jobs times the budget
-    of each stay inside the bound, and it is judged by its record.
+    workflow offers and it is judged by its record. On the kills stack the
+    record is `Refusals`, and its jobs times the budget of each stay inside
+    the bound. On the long stack it is `Verdicts`: the model is the
+    harness's, the jobs are its two, and the grader has each clause that
+    must fire. Nothing else gets the key. The long bound is not asked here:
+    `bound_problem` asks it when a run starts.
     """
     problems = edit_path_problems(entry)
     kills = entry.stack == "kills"
+    long = keyed_long(entry)
     if entry.provider == "claude":
         offered = options((root / WORKFLOW).read_text(), "model")
         if entry.model not in offered:
             problems.append(f"the workflow offers no model {entry.model!r}")
-        if not kills:
-            problems.append(f"a run on the Claude API uses the kills stack, not {entry.stack!r}")
+        if not kills and not long:
+            problems.append(
+                f"a run on the Claude API uses the kills or the long stack, not {entry.stack!r}"
+            )
         if entry.record is None:
             problems.append("a run on the Claude API is judged by its record, and names none")
+        elif kills and not isinstance(entry.record, Refusals):
+            problems.append("a run on the Claude API and the kills stack is judged by `Refusals`")
+        elif long and not isinstance(entry.record, Verdicts):
+            problems.append("a run on the Claude API and the long stack is judged by `Verdicts`")
     elif entry.model is not None:
         problems.append(f"the fake provider takes no model, and the entry names {entry.model!r}")
-    if entry.stack in STACK_TESTS:
-        tests = STACK_TESTS[entry.stack]
+    tests = stack_tests(entry)
+    if tests is not None:
         outside = [
             expect.node
             for expect in entry.expect
@@ -1682,9 +1825,13 @@ def run_problems(entry: SwitchedOff, root: Path = ROOT) -> list[str]:
         ]
         if outside:
             problems.append(f"stack {entry.stack!r} runs {tests} only, not {outside}")
+    if long:
+        return problems + verdicts_problems(entry, root)
     if not kills:
         if entry.runs or entry.record is not None:
-            problems.append("`runs` and `record` are for the kills stack")
+            problems.append("`runs` and `record` are for an entry on the Claude API")
+        return problems
+    if not isinstance(entry.record, Refusals):
         return problems
     rules = kill_rules(root)
     if not 1 <= entry.runs <= rules.API_JOB_LIMIT:
@@ -1710,6 +1857,44 @@ def run_problems(entry: SwitchedOff, root: Path = ROOT) -> list[str]:
     if not 1 <= entry.record.at_least <= entry.runs:
         problems.append(f"`at_least` is {entry.record.at_least}, not 1 to {entry.runs}")
     return problems
+
+
+def verdicts_problems(entry: SwitchedOff, root: Path = ROOT) -> list[str]:
+    """What is wrong with an entry of the long-job harness beyond its stack and provider."""
+    rules = long_job_rules(root)
+    problems = []
+    if entry.model != rules.MODEL:
+        problems.append(f"the long-job harness runs model {rules.MODEL}, not {entry.model!r}")
+    if entry.runs != rules.MUST_FAIL_JOBS:
+        problems.append(
+            f"`runs` is {entry.runs}, not {rules.MUST_FAIL_JOBS}: the control and the edited job"
+        )
+    if isinstance(entry.record, Verdicts):
+        grader = long_job_grader(root)
+        missing = [name for name in entry.record.fires if name not in grader.CLAUSES]
+        if missing or not entry.record.fires:
+            problems.append(f"{LONG_JOB_GRADER} has no clause {missing}, or none is named")
+        if entry.record.control not in grader.VERDICTS:
+            problems.append(f"{LONG_JOB_GRADER} has no verdict {entry.record.control!r}")
+    return problems
+
+
+def bound_problem(entry: SwitchedOff, root: Path = ROOT) -> str | None:
+    """Why an entry of the long-job harness may not start a run: the long bound. Else None.
+
+    The bound lives in `tests/long_job/rules.py`. While it is not set, or
+    the entry's jobs times the short cap exceed it, no such run starts.
+    `run` and `_dispatch` ask it; `check`, `run_problems` and a rehearsal
+    do not, so the list's check stays green while it is not set.
+    """
+    if not isinstance(entry.record, Verdicts):
+        return None
+    rules = long_job_rules(root)
+    bound = rules.LONG_KEYED_TOKEN_BOUND
+    if bound is None or entry.runs * rules.SHORT.budget_cap > bound:
+        sentence: str = rules.NO_BOUND
+        return sentence
+    return None
 
 
 def outcomes(junit: Path) -> dict[str, tuple[str, str]]:
@@ -1824,8 +2009,8 @@ def judge_record(
     the entry is not run again or changed to make it pass. An
     inconclusive run shows nothing either way.
     """
-    if entry.record is None or entry.model is None:
-        raise ValueError("only an entry with a record and a model is judged by its record")
+    if not isinstance(entry.record, Refusals) or entry.model is None:
+        raise ValueError("only an entry with `Refusals` and a model is judged by its record")
     if trouble:
         return "INCONCLUSIVE", [f"no record to judge: {problem}" for problem in trouble]
     record = records[0]
@@ -1913,22 +2098,186 @@ def judge_rehearsal(
     ]
 
 
+@dataclass(frozen=True)
+class Phase:
+    """One phase of a run of the long-job harness: `judge`'s lines and the record it left."""
+
+    name: str
+    lines: tuple[str, ...]
+    records: tuple[dict[str, Any], ...]
+    trouble: tuple[str, ...]
+
+
+# A clause in either job's record that makes the run a finding whatever else
+# the record holds: the runtime's own failures.
+RUNTIME_CLAUSES = ("R2", "R5", "R6", "crash", "runtime")
+# Reported for the edited job, not judged.
+REPORTED_CLAUSES = ("R1", "no_class", "kill_failpoint", "kill_2", "kill_3", "kill_windows")
+ANSWERS_KEPT_OUT = "no answer of the job is printed, recorded or kept"
+
+
+def phase_entry(entry: SwitchedOff, phase: str) -> SwitchedOff:
+    """The entry as `judge` reads one phase of its run.
+
+    In the control every test passes. In the edited phase the tests end as
+    the entry lists them. In both the answers test runs too, and passes.
+    """
+    expect = entry.expect
+    if phase == "control":
+        expect = tuple(
+            replace(e, fails_with=None, passes_because="the control runs the checkout as it is")
+            for e in expect
+        )
+    return replace(entry, expect=(*expect, Expect(LONG_JOB_ANSWERS, None, ANSWERS_KEPT_OUT)))
+
+
+def _clauses(record: Mapping[str, Any]) -> dict[str, int]:
+    found = record.get("clauses")
+    if not isinstance(found, dict):
+        return {}
+    return {
+        str(name): count
+        for name, count in found.items()
+        if isinstance(count, int) and not isinstance(count, bool) and count > 0
+    }
+
+
+def _listed(record: Mapping[str, Any], names: tuple[str, ...]) -> list[str]:
+    held = _clauses(record)
+    return [name for name in names if name in held]
+
+
+def _void(record: Mapping[str, Any]) -> bool:
+    voided = any(name.startswith("void_") for name in _clauses(record))
+    return record.get("verdict") == "VOID" or voided or bool(record.get("voids"))
+
+
+def judge_verdicts(
+    entry: SwitchedOff,
+    phases: Mapping[str, Phase],
+    *,
+    head: str,
+    provider: str,
+    rules: ModuleType,
+    control_only: bool = False,
+) -> tuple[str, list[str]]:
+    """PASS, FINDING or INCONCLUSIVE for a run of the long-job harness, and the reasons.
+
+    The first of these that holds gives the verdict:
+
+    1. Either job's record lists R2, R5, R6, a crash or a runtime failure:
+       FINDING, even beside a void.
+    2. A phase that ran left no record of this run (its commit, provider,
+       model, mode, phase and one job): INCONCLUSIVE.
+    3. Either record is void: INCONCLUSIVE.
+    4. The control's verdict is not the entry's, or a test of the control
+       did not end as listed: FINDING. The edit was never written.
+    5. The edited job did not run: INCONCLUSIVE.
+    6. The edited record does not list each clause that must fire, misses
+       a floor, or a test of it did not end as listed: FINDING.
+    7. PASS.
+
+    With `control_only` the judge stops after rule 4: the control half,
+    which `run` asks before it writes the edit, and a rehearsal asks alone.
+    R1, NO_CLASS and the kills of the edited job are reported, not judged.
+    """
+    if not isinstance(entry.record, Verdicts) or entry.model is None:
+        raise ValueError("only an entry with `Verdicts` and a model is judged by two jobs")
+    label = "Claude API" if provider == "claude" else "fake provider"
+    model = entry.model if provider == "claude" else rules.FAKE_MODEL
+    asked = ("control",) if control_only else ("control", "edited")
+    records: dict[str, Mapping[str, Any]] = {}
+    missing: list[str] = []
+    for name in asked:
+        if name not in phases:
+            continue
+        phase = phases[name]
+        if phase.trouble or not phase.records:
+            missing += [f"{name}: no record to judge: {problem}" for problem in phase.trouble]
+            continue
+        record = phase.records[0]
+        wrong = not_this_run(record, runs=1, provider=label, model=model, head=head)
+        for key, wanted in (("mode", "must-fail"), ("phase", name)):
+            if record.get(key) != wanted:
+                wrong.append(f"the record's {key} is {record.get(key)!r}, not {wanted!r}")
+        if wrong:
+            missing += [f"{name}: {problem}" for problem in wrong]
+            continue
+        records[name] = record
+    lines = [
+        f"{name}: verdict {record.get('verdict')}, clauses "
+        + (", ".join(f"{c} {n}" for c, n in _clauses(record).items()) or "none")
+        for name, record in records.items()
+    ]
+    broken = [
+        f"{name}: the runtime failed the job: {', '.join(found)}"
+        for name, record in records.items()
+        if (found := _listed(record, RUNTIME_CLAUSES))
+    ]
+    if broken:
+        return "FINDING", [*lines, *broken]
+    if missing:
+        return "INCONCLUSIVE", [*lines, *missing]
+    voided = [name for name, record in records.items() if _void(record)]
+    if voided:
+        return "INCONCLUSIVE", [*lines, f"{' and '.join(voided)}: the run is void"]
+    if "control" not in records:
+        return "INCONCLUSIVE", [*lines, "the control job did not run"]
+    as_listed = all(line.startswith("ok") for line in phases["control"].lines)
+    if records["control"].get("verdict") != entry.record.control or not as_listed:
+        return "FINDING", [*lines, "the control job did not pass: the edit was not written"]
+    if control_only:
+        return "PASS", [*lines, "the control job passed"]
+    if "edited" not in records:
+        return "INCONCLUSIVE", [*lines, "the edited job did not run"]
+    edited = records["edited"]
+    fires = entry.record.fires
+    reasons = []
+    if quiet := [name for name in fires if name not in _clauses(edited)]:
+        reasons.append(f"edited: did not fire: {', '.join(quiet)}")
+    if floors := [name for name in _clauses(edited) if name.startswith("floor_")]:
+        reasons.append(f"edited: a floor is missed: {', '.join(floors)}")
+    if not all(line.startswith("ok") for line in phases["edited"].lines):
+        reasons.append("edited: a test did not end as listed")
+    reported = [
+        f"edited, reported and not judged: {', '.join(found)}"
+        for found in [_listed(edited, REPORTED_CLAUSES)]
+        if found
+    ]
+    if reasons:
+        return "FINDING", [*lines, *reasons, *reported]
+    passed = f"the control passed, and the edited job fails on {', '.join(fires)} with every floor"
+    return "PASS", [*lines, passed, *reported]
+
+
 def names(provider: str) -> list[str]:
     """The entries of one provider, in the list's order."""
     return [name for name, entry in ENTRIES.items() if entry.provider == provider]
 
 
-def dispatch_problem(name: str, provider: str, model: str | None) -> str | None:
+# The workflow job that runs an entry of the long-job harness.
+LONG_JOB_JOB = "long-job"
+
+
+def dispatch_problem(
+    name: str, provider: str, model: str | None, job: str | None = None
+) -> str | None:
     """Why the workflow's inputs do not start this entry, or None.
 
     The entry names its provider and model. The inputs have to say the
-    same, so the job that runs and its name are the entry's.
+    same, so the job that runs and its name are the entry's. An entry of the
+    long-job harness runs only in the job `long-job`, which says so with
+    `job`, and that job runs no other entry.
     """
     entry = ENTRIES[name]
     if provider != entry.provider:
         return f"{name} runs on provider {entry.provider}, not {provider}"
     if entry.provider == "claude" and model != entry.model:
         return f"{name} runs on model {entry.model}, not {model}"
+    if keyed_long(entry) and job != LONG_JOB_JOB:
+        return f"{name} runs in the workflow's {LONG_JOB_JOB} job only"
+    if not keyed_long(entry) and job is not None:
+        return f"{name} does not run in the workflow's {job} job"
     return None
 
 
@@ -1955,23 +2304,30 @@ def without_keys(env: Mapping[str, str]) -> dict[str, str]:
     return {name: value for name, value in env.items() if name not in KEY_VARIABLES}
 
 
-def child_environment(entry: SwitchedOff, provider: str, env: Mapping[str, str]) -> dict[str, str]:
+def child_environment(
+    entry: SwitchedOff, provider: str, env: Mapping[str, str], phase: str = "control"
+) -> dict[str, str]:
     """The environment of the stack and the tests of a run, made from the entry.
 
-    No inherited `KILLS_*` variable and no failpoint reaches them: the entry
-    alone names the provider, the model and the number of jobs. The key is
-    passed on only to a run on the Claude API.
+    No inherited `KILLS_*` or `LONG_JOB_*` variable and no failpoint reaches
+    them: the entry alone names the provider, the model and the number of
+    jobs. The key is passed on only to a run on the Claude API.
 
     No inherited setting of the long stack reaches them either. A run on the
     long stack gets each as the empty string, and the failpoint too. A value
     in `.env` cannot replace a variable that is set: the stack starts on its
     defaults, and each test sets its own.
+
+    An entry of the long-job harness gets the harness's provider, mode
+    `must-fail` and `phase`, and no budget: the harness takes the short cap.
+    On the Claude API it also gets the seed, LONG_JOB_SEED, and nothing on
+    the fake provider. No `ANTHROPIC_*` variable reaches it.
     """
     dropped = ("FAILPOINT", PROVIDER_VARIABLE, *LONG_VARIABLES)
     kept = {
         name: value
         for name, value in without_keys(env).items()
-        if not name.startswith("KILLS_") and name not in dropped
+        if not name.startswith(("KILLS_", "LONG_JOB_")) and name not in dropped
     }
     if provider == "claude" and "CLAUDE_API_KEY" in env:
         kept["CLAUDE_API_KEY"] = env["CLAUDE_API_KEY"]
@@ -1988,6 +2344,13 @@ def child_environment(entry: SwitchedOff, provider: str, env: Mapping[str, str])
         # value in `.env` would stop a worker of the run.
         for name in ("FAILPOINT", *LONG_VARIABLES):
             kept[name] = ""
+    if isinstance(entry.record, Verdicts):
+        kept = {name: value for name, value in kept.items() if not name.startswith("ANTHROPIC_")}
+        kept["LONG_JOB_PROVIDER"] = provider
+        kept["LONG_JOB_MODE"] = "must-fail"
+        kept["LONG_JOB_PHASE"] = phase
+        if provider == "claude" and "LONG_JOB_SEED" in env:
+            kept["LONG_JOB_SEED"] = env["LONG_JOB_SEED"]
     return kept
 
 
@@ -2015,6 +2378,11 @@ def _git(*args: str) -> str:
 
 def run(name: str, *, rehearsal: bool = False) -> int:
     entry = ENTRIES[name]
+    # The long bound first: while it is not set, nothing else is asked.
+    bound = None if rehearsal else bound_problem(entry)
+    if bound is not None:
+        print(f"not started: {bound}", file=sys.stderr)
+        return 2
     refused = start_problem(name, os.environ.get(PROVIDER_VARIABLE, "fake"), rehearsal=rehearsal)
     if refused is not None:
         print(f"not started: {refused}", file=sys.stderr)
@@ -2024,6 +2392,8 @@ def run(name: str, *, rehearsal: bool = False) -> int:
     if wrong:
         print(f"not started: {'; '.join(wrong)}", file=sys.stderr)
         return 2
+    if isinstance(entry.record, Verdicts):
+        return run_verdicts(name, entry, rehearsal=rehearsal)
     provider = "fake" if rehearsal else entry.provider
     if rehearsal:
         _say(f"rehearsal of {name} on the fake provider: not a result")
@@ -2074,6 +2444,75 @@ def run(name: str, *, rehearsal: bool = False) -> int:
     return 0 if verdict in ("PASS", "REHEARSAL OK") else 1
 
 
+def run_verdicts(name: str, entry: SwitchedOff, *, rehearsal: bool) -> int:
+    """Run an entry of the long-job harness: the control, and only after it passed, the edit.
+
+    On the Claude API the harness's own refusals of the run are asked
+    first, before any stack starts. A rehearsal runs the control on the
+    fake provider with no edit, no key and no seed, and stops there.
+    """
+    provider = "fake" if rehearsal else entry.provider
+    rules = long_job_rules()
+    if not rehearsal:
+        refused = rules.refusals(child_environment(entry, provider, os.environ), ROOT)
+        if refused:
+            print(f"not started: {' '.join(refused)}", file=sys.stderr)
+            return 2
+        _say(f"switched off: {name} (issue {entry.issue}): {entry.what}")
+    else:
+        _say(f"rehearsal of {name} on the fake provider, the control job only: not a result")
+    changed = _git("status", "--porcelain", "--untracked-files=no")
+    if changed:
+        _say(f"WRONG: the checkout has changes; the run would not be HEAD's code:\n{changed}")
+        return 1
+    head = _git("rev-parse", "HEAD").strip()
+    _say(f"commit {head}")
+    phases = {"control": run_phase(entry, provider, "control")}
+    verdict, reasons = judge_verdicts(
+        entry, phases, head=head, provider=provider, rules=rules, control_only=True
+    )
+    if rehearsal:
+        _say("\n".join([*reasons, f"control: {verdict}"]))
+        verdict = "REHEARSAL OK" if verdict == "PASS" else "REHEARSAL WRONG"
+        _say(f"{verdict}: {name}")
+        return 0 if verdict == "REHEARSAL OK" else 1
+    if verdict == "PASS":
+        texts = edited_files(entry.edits)
+        for path, text in texts.items():
+            (ROOT / path).write_text(text)
+        _sh("git", "--no-pager", "diff", "--", *texts, env=without_keys(os.environ))
+        phases["edited"] = run_phase(entry, provider, "edited")
+        verdict, reasons = judge_verdicts(entry, phases, head=head, provider=provider, rules=rules)
+    _say("\n".join(reasons))
+    _say(f"{verdict}: {name}")
+    return 0 if verdict == "PASS" else 1
+
+
+def run_phase(entry: SwitchedOff, provider: str, phase: str) -> Phase:
+    """One phase: start the stack, run the entry's tests and the answers test, read the record."""
+    env = child_environment(entry, provider, os.environ, phase)
+    for command in stack_commands(entry.stack, provider):
+        _sh(*command, env=env)
+    junit = JUNIT.with_name(f"junit-{phase}.xml")
+    (ROOT / junit).parent.mkdir(exist_ok=True)
+    (ROOT / junit).unlink(missing_ok=True)
+    kept = ROOT / LONG_JOB_RECORDS
+    before = {found.name for found in kept.glob("*")}
+    checked = phase_entry(entry, phase)
+    nodes = [expect.node for expect in checked.expect]
+    pytest = ["uv", "run", "--frozen", "pytest", *LONG_JOB_PYTEST, "-p", "no:cacheprovider"]
+    # A fixed command; the node ids come from the list above.
+    tests = subprocess.run(  # noqa: S603
+        [*pytest, f"--junitxml={junit}", *nodes], cwd=ROOT, check=False, env=env
+    )
+    _say(f"{phase}: pytest exit {tests.returncode}")
+    found = outcomes(ROOT / junit) if (ROOT / junit).is_file() else {}
+    lines = judge(checked, found) if found else ["WRONG: pytest wrote no results"]
+    _say("\n".join(f"{phase}: {line}" for line in lines))
+    records, trouble = new_records(kept, before, LONG_JOB_TEST)
+    return Phase(phase, tuple(lines), tuple(records), tuple(trouble))
+
+
 def main(argv: list[str]) -> int:
     match argv:
         case ["names"]:
@@ -2093,6 +2532,8 @@ def main(argv: list[str]) -> int:
             return _dispatch(name, provider, None)
         case ["dispatch", name, provider, model] if name in ENTRIES:
             return _dispatch(name, provider, model)
+        case ["dispatch", name, provider, model, job] if name in ENTRIES:
+            return _dispatch(name, provider, model, job)
         case ["run", name] if name in ENTRIES:
             return run(name)
         case ["rehearse", name] if name in ENTRIES:
@@ -2104,10 +2545,12 @@ def main(argv: list[str]) -> int:
     return 2
 
 
-def _dispatch(name: str, provider: str, model: str | None) -> int:
-    problem = dispatch_problem(name, provider, model)
+def _dispatch(name: str, provider: str, model: str | None, job: str | None = None) -> int:
+    problem = dispatch_problem(name, provider, model, job)
     if problem is None and (wrong := run_problems(ENTRIES[name])):
         problem = "; ".join(wrong)
+    if problem is None:
+        problem = bound_problem(ENTRIES[name])
     if problem is not None:
         print(f"not started: {problem}", file=sys.stderr)
         return 1

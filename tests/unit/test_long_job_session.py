@@ -687,6 +687,19 @@ def test_a_record_with_no_floor_measured_fails_only_the_test_of_the_floors(
     assert f"AssertionError: {JOB_TESTS['test_the_run_shows_enough']}" in output
 
 
+@pytest.mark.parametrize("clause", ["R2", "R5", "R6", "crash", "runtime"])
+def test_a_runtime_failure_of_the_job_fails_only_the_test_of_the_log(
+    tmp_path: Path, clause: str
+) -> None:
+    """A job the runtime failed (its class "runtime") breaks the log as a crash does."""
+    record = {"clauses": {clause: 1}, "floors": {"made": 7}, "verdict": "FAIL_RUNTIME"}
+    code, output = run_job_tests(tmp_path, record)
+
+    assert code == 1, output[-2000:]
+    assert "1 failed, 4 passed" in output
+    assert f"AssertionError: {JOB_TESTS['test_the_log_holds']}" in output
+
+
 def test_the_tests_of_the_run_collect_without_the_harness() -> None:
     """As the switched-off list collects its tests: with `--noconftest`, off the stack."""
     done = subprocess.run(  # noqa: S603 - a fixed command

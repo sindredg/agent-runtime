@@ -1473,10 +1473,12 @@ def test_every_text_a_switched_off_run_of_the_long_stack_names_is_a_named_text(
     switched_off = importlib.util.module_from_spec(spec)
     sys.modules["switched_off"] = switched_off
     spec.loader.exec_module(switched_off)
+    # The entries of tests/long: the long stack on the fake provider. The one on
+    # the Claude API runs the long-job harness, whose messages are its own.
     named = [
         expect.fails_with
         for entry in switched_off.ENTRIES.values()
-        if entry.stack == "long"
+        if entry.stack == "long" and entry.provider == "fake"
         for expect in entry.expect
         if expect.fails_with is not None
     ]

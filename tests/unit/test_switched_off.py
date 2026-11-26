@@ -145,12 +145,20 @@ KEYED = switched_off.ENTRIES[NAME]
 SENT, ANSWERED, REFUSED = switched_off.SENT, switched_off.ANSWERED, switched_off.REFUSED
 
 
-def test_the_one_entry_on_the_claude_api_is_bounded() -> None:
+def test_each_entry_on_the_claude_api_is_bounded() -> None:
+    """Each by its own bound: the kill runs' here, the long-job harness's in its rules."""
     keyed = {name: e for name, e in switched_off.ENTRIES.items() if e.provider == "claude"}
-    assert list(keyed) == [NAME]
+    assert list(keyed) == [NAME, "long-notices-dropped"]
     assert (KEYED.model, KEYED.stack, KEYED.runs) == ("claude-fable-5-2", "kills", 5)
     assert KEYED.runs * switched_off.kill_rules().TOKEN_BUDGET == switched_off.KEYED_TOKEN_BOUND
     assert KEYED.record == switched_off.Refusals(test="failpoint after_tool_ran", at_least=3)
+    assert switched_off.bound_problem(KEYED) is None
+    long = keyed["long-notices-dropped"]
+    rules = switched_off.long_job_rules()
+    assert (long.model, long.stack, long.runs) == ("claude-haiku-5-5", "long", 2)
+    assert long.record == switched_off.Verdicts(control="PASS", fires=("R7", "R8", "R9"))
+    assert rules.LONG_KEYED_TOKEN_BOUND is None
+    assert switched_off.bound_problem(long) == rules.NO_BOUND
 
 
 IN_THE_CALL = KEYED.expect[0]
@@ -164,8 +172,9 @@ RANDOM_KILLS = replace(
     [
         (replace(KEYED, model="claude-sonnet-5-5"), "the workflow offers no model"),
         (replace(KEYED, model=None), "the workflow offers no model None"),
-        (replace(KEYED, stack="chaos"), "a run on the Claude API uses the kills stack"),
-        (replace(KEYED, stack="long"), "a run on the Claude API uses the kills stack"),
+        (replace(KEYED, stack="chaos"), "a run on the Claude API uses the kills or the long stack"),
+        # The long stack on the Claude API is the long-job harness's, judged by two jobs.
+        (replace(KEYED, stack="long"), "the long stack is judged by `Verdicts`"),
         (replace(KEYED, record=None), "is judged by its record"),
         (replace(KEYED, provider="fake"), "the fake provider takes no model"),
         (replace(KEYED, runs=6), "6 jobs may spend 300000 tokens, over 250000"),
@@ -192,7 +201,7 @@ RANDOM_KILLS = replace(
         ),
         (
             replace(switched_off.ENTRIES["budget-off"], runs=5),
-            "`runs` and `record` are for the kills stack",
+            "`runs` and `record` are for an entry on the Claude API",
         ),
     ],
 )
@@ -765,8 +774,11 @@ def test_the_job_on_the_fake_provider_holds_no_secret() -> None:
     assert not [form for form in SECRET_FORMS[1:] if form in WORKFLOW]
     assert "environment:" not in fake
     assert "SWITCHED_OFF_PROVIDER" not in fake
-    assert WORKFLOW.count("secrets.") == job("claude").count("secrets.") == 3
-    assert WORKFLOW.count("environment: claude-api") == 1
+    # Two jobs hold the key: three steps of the one, five of the long-job job.
+    assert job("claude").count("secrets.") == 3
+    assert job("long-job").count("secrets.") == 5
+    assert WORKFLOW.count("secrets.") == 3 + 5
+    assert WORKFLOW.count("environment: claude-api") == 2
 
 
 def test_a_rehearsal_never_reaches_the_job_with_the_key() -> None:
@@ -780,6 +792,7 @@ def test_a_rehearsal_never_reaches_the_job_with_the_key() -> None:
         "    if: >-\n"
         "      inputs.provider == 'claude' && inputs.suite != 'switched-off-rehearsal'\n"
         "      && inputs.suite != 'switched-off-all' && inputs.suite != 'notify-timing'\n"
+        "      && inputs.suite != 'long-job'\n"
     ) in job("claude")
     assert "make switched-off-rehearsal" in job("fake")
     assert "rehears" not in job("claude").split("    steps:")[1]
@@ -977,6 +990,13 @@ def test_an_edit_of_a_migration_is_made_like_one_of_the_source() -> None:
             [["docker", "compose", "-f", "docker-compose.yml", "-f", "docker-compose.kills.yml",
               "-f", "docker-compose.claude.yml", "up", "--build", "--wait"]],
         ),
+        # As `make long-job-claude`: the long stack with the Claude overlay.
+        (
+            "long",
+            "claude",
+            [["docker", "compose", "-f", "docker-compose.yml", "-f", "docker-compose.long.yml",
+              "-f", "docker-compose.claude.yml", "up", "--build", "--wait"]],
+        ),
         # As `make lab`: the lab's tests start the stack from these images.
         (
             "lab",
@@ -1135,7 +1155,7 @@ def test_the_workflow_reads_the_repository_only_and_keeps_no_credentials() -> No
     assert WORKFLOW.count("permissions:") == 1
     lines = WORKFLOW.splitlines()
     checkouts = [i for i, line in enumerate(lines) if "actions/checkout@" in line]
-    assert len(checkouts) == 4
+    assert len(checkouts) == 5
     for at in checkouts:
         assert [line.strip() for line in lines[at + 1 : at + 3]] == [
             "with:",
@@ -1168,7 +1188,7 @@ def test_an_edit_outside_the_code_and_its_migrations_is_refused(
 
 
 def test_every_entry_edits_the_code_or_its_migrations_only() -> None:
-    assert len(switched_off.ENTRIES) == 54
+    assert len(switched_off.ENTRIES) == 55
     for entry in switched_off.ENTRIES.values():
         assert switched_off.edit_path_problems(entry) == []
     paths = {edit.path for e in switched_off.ENTRIES.values() for edit in e.edits}
