@@ -138,7 +138,7 @@ def git(repo: Path, *args: str) -> None:
     )
 
 
-def run_step(repo: Path, event: str) -> str:
+def run_step(repo: Path, event: str, base: str = "main") -> str:
     """Run the `changes` step's own text in `repo` and return what it wrote for the job."""
     output = repo / "output.txt"
     output.write_text("")
@@ -146,7 +146,7 @@ def run_step(repo: Path, event: str) -> str:
     subprocess.run(  # noqa: S603 - the workflow's own step
         ["bash", "-e", "-c", script],  # noqa: S607
         cwd=repo,
-        env={"PATH": "/usr/bin:/bin", "EVENT": event, "GITHUB_OUTPUT": str(output)},
+        env={"PATH": "/usr/bin:/bin", "EVENT": event, "BASE": base, "GITHUB_OUTPUT": str(output)},
         check=True,
         capture_output=True,
         timeout=30,
@@ -184,6 +184,10 @@ def test_a_push_and_a_diff_that_fails_run_everything(repo: Path) -> None:
     (repo / "docs" / "a.md").write_text("two\n")
     git(repo, "commit", "-q", "-am", "docs")
     assert run_step(repo, "push") == "code=true\n"
+    # Into another branch: its base can change later without a new run.
+    assert run_step(repo, "pull_request", base="feature") == "code=true\n"
+    assert run_step(repo, "pull_request", base="") == "code=true\n"
+    assert run_step(repo, "pull_request") == "code=false\n"
 
 
 def test_the_stack_jobs_are_gated_and_skip_only_on_an_explicit_false() -> None:
@@ -225,19 +229,35 @@ def long_split() -> list[list[str]]:
     return parts
 
 
-def test_every_test_of_the_long_suite_runs_on_exactly_one_runner() -> None:
+# The test that judges the uninterrupted job the others are compared with.
+JUDGE = "test_a_job_longer_than_the_window_finishes_through_three_summaries"
+
+
+def test_every_long_test_runs_once_and_each_runner_judges_its_reference() -> None:
+    # One file: `make long` names tests of this file only.
+    assert sorted(path.name for path in LONG_TESTS.parent.glob("test_*.py")) == [LONG_TESTS.name]
     tree = ast.parse(LONG_TESTS.read_text())
-    tests = [
-        node.name
+    functions = [
+        node
         for node in tree.body
         if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")
     ]
+    tests = [node.name for node in functions]
+    compared = {node.name for node in functions if "baseline" in {a.arg for a in node.args.args}}
     parts = long_split()
     listed = [name for part in parts for name in part]
     assert len(parts) == 3
     assert all(parts)
-    assert sorted(listed) == sorted(tests)
     assert len(tests) == 8
+    assert set(listed) == set(tests)
+    # Each runner builds its own reference, so each runner that compares with one judges it.
+    assert JUDGE in compared
+    for part in parts:
+        assert len(part) == len(set(part))
+        if set(part) & compared:
+            assert JUDGE in part, part
+    others = [name for name in listed if name != JUDGE]
+    assert len(others) == len(set(others))
     assert "          LONG_TESTS: ${{ matrix.tests }}" in jobs()["long"]
 
 

@@ -34,14 +34,17 @@ jobs:
           persist-credentials: false
           fetch-depth: 2
       # A pull request is checked out as its merge commit, whose first parent
-      # is the base. --no-renames lists a moved file's old path too. A push
-      # to main runs everything. scripts/ci_paths.py prints the output.
+      # is the base. --no-renames lists a moved file's old path too. Only a
+      # pull request into main may skip: a change of base does not run CI
+      # again, so one into another branch runs everything. A push to main
+      # runs everything. scripts/ci_paths.py prints the output.
       - name: Paths outside the docs
         id: paths
         env:
           EVENT: ${{ github.event_name }}
+          BASE: ${{ github.base_ref }}
         run: |
-          if [ "$EVENT" = pull_request ]; then
+          if [ "$EVENT" = pull_request ] && [ "$BASE" = main ]; then
             git diff --name-only --no-renames HEAD^1 HEAD \
               | python3 -I scripts/ci_paths.py >> "$GITHUB_OUTPUT"
           else
@@ -424,18 +427,20 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 60
     # The suite's tests split over three runners. Each runner starts its own
-    # stack and runs its own uninterrupted job to compare with. The planned
-    # kills alone take about 13 minutes. tests/unit/test_ci_jobs.py checks
-    # that every test of tests/long runs on exactly one runner.
+    # stack and runs its own uninterrupted job to compare with, so each also
+    # runs the test that judges that job. The planned kills alone take about
+    # 13 minutes. tests/unit/test_ci_jobs.py checks the split.
     strategy:
       fail-fast: false
       matrix:
         include:
           - part: planned kills
             tests: >-
+              test_a_job_longer_than_the_window_finishes_through_three_summaries
               test_jobs_killed_at_planned_requests_send_what_the_uninterrupted_job_sent
           - part: tracker numbers and takeovers
             tests: >-
+              test_a_job_longer_than_the_window_finishes_through_three_summaries
               test_issue_numbers_of_the_same_width_move_no_summary_and_a_wider_number_does
               test_a_takeover_by_workers_with_another_trigger_sends_what_the_first_would_have
           - part: summaries
