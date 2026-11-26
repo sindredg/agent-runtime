@@ -505,7 +505,7 @@ class Stack:
             )
 
     def up(self) -> None:
-        """The whole stack on the session's scenario, the fake's trigger and the failpoint."""
+        """The whole stack with the run's settings: see `compose`."""
         self.compose("up", "--detach", "--wait", "--no-build")
         self.containers = list(self.workers())
 

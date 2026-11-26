@@ -242,7 +242,7 @@ def test_the_job_with_the_key_uses_no_uv_cache(job: Any) -> None:
 
 
 def long_job_claude(
-    tmp_path: Path, model: str | None, *, check_exit: int = 0
+    tmp_path: Path, model: str | None, *, check_exit: int = 0, mode: str | None = None
 ) -> tuple[int, list[str], bool]:
     """Run `make long-job-claude` with a stub uv and a stub docker.
 
@@ -272,6 +272,7 @@ def long_job_claude(
         cwd=ROOT,
         env={
             **{k: v for k, v in os.environ.items() if not k.startswith("LONG_JOB_")},
+            **({} if mode is None else {"LONG_JOB_MODE": mode}),
             "PATH": f"{stub}:{os.environ['PATH']}",
             "DOCKER_GID": "0",
         },
@@ -302,6 +303,13 @@ def test_make_long_job_claude_refuses_another_model_before_docker(
     assert code != 0
     assert called == ["uv python scripts/long_job_keyed.py check provider=claude phase="]
     assert not injected
+
+
+def test_make_long_job_claude_refuses_mode_must_fail_before_docker(tmp_path: Path) -> None:
+    """Mode must-fail runs only as the list's entry, with its control, its edit and its judge."""
+    code, called, _ = long_job_claude(tmp_path, "claude-haiku-5-5", mode="must-fail")
+    assert code != 0
+    assert called == ["uv python scripts/long_job_keyed.py check provider=claude phase="]
 
 
 def test_make_code_in_the_long_jobs_model_name_runs_nothing(tmp_path: Path) -> None:

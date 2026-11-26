@@ -65,7 +65,8 @@ long-job: long-up
 
 # The harness on the Claude API: the long stack with docker-compose.claude.yml
 # on top, the model named here, the seed of LONG_JOB_SEED and the mode of
-# LONG_JOB_MODE: `make long-job-claude LONG_JOB_MODEL=claude-haiku-5-5`.
+# LONG_JOB_MODE, counts or graded: `make long-job-claude LONG_JOB_MODEL=claude-haiku-5-5`.
+# Mode must-fail runs only as the list's entry, through `make switched-off`.
 # Every job costs money. Needs CLAUDE_API_KEY in the environment: the workers
 # get it through the overlay, and mode graded counts the job's text with it.
 # The first line asks scripts/long_job_keyed.py for the run's refusals,
@@ -75,9 +76,9 @@ long-job: long-up
 long-job-claude:
 	LONG_JOB_PROVIDER=claude uv run --frozen python scripts/long_job_keyed.py check
 	@case "$$LONG_JOB_MODEL" in claude-haiku-5-5) ;; *) echo "Name the model: make long-job-claude LONG_JOB_MODEL=claude-haiku-5-5" >&2; exit 1;; esac
+	@case "$$LONG_JOB_MODE" in must-fail) echo "Mode must-fail runs as the list's entry: make switched-off SWITCHED_OFF=long-notices-dropped" >&2; exit 1;; esac
 	docker compose -f docker-compose.yml -f docker-compose.long.yml -f docker-compose.claude.yml up --build --wait
-	LONG_JOB_PROVIDER=claude LONG_JOB_PHASE=control \
-		uv run --frozen pytest -v --tb=short tests/long_job
+	LONG_JOB_PROVIDER=claude LONG_JOB_PHASE=control uv run --frozen pytest -v --tb=short tests/long_job
 
 # Stop the services and keep the database volume.
 down:

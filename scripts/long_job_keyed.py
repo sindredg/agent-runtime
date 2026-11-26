@@ -34,7 +34,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 SUITE = Path("tests/long_job")
 NOT_CLAUDE = "corpus-count runs on the Claude API only: LONG_JOB_PROVIDER is not claude."
-SDK_SETTINGS = ("ANTHROPIC_LOG", "ANTHROPIC_BASE_URL")
+INDEX = "index.txt"
 
 
 def suite(name: str, root: Path = ROOT) -> ModuleType:
@@ -84,7 +84,9 @@ def corpus_refusals(env: Mapping[str, str], root: Path, rules: ModuleType) -> li
 
 def corpus_steps(files: Mapping[str, str]) -> list[dict[str, Any]]:
     """The corpus of a job, the index left out, as the tool results of reading it in order."""
-    corpus = list(files.values())[1:]
+    if INDEX not in files:
+        raise ValueError(f"the job has no {INDEX}")
+    corpus = [text for name, text in files.items() if name != INDEX]
     return [
         {"seq": seq, "kind": "tool_result", "payload": {"content": text, "is_error": False}}
         for seq, text in enumerate(corpus, start=1)
@@ -125,7 +127,7 @@ def corpus_count(env: Mapping[str, str], root: Path = ROOT) -> int:
 
 def main(argv: list[str]) -> int:
     # Settings of the SDK a count would otherwise read: a request log, another address.
-    for name in SDK_SETTINGS:
+    for name in suite("counting").SDK_SETTINGS:
         os.environ.pop(name, None)
     match argv:
         case ["check"]:

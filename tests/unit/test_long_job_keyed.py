@@ -200,6 +200,15 @@ def test_an_open_corpus_count_builds_the_client_once_and_prints_the_count_only(
     assert NOT_A_KEY not in printed.out
 
 
+def test_the_corpus_is_every_file_but_the_index_in_its_order() -> None:
+    files = {"access/0001.txt": "one", "index.txt": "the list", "access/0002.txt": "two"}
+    steps = keyed.corpus_steps(files)
+    assert [step["payload"]["content"] for step in steps] == ["one", "two"]
+    assert [step["seq"] for step in steps] == [1, 2]
+    with pytest.raises(ValueError, match=r"no index\.txt"):
+        keyed.corpus_steps({"access/0001.txt": "one"})
+
+
 def test_a_corpus_under_the_floor_or_a_failed_count_exits_1_with_counts_only(
     modules: Modules,
     recorder: type[Recorder],
