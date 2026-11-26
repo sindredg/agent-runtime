@@ -8,7 +8,7 @@ The table with one line per guarantee is in the
 
 - [Durability](durability.md): lost workers, unsafe calls, the step log.
 - [Scope and sandbox](sandbox.md): what a tool can reach.
-- [Budget, approval, backoff, tool output](controls.md): what a job may do.
+- [Budget, approval, backoff, tool output, the repeat stop](controls.md): what a job may do.
 - [Switched-off runs](switched-off.md): each mechanism removed, and the result.
 - [A parked job tells the operator](notify.md): the question to `NOTIFY_URL`.
 
