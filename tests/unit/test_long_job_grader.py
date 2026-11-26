@@ -729,7 +729,7 @@ def test_a_failure_of_the_runtime_beside_a_spend_cap_wins_and_both_are_listed(
     assert found.verdict == "FAIL_RUNTIME"
 
 
-def test_a_grading_error_is_inconclusive_and_a_void_of_the_run_still_wins(
+def test_a_grading_error_is_inconclusive_unless_the_harness_saw_a_runtime_failure_or_a_void(
     grader: ModuleType,
 ) -> None:
     def ungraded(voids: tuple[str, ...] = (), crashed: bool = False, verify: int = 0) -> Any:

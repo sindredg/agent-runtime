@@ -1166,6 +1166,16 @@ def test_an_error_inside_grading_beside_a_void_of_the_run_is_void_with_both_list
         SimpleNamespace(),
     )
     assert (alone["verdict"], alone["clauses"]) == ("INCONCLUSIVE", {"grading_error": 1})
+    failed_verify = harness.record_line(
+        stack(harness, tmp_path / "verify", Docker(), Api()),
+        harness.rules.SHORT,
+        harness.Seen(verify=1),
+        SimpleNamespace(),
+    )
+    assert (failed_verify["verdict"], failed_verify["clauses"]) == (
+        "FAIL_RUNTIME",
+        {"R2": 1, "grading_error": 1},
+    )
     seen = harness.Seen(harness_error="TimeoutError", voids=["harness_error"])
     found = stack(harness, tmp_path, Docker(), Api())
     record = harness.record_line(found, harness.rules.SHORT, seen, SimpleNamespace())
