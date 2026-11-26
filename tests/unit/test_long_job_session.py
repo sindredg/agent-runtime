@@ -316,8 +316,8 @@ def test_the_stack_is_started_with_every_setting_of_the_run(
     }
     assert [path.name for path in scenarios.iterdir()] == ["fake-long-job.json"]
     scenario = json.loads((scenarios / "fake-long-job.json").read_text())
-    assert scenario["summary"]["delay_seconds"] == 2.0
-    assert {turn["delay_seconds"] for turn in scenario["turns"]} == {2.0}
+    assert scenario["summary"].get("delay_seconds") == 2.0
+    assert {turn.get("delay_seconds") for turn in scenario["turns"]} == {2.0}
 
 
 def test_the_fake_run_never_reads_the_seed_of_the_environment(
@@ -565,31 +565,19 @@ def test_make_long_job_runs_the_fake_provider_must_fail_control_with_short_trace
     assert "LONG_JOB_SEED" not in recipe
 
 
-def test_the_jobs_own_tests_print_their_messages_and_nothing_of_the_job(
-    review: Any, tmp_path: Path
-) -> None:
-    """The five tests run as `make long-job` runs them, on a record that fails each one.
+def run_job_tests(directory: Path, record: Mapping[str, Any]) -> tuple[int, str]:
+    """Run the five tests of the job's own as `make long-job` runs them, on `record`.
 
-    The record also holds an id, the code and a title. None of them is in
-    the output: each test binds a count, and the traceback is short.
+    The record comes from a plugin of the test's own, in place of the harness.
     """
-    key = answer_key(review)
-    title = f"{key.made[0]}: access to remove, {review.reference_code}"
-    record = {
-        "clauses": {"R7": 3, "R8": 2, "R9": 1, "R5": 1, "floor_made": 1},
-        "floors": {"made": 5},
-        "verdict": "FAIL_RUNTIME",
-        "provider": "fake provider",
-        "note": [key.cleared[0], review.reference_code, title],
-    }
-    (tmp_path / "sample_record.py").write_text(
+    (directory / "sample_record.py").write_text(
         "import json\n\nimport pytest\n\n\n@pytest.fixture\n"
         "def record() -> dict[str, object]:\n"
         f"    return json.loads({json.dumps(json.dumps(record))})\n"
     )
     env = {
         **{name: value for name, value in os.environ.items() if not name.startswith("PYTEST_")},
-        "PYTHONPATH": os.pathsep.join([str(tmp_path), os.environ.get("PYTHONPATH", "")]),
+        "PYTHONPATH": os.pathsep.join([str(directory), os.environ.get("PYTHONPATH", "")]),
     }
     done = subprocess.run(  # noqa: S603 - the test's own command
         [
@@ -611,15 +599,47 @@ def test_the_jobs_own_tests_print_their_messages_and_nothing_of_the_job(
         env=env,
         timeout=120,
     )
-    output = done.stdout + done.stderr
+    return done.returncode, done.stdout + done.stderr
 
-    assert done.returncode == 1, output[-2000:]
+
+def test_the_jobs_own_tests_print_their_messages_and_nothing_of_the_job(
+    review: Any, tmp_path: Path
+) -> None:
+    """On a record that fails each of the five tests.
+
+    The record also holds an id, the code and a title. None of them is in
+    the output: each test binds a count, and the traceback is short.
+    """
+    key = answer_key(review)
+    title = f"{key.made[0]}: access to remove, {review.reference_code}"
+    record = {
+        "clauses": {"R7": 3, "R8": 2, "R9": 1, "R5": 1, "floor_made": 1},
+        "floors": {"made": 5},
+        "verdict": "FAIL_RUNTIME",
+        "provider": "fake provider",
+        "note": [key.cleared[0], review.reference_code, title],
+    }
+    code, output = run_job_tests(tmp_path, record)
+
+    assert code == 1, output[-2000:]
     assert "5 failed" in output
     for message in JOB_TESTS.values():
         assert f"AssertionError: {message}" in output
     leaked = [text for text in (key.cleared[0], review.reference_code, title) if text in output]
     assert leaked == []
     assert "assert 3 == 0" in output
+
+
+def test_a_record_with_no_floor_measured_fails_only_the_test_of_the_floors(
+    tmp_path: Path,
+) -> None:
+    """A void run before the job could be graded: no clause but its void, and no floors."""
+    record = {"clauses": {"void_harness_error": 1}, "floors": {}, "verdict": "VOID"}
+    code, output = run_job_tests(tmp_path, record)
+
+    assert code == 1, output[-2000:]
+    assert "1 failed, 4 passed" in output
+    assert f"AssertionError: {JOB_TESTS['test_the_run_shows_enough']}" in output
 
 
 def test_the_tests_of_the_run_collect_without_the_harness() -> None:

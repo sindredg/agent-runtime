@@ -451,6 +451,8 @@ class Stack:
 
     def wrong_workers(self) -> str | None:
         """Why the running workers are not all on the run's provider with the lease, or None."""
+        if self.provider not in URLS:
+            return "the run names no provider this harness knows"
         running = [c for c, state in self.workers().items() if state == "running"]
         if not running:
             return "no worker is running"
