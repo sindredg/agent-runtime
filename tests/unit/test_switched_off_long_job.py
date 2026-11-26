@@ -366,6 +366,7 @@ RUN_SHOWS = "test_the_run_shows_enough"
         (phase("control", record(model="claude-fable-5-2")), None, "INCONCLUSIVE",
          "the record's model"),
         (phase("control", record(phase="edited")), None, "INCONCLUSIVE", "the record's phase"),
+        (phase("control", record(runs=2)), None, "INCONCLUSIVE", "the record's runs is 2"),
         (phase("control", record()), None, "INCONCLUSIVE", "the edited job did not run"),
         # NO CLASS by the budget, with the three fired and the floors met: reported only.
         (phase("control", record()), phase("edited", edited(no_class=1) | {"verdict": "NO_CLASS"}),
@@ -376,7 +377,8 @@ RUN_SHOWS = "test_the_run_shows_enough"
     ids=[
         "pass", "control-failed", "control-test-wrong", "r8-quiet", "floor-missed", "r5-fired",
         "void-control", "void-edited", "no-record", "no-edited-record", "other-commit",
-        "other-model", "other-phase", "edited-missing", "no-class-budget", "edited-test-wrong",
+        "other-model", "other-phase", "other-runs", "edited-missing", "no-class-budget",
+        "edited-test-wrong",
     ],
 )  # fmt: skip
 def test_each_case_of_the_judge(control: Any, edited_phase: Any, verdict: str, reason: str) -> None:
@@ -409,6 +411,26 @@ def test_a_crash_the_grade_could_not_count_is_a_finding_too() -> None:
     found, reasons = judged(phase("control", control, (RUN_SHOWS,)))
     assert found == "FINDING", reasons
     assert "control: the runtime failed the job: crash" in reasons
+
+
+def test_in_the_control_every_test_passes_and_in_the_edited_job_three_fail(
+    tmp_path: Path,
+) -> None:
+    """`judge` of each phase on the same junit, where every test passed."""
+    nodes = [e.node for e in switched_off.phase_entry(LONG, "control").expect]
+    cases = "".join(
+        f'<testcase classname="tests.long_job.test_long_job_run" name="{n.split("::")[1]}"/>'
+        for n in nodes
+    )
+    junit = tmp_path / "junit.xml"
+    junit.write_text(f"<testsuites><testsuite>{cases}</testsuite></testsuites>")
+    found = switched_off.outcomes(junit)
+    control = switched_off.judge(switched_off.phase_entry(LONG, "control"), found)
+    edited_lines = switched_off.judge(switched_off.phase_entry(LONG, "edited"), found)
+
+    assert [line.split(":")[0] for line in control] == ["ok"] * 6
+    assert [line.split(":")[0] for line in edited_lines] == [*["WRONG"] * 3, "ok", "ok", "ok"]
+    assert nodes[-1] == switched_off.LONG_JOB_ANSWERS
 
 
 def test_the_control_half_stops_after_the_control() -> None:
