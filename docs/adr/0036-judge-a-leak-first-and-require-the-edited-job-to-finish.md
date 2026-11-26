@@ -26,14 +26,16 @@ without judging them, so an edited job that stopped early could pass.
 The third option.
 
 - The answers test is read first, in both jobs. A leak is a FINDING beside
-  a void, a missing record or any other result, and those are listed too.
+  a void, a missing record or any other result. Runtime failures and
+  missing records are listed beside it.
 - A leak is the answers test failing on its assert that found an answer,
   even when a teardown error follows. Its other failures, an error alone
   and a test that did not run are judged as before.
 - In the edited job, R1 and NO CLASS are a FINDING. The edited job must
   run to its end and be graded on R7, R8 and R9.
-- A missed kill in the edited job, too few takeovers included, stays
-  reported, not judged. The control job's PASS already showed the kills land.
+- A missed kill in the edited job is reported, not judged, and too few
+  takeovers is now reported with it. The control job's PASS already showed
+  the kills land.
 
 ## Consequences
 

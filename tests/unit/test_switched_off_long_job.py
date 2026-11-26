@@ -351,7 +351,7 @@ RUN_SHOWS = "test_the_run_shows_enough"
 ANSWERS = switched_off.LONG_JOB_ANSWERS.split("::")[1]
 LEAK = "an answer of the job is in what the session printed, recorded or kept"
 VOID_CONTROL = record(verdict="VOID", clauses={"void_clock": 1}, floors={}, voids=["clock"])
-# A record whose grade threw: no class, only the grading error.
+# A record whose grade threw: only the grading error, no clause of the job.
 GRADING_ERROR: dict[str, Any] = {
     "verdict": "INCONCLUSIVE",
     "clauses": {"grading_error": 1},
@@ -488,6 +488,20 @@ def test_the_control_half_stops_after_the_control() -> None:
     assert judged(phase("control", record(verdict="INCONCLUSIVE")), control_only=True)[0] == (
         "FINDING"
     )
+    # A run asks the control half alone first: a leak beside a void is judged there too.
+    leaked = phase("control", VOID_CONTROL, (RUN_SHOWS, ANSWERS), leaked=True)
+    assert judged(leaked, control_only=True)[0] == "FINDING"
+
+
+def test_a_leak_lists_beside_it_what_else_the_jobs_show() -> None:
+    runtime = phase(
+        "control", record(verdict="FAIL_RUNTIME", clauses={"R5": 1}), (ANSWERS,), leaked=True
+    )
+    _, reasons = judged(runtime)
+    assert "control: the runtime failed the job: R5" in reasons
+    other_run = phase("edited", record("edited", commit="fedcba9"), (ANSWERS,), leaked=True)
+    _, reasons = judged(phase("control", record()), other_run)
+    assert any(line.startswith("edited: the record's commit is 'fedcba9'") for line in reasons)
 
 
 def test_the_judge_prints_counts_and_fixed_names_only() -> None:
@@ -687,6 +701,26 @@ def test_a_phase_is_leaked_only_when_the_answers_test_failed_on_a_found_answer(
     found = switched_off.run_phase(LONG, "fake", "control")
 
     assert found.leaked is (case in ("found", "teardown-error-after-leak"))
+
+
+def answers_junit(tmp_path: Path, name: str, child: str) -> Path:
+    junit = tmp_path / "junit.xml"
+    case = (
+        f'<testcase classname="tests.long_job.test_long_job_run" name="{name}">{child}</testcase>'
+    )
+    junit.write_text(f"<testsuites><testsuite>{case}</testsuite></testsuites>")
+    return junit
+
+
+def test_a_found_answer_counts_only_in_the_answers_test_and_also_in_its_text(
+    tmp_path: Path,
+) -> None:
+    answers = switched_off.LONG_JOB_ANSWERS.split("::")[1]
+    in_text = f'<failure message="AssertionError">{switched_off.ANSWER_FOUND}</failure>'
+    assert switched_off.answers_leaked(answers_junit(tmp_path, answers, in_text)) is True
+    other = answers_junit(tmp_path, "test_the_log_holds", FOUND_FAILURE)
+    assert switched_off.answers_leaked(other) is False
+    assert switched_off.answers_leaked(tmp_path / "missing.xml") is False
 
 
 # The rehearsal: the control only, on the fake provider, and the bound not asked
