@@ -738,6 +738,8 @@ def test_a_grading_error_is_inconclusive_and_a_void_of_the_run_still_wins(
     assert (alone.verdict, names(alone)) == ("INCONCLUSIVE", ["grading_error"])
     assert (beside.verdict, names(beside)) == ("VOID", ["void_tracker_restart", "grading_error"])
     assert (alone.floors, alone.counts) == ({}, {})
+    # Only the harness's own causes: a cause the grader reads from the job is not taken.
+    assert names(grader.ungraded(("spend_cap",))) == ["grading_error"]
 
 
 def test_a_failure_wins_over_a_missed_floor_which_is_still_listed(

@@ -426,6 +426,7 @@ def test_the_record_names_its_run(
     )
     assert record["seed"] == "committed"
     assert record["where"] in ("local Docker Compose", "GitHub Actions")
+    assert record["grading_error"] is None
 
 
 def test_the_record_and_its_printed_line_hold_no_workflow_command(
@@ -1137,9 +1138,12 @@ def test_an_error_inside_grading_is_inconclusive_and_kept_as_its_type_only(
 ) -> None:
     monkeypatch.setattr(harness, "graded", grading_fails)
     found = stack(harness, tmp_path, Docker(), Api())
-    record = harness.record_line(found, harness.rules.SHORT, harness.Seen(), SimpleNamespace())
+    seen = harness.Seen(crashed=True)
+    record = harness.record_line(found, harness.rules.SHORT, seen, SimpleNamespace())
 
     assert (record["verdict"], record["clauses"]) == ("INCONCLUSIVE", {"grading_error": 1})
+    # No clause of the job is known: the crash stays in the record's field.
+    assert record["crashed"] is True
     assert (record["grading_error"], record["harness_error"], record["voids"]) == (
         "KeyError",
         None,

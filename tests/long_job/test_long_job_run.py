@@ -8,7 +8,9 @@ the message and nothing of the job. They run in modes `must-fail` and
 The next test holds the fake provider's run to its pass line, and the one
 after it a `graded` run to PASS: any other verdict, VOID included, is red.
 The test of mode `counts` asks only that every job ended and was recorded.
-The last looks for the job's answers in every mode and on both providers.
+
+The last looks for the job's answers in what the session printed, recorded
+and kept, in every mode and on both providers.
 
 The session's jobs run once, when the first test asks for their records.
 """

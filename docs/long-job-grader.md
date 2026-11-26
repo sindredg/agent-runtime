@@ -31,8 +31,8 @@ failed job with no request and a spend cap.
 
 - A spend cap's `counts.site` names its form: `spend_cap` for a 429 answer,
   `stream_spend_cap` for one inside a stream.
-- On a job that did not succeed, R3, R7, R8 and R9 are still listed. They
-  are no evidence about the model.
+- On a job that did not succeed, R7, R8 and R9 are still listed. They are
+  no evidence about the model.
 
 ## Counted grants and titles
 
@@ -61,7 +61,7 @@ When no failure holds, the run must still show enough:
 - `runtime verify` exits 0 or 1;
 - grading did not raise. An error inside grading lists `grading_error` and
   keeps its type name in the record's field of that name. A void of the run
-  still wins.
+  still wins. A crash beside it shows only in the record's `crashed` field.
 
 ## The count
 
