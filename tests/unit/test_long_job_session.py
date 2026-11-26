@@ -253,9 +253,14 @@ def test_a_session_stops_with_a_sentence_when_docker_does_not_answer(
     class Session:
         config = Config()
 
-    with pytest.raises(pytest.exit.Exception) as stopped:
+    try:
         harness.pytest_sessionstart(Session())
-    assert str(stopped.value.msg) == "Not run: Docker did not answer (RuntimeError)."
+        said = "the session started"
+    except pytest.exit.Exception as stopped:
+        said = str(stopped.msg)
+    except Exception as error:
+        said = f"{type(error).__name__} escaped"
+    assert said == "Not run: Docker did not answer (RuntimeError)."
 
 
 # Where the session's clock starts
