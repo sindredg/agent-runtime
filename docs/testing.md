@@ -1,6 +1,6 @@
 # Testing
 
-Nine suites, each with its own needs. Nothing here calls a paid API except
+Nine suites, each with what it needs. Nothing here calls a paid API except
 the contract test, `make kills-claude` and `make long-job-claude`, which are
 started by hand ([ADR 0020](adr/0020-run-recorded-kill-and-api-runs-in-a-manual-workflow.md)).
 
