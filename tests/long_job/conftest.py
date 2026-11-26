@@ -782,7 +782,7 @@ def record_line(
         "commit": commit(),
         "at": datetime.now(UTC).isoformat(timespec="seconds"),
         "provider": PROVIDER_NAMES[stack.provider],
-        "model": rules.FAKE_MODEL,
+        "model": rules.MODEL if stack.provider == rules.CLAUDE else rules.FAKE_MODEL,
         "workers": WORKERS,
         "lease_seconds": LEASE,
         "token_budget": line.budget_cap,
@@ -854,7 +854,14 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     stack = Stack(
         directory, provider=provider, mode=os.environ[rules.MODE], phase=os.environ[PHASE]
     )
-    wrong = stack.wrong_workers()
+    try:
+        wrong = stack.wrong_workers()
+    except FAILED as error:
+        stack.hang_up()
+        pytest.exit(
+            f"Not run: Docker did not answer ({type(error).__name__}).",
+            returncode=pytest.ExitCode.USAGE_ERROR,
+        )
     if wrong is not None:
         stack.hang_up()
         pytest.exit(

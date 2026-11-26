@@ -237,6 +237,27 @@ def test_a_session_that_may_start_checks_the_workers_first(
     assert [call[:2] for call in docker.calls] == [("docker", "ps"), ("docker", "exec")]
 
 
+def test_a_session_stops_with_a_sentence_when_docker_does_not_answer(
+    harness: ModuleType, clean_env: pytest.MonkeyPatch
+) -> None:
+    must_fail_env(clean_env)
+
+    def broken(*args: str, **_: Any) -> str:
+        raise RuntimeError(f"{' '.join(args[:3])} ... exited 1")
+
+    clean_env.setattr(harness, "docker", broken)
+
+    class Config:
+        stash = pytest.Stash()
+
+    class Session:
+        config = Config()
+
+    with pytest.raises(pytest.exit.Exception) as stopped:
+        harness.pytest_sessionstart(Session())
+    assert str(stopped.value.msg) == "Not run: Docker did not answer (RuntimeError)."
+
+
 # Where the session's clock starts
 
 
@@ -378,6 +399,13 @@ def test_the_record_names_its_run(
         "shape": "short",
     }
     assert (record["provider"], record["model"]) == ("fake provider", "fake-long-job")
+    keyed = harness.record_line(
+        stack(harness, tmp_path / "keyed", Docker(), Api(), provider="claude"),
+        harness.rules.SHORT,
+        harness.Seen(),
+        None,
+    )
+    assert (keyed["provider"], keyed["model"]) == ("Claude API", "claude-haiku-5-5")
     assert (record["workers"], record["lease_seconds"], record["token_budget"]) == (
         2,
         30.0,
