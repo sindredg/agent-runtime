@@ -45,8 +45,9 @@ Defensive jobs over synthetic data first.
 - The access review runs with no sandbox: it reads files and opens issues,
   with no shell and no target, and no call waits on the approval gate. It
   exercises neither the target scope nor the gate; both keep their own tests
-  ([APTS table](../apts.md)). `runtime verify` runs on every graded job.
-- The log investigation is planned, not built. It reads text an attacker
+  ([APTS table](../apts.md)). `runtime verify` runs on every graded job, so
+  it exercises the step log.
+- The log investigation is planned, not built. It will read text an attacker
   could have written. What such text can change is tested on the fake
   provider ([Tool calls](../limits.md#tool-calls)); the run on a real model
   is open ([issue 160](https://github.com/sindredg/agent-runtime/issues/160)).
