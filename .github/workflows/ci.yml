@@ -16,7 +16,38 @@ concurrency:
 # token made in the step, unless it prints nothing from the stack or the
 # tests. setup-uv runs without its problem matchers.
 # tests/unit/test_workflow_commands.py checks both.
+#
+# A pull request that changes only files under docs/ runs the lint jobs and
+# `changes`, and skips the jobs that build or start the stack. A job skipped
+# by its `if` reports success, so the required checks still report. The gate
+# skips only on an explicit `false`: if `changes` fails, everything runs.
+# tests/unit/test_ci_jobs.py checks which jobs are gated.
 jobs:
+  changes:
+    name: Paths the change touches
+    runs-on: ubuntu-26.04
+    outputs:
+      code: ${{ steps.paths.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      # A pull request is checked out as its merge commit, whose first parent
+      # is the base. --no-renames lists a moved file's old path too. A push
+      # to main runs everything. scripts/ci_paths.py prints the output.
+      - name: Paths outside the docs
+        id: paths
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            git diff --name-only --no-renames HEAD^1 HEAD \
+              | python3 -I scripts/ci_paths.py >> "$GITHUB_OUTPUT"
+          else
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          fi
+
   python:
     name: Python lint, types and tests
     runs-on: ubuntu-26.04
@@ -85,6 +116,8 @@ jobs:
 
   stack:
     name: Images and compose stack
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-26.04
     env:
       # Checksums are copied from each release's checksum file, so a replaced
@@ -154,6 +187,8 @@ jobs:
 
   integration:
     name: Integration tests
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -200,6 +235,8 @@ jobs:
 
   escape:
     name: Escape tests
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -223,6 +260,8 @@ jobs:
 
   chaos:
     name: Chaos tests (short run)
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     env:
@@ -274,6 +313,8 @@ jobs:
 
   lab:
     name: Lab demo
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
@@ -326,6 +367,8 @@ jobs:
 
   kills:
     name: Kill runs (fake provider)
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
@@ -375,9 +418,33 @@ jobs:
         run: make clean
 
   long:
-    name: Long job (fake provider)
+    name: Long job (fake provider, ${{ matrix.part }})
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 60
+    # The suite's tests split over three runners. Each runner starts its own
+    # stack and runs its own uninterrupted job to compare with. The planned
+    # kills alone take about 13 minutes. tests/unit/test_ci_jobs.py checks
+    # that every test of tests/long runs on exactly one runner.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - part: planned kills
+            tests: >-
+              test_jobs_killed_at_planned_requests_send_what_the_uninterrupted_job_sent
+          - part: tracker numbers and takeovers
+            tests: >-
+              test_issue_numbers_of_the_same_width_move_no_summary_and_a_wider_number_does
+              test_a_takeover_by_workers_with_another_trigger_sends_what_the_first_would_have
+          - part: summaries
+            tests: >-
+              test_a_job_longer_than_the_window_finishes_through_three_summaries
+              test_a_job_stopped_after_its_first_summary_sends_what_the_uninterrupted_job_sent
+              test_a_job_stopped_at_a_summary_request_sends_what_the_uninterrupted_job_sent
+              test_a_bad_summary_answer_fails_the_job_and_nothing_runs_after_it
+              test_a_window_that_opens_at_the_trigger_fails_the_job_for_it
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -398,6 +465,8 @@ jobs:
       # with bad summary answers, other issue numbers and other triggers.
       # Every request the fake provider got is compared with the first run's.
       - name: Long job
+        env:
+          LONG_TESTS: ${{ matrix.tests }}
         run: |
           exec 2>&1
           token=$(openssl rand -hex 16)
@@ -429,6 +498,8 @@ jobs:
 
   long-job:
     name: Long job harness (fake provider)
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
