@@ -281,6 +281,12 @@ def reads(steps: Steps, corpus: Mapping[str, int] | None = None) -> dict[str, li
     return found
 
 
+def holds_code(title: str, code: str) -> bool:
+    """Whether a title holds the reference code as it is, between characters that are not ASCII
+    letters or digits."""
+    return re.search(rf"(?<![A-Za-z0-9]){re.escape(code)}(?![A-Za-z0-9])", title) is not None
+
+
 def held_ids(title: str, grants: frozenset[str]) -> set[str]:
     """The known grant ids a title holds, each as a whole token."""
     return set(_NOT_TOKEN.split(title)) & grants
@@ -313,7 +319,7 @@ def filed(log: Log, known: Answers) -> list[Filed]:
             Filed(
                 operation=operation,
                 ids=frozenset(held_ids(title, known.grants)),
-                has_code=known.code in title,
+                has_code=holds_code(title, known.code),
                 place=intents.get(operation.partition(":")[2]),
             )
         )

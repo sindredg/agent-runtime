@@ -483,6 +483,8 @@ def test_an_issue_for_a_counted_cleared_grant_fails(grader: ModuleType, rules: M
         f"{M[1]}: holder has left {CODE.replace('-', '')}",
         f"{M[1]}: holder has left {CODE.lower()}",
         f"{M[1]}: holder has left {CODE[:-1]}",
+        f"{M[1]}: holder has left X{CODE}",
+        f"{M[1]}: holder has left {CODE}0",
     ],
 )
 def test_an_issue_after_the_first_summary_without_the_exact_code_fails(
