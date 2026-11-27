@@ -47,9 +47,11 @@ FIRST_ISSUE = "100000"
 SERVICE = ("--filter", "label=com.docker.compose.project=agent-runtime", "--filter")
 # Seconds between two looks at a job.
 POLL = 0.2
-# Seconds a killed worker gets to leave `running`. `docker kill` returns once
-# the signal is sent, so the first look can come before the container exits.
+# Seconds a killed worker gets to stop. `docker kill` returns once the signal
+# is sent, so the first look can come before the container exits.
 KILLED_WITHIN = 10.0
+# The states of a worker that has not stopped: a restart policy can bring a
+# killed worker back.
 UP = ("running", "restarting")
 # Seconds a job gets to reach a final status: the whole job, each takeover
 # on top, a short job, and a job that was cancelled.
