@@ -1743,3 +1743,52 @@ def test_the_named_lines_are_in_the_message_a_real_failure_leaves_in_its_junit_f
     assert set(found) == {"ordered]", "as_they_came]"}
     assert all(text in found["ordered]"] for text in NAMED)
     assert not any(text in found["as_they_came]"] for text in NAMED)
+
+
+# The wait for killed workers to stop: `docker kill` returns once the signal is
+# sent, so the takeover helper reads the workers until none is up or the bound
+# is over. A fake clock and scripted state maps stand in for Docker.
+
+
+def _still_running(
+    monkeypatch: pytest.MonkeyPatch, reads: list[dict[str, str]], bound: float
+) -> tuple[list[str], float, int]:
+    """What `still_running` returns over `reads` (the last repeats), the clock, the sleeps."""
+    monkeypatch.syspath_prepend(str(TESTS))
+    harness = importlib.import_module("long.conftest")
+    now = [0.0]
+    sleeps = [0]
+
+    def read() -> dict[str, str]:
+        return reads.pop(0) if len(reads) > 1 else reads[0]
+
+    def sleep(seconds: float) -> None:
+        sleeps[0] += 1
+        now[0] += seconds
+
+    left: list[str] = harness.still_running(read, bound, lambda: now[0], sleep)
+    return left, now[0], sleeps[0]
+
+
+def test_a_killed_worker_that_exits_after_the_first_read_is_not_left(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reads = [{"a": "running", "b": "exited"}, {"a": "exited", "b": "exited"}]
+    assert _still_running(monkeypatch, reads, 10.0) == ([], 0.2, 1)
+
+
+def test_a_killed_worker_still_running_at_the_bound_is_named(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    left, now, _ = _still_running(monkeypatch, [{"a": "running", "b": "exited"}], 1.0)
+    assert left == ["a"]
+    assert now >= 1.0
+
+
+def test_a_restarting_worker_counts_as_up(monkeypatch: pytest.MonkeyPatch) -> None:
+    left, _, _ = _still_running(monkeypatch, [{"a": "restarting", "b": "exited"}], 1.0)
+    assert left == ["a"]
+
+
+def test_no_worker_up_returns_at_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert _still_running(monkeypatch, [{"a": "exited", "b": "dead"}], 10.0) == ([], 0.0, 0)

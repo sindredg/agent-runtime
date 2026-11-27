@@ -47,6 +47,10 @@ FIRST_ISSUE = "100000"
 SERVICE = ("--filter", "label=com.docker.compose.project=agent-runtime", "--filter")
 # Seconds between two looks at a job.
 POLL = 0.2
+# Seconds a killed worker gets to leave `running`. `docker kill` returns once
+# the signal is sent, so the first look can come before the container exits.
+KILLED_WITHIN = 10.0
+UP = ("running", "restarting")
 # Seconds a job gets to reach a final status: the whole job, each takeover
 # on top, a short job, and a job that was cancelled.
 FULL_JOB = 300.0
@@ -78,6 +82,25 @@ def docker(*args: str, env: dict[str, str] | None = None, check: bool = True) ->
 
 
 FAILED = (RuntimeError, OSError, subprocess.TimeoutExpired)
+
+
+def still_running(
+    read: Callable[[], dict[str, str]],
+    bound: float = KILLED_WITHIN,
+    clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> list[str]:
+    """The containers `read` still lists as up after `bound` seconds.
+
+    Up is `running` or `restarting`: a restart policy can bring a killed
+    worker back. Read every POLL seconds; empty at the first read with none up.
+    """
+    deadline = clock() + bound
+    while True:
+        left = [container for container, state in read().items() if state in UP]
+        if not left or clock() >= deadline:
+            return left
+        sleep(POLL)
 
 
 def done(*args: str) -> bool:
@@ -347,9 +370,15 @@ class Stack:
         for container in self.workers():
             if killed is None or not container.startswith(killed):
                 docker("docker", "kill", container, check=False)
-        left = [c[:12] for c, state in self.workers().items() if state == "running"]
+        left = still_running(self.workers)
         if left:
-            raise RuntimeError(f"workers still running after the kill: {left}")
+            states = [
+                f"{c[:12]} " + docker("docker", "inspect", "--format",
+                                      "{{.State.Status}}, {{.RestartCount}} restarts", c,
+                                      check=False).strip()
+                for c in left
+            ]  # fmt: skip
+            raise RuntimeError(f"workers still up {KILLED_WITHIN:g} s after the kill: {states}")
         expires = self.job(job_id)["lease_expires_at"]
         if expires is not None:
             wait = (datetime.fromisoformat(expires) - datetime.now(UTC)).total_seconds()
