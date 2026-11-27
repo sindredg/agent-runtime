@@ -165,8 +165,8 @@ def test_a_fake_entry_on_the_long_stack_names_no_test_of_the_harness() -> None:
 def test_the_check_is_green_while_the_bound_is_not_set_and_a_start_is_refused(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    rules = switched_off.long_job_rules()
-    assert rules.LONG_KEYED_TOKEN_BOUND is None
+    rules = long_rules(LONG_KEYED_TOKEN_BOUND=None)
+    monkeypatch.setattr(switched_off, "long_job_rules", lambda root=ROOT: rules)
     assert switched_off.check() == []
     assert switched_off.run_problems(LONG) == []
     nothing_runs(monkeypatch)
@@ -182,7 +182,8 @@ def test_the_check_is_green_while_the_bound_is_not_set_and_a_start_is_refused(
 def test_a_set_bound_lets_a_start_past_it_only_when_both_jobs_fit(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], value: int, refused: bool
 ) -> None:
-    rules = long_rules(LONG_KEYED_TOKEN_BOUND=value)
+    # No date on the line, so the harness's own refusals have one to give.
+    rules = long_rules(LONG_KEYED_TOKEN_BOUND=value, LINE_FIXED=None)
     monkeypatch.setattr(switched_off, "long_job_rules", lambda root=ROOT: rules)
     nothing_runs(monkeypatch)
     monkeypatch.setenv("SWITCHED_OFF_PROVIDER", "claude")
@@ -200,7 +201,11 @@ def test_a_set_bound_lets_a_start_past_it_only_when_both_jobs_fit(
 def test_the_harness_refuses_a_run_with_every_gate_of_the_list_open_before_any_stack(
     bound: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The bound set, the provider asked for: `rules.refusals` of mode must-fail still stops it."""
+    """The bound set, the provider asked for: `rules.refusals` of mode must-fail still stops it.
+
+    The line has no date here, the one refusal left.
+    """
+    monkeypatch.setattr(bound, "LINE_FIXED", None)
     nothing_runs(monkeypatch)
     monkeypatch.setenv("SWITCHED_OFF_PROVIDER", "claude")
     monkeypatch.setenv("LONG_JOB_SEED", OTHER_SEED)
@@ -729,7 +734,8 @@ def test_a_found_answer_counts_only_in_the_answers_test_and_also_in_its_text(
 def test_a_rehearsal_starts_with_the_bound_not_set_and_makes_no_edit(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    assert switched_off.long_job_rules().LONG_KEYED_TOKEN_BOUND is None
+    rules = long_rules(LONG_KEYED_TOKEN_BOUND=None)
+    monkeypatch.setattr(switched_off, "long_job_rules", lambda root=ROOT: rules)
     calls: list[tuple[list[str], dict[str, str]]] = []
 
     def pytest_run(args: list[str], **more: Any) -> Any:

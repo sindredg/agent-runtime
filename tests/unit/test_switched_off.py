@@ -157,8 +157,8 @@ def test_each_entry_on_the_claude_api_is_bounded() -> None:
     rules = switched_off.long_job_rules()
     assert (long.model, long.stack, long.runs) == ("claude-haiku-5-5", "long", 2)
     assert long.record == switched_off.Verdicts(control="PASS", fires=("R7", "R8", "R9"))
-    assert rules.LONG_KEYED_TOKEN_BOUND is None
-    assert switched_off.bound_problem(long) == rules.NO_BOUND
+    assert rules.LONG_KEYED_TOKEN_BOUND == 15_000_000
+    assert switched_off.bound_problem(long) is None
 
 
 IN_THE_CALL = KEYED.expect[0]

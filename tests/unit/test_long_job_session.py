@@ -140,8 +140,11 @@ def must_fail_env(monkeypatch: pytest.MonkeyPatch, **more: str) -> None:
 # What a session may start with
 
 
-def test_every_keyed_session_is_refused_while_the_line_is_proposed(harness: ModuleType) -> None:
-    """Each mode on the Claude API, with every input the run asks for given."""
+def test_every_keyed_session_is_refused_while_the_line_is_proposed(
+    harness: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each mode on the Claude API, with every input the run asks for given, and no date."""
+    monkeypatch.setattr(harness.rules, "LINE_FIXED", None)
     budgets = {"counts": "1500000", "graded": "20000000", "must-fail": ""}
     for mode, budget in budgets.items():
         env = {
@@ -215,6 +218,7 @@ def start_session(
 def test_a_keyed_session_stops_on_its_refusals_before_any_stack_call(
     harness: ModuleType, clean_env: pytest.MonkeyPatch
 ) -> None:
+    clean_env.setattr(harness.rules, "LINE_FIXED", None)
     must_fail_env(clean_env, LONG_JOB_PROVIDER="claude", LONG_JOB_SEED=OTHER_SEED)
     said, docker = start_session(harness, clean_env)
 
@@ -1007,6 +1011,14 @@ def test_a_counts_session_runs_its_jobs_in_turn_with_no_kill_and_sums_them(
     assert [json.loads(line) for line in on_disk] == lines
 
 
+def test_a_counts_session_runs_the_line_s_jobs_on_the_claude_api_and_one_on_the_fake(
+    harness: ModuleType,
+) -> None:
+    """The fake's reviewer is scripted: more jobs on it would count nothing new."""
+    assert harness.counts_jobs("claude") == harness.rules.COUNTS_JOBS == 10
+    assert [harness.counts_jobs(provider) for provider in ("fake", "")] == [1, 1]
+
+
 def test_a_counts_job_whose_wait_would_end_after_the_session_is_not_sent(
     harness: ModuleType, clean_env: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -1041,8 +1053,17 @@ def test_a_session_drops_the_sdks_own_settings_first(
 # Every mode runs a test of its own: no session is green with every test skipped
 
 
-def run_file_in_mode(directory: Path, mode: str, provider: str, verdict: str = "PASS") -> str:
-    """Run the whole run file on a made-up session of `mode`, with the harness's own fixtures."""
+# The provider of a record, by the name the record gives it.
+PROVIDERS = {"fake provider": "fake", "Claude API": "claude"}
+
+
+def run_file_in_mode(
+    directory: Path, mode: str, provider: str, verdict: str = "PASS", jobs: int = 1
+) -> str:
+    """Run the whole run file on a made-up session of `mode`, with the harness's own fixtures.
+
+    A `counts` session has `jobs` jobs, each with its line.
+    """
     directory.mkdir()
     (directory / "logs").mkdir()
     (directory / "logs" / "worker.log").write_text("nothing of the job\n")
@@ -1056,7 +1077,8 @@ def run_file_in_mode(directory: Path, mode: str, provider: str, verdict: str = "
         "questions": 0,
         "counts": {"kills": [{"landed": True, "window": 2}, {"landed": True, "window": 4}]},
     }
-    lines = [{"job": 1, "status": "succeeded"}, {"job": "total"}] if mode == "counts" else [graded]
+    each = [{"job": job, "status": "succeeded"} for job in range(1, jobs + 1)]
+    lines = [*each, {"job": "total"}] if mode == "counts" else [graded]
     (directory / "results.jsonl").write_text("".join(json.dumps(x) + "\n" for x in lines))
     (directory / "sample_stack.py").write_text(
         "import json\nfrom types import SimpleNamespace\n\nimport pytest\n\n"
@@ -1067,7 +1089,8 @@ def run_file_in_mode(directory: Path, mode: str, provider: str, verdict: str = "
         "    for line in lines:\n"
         "        print('RESULT ' + json.dumps(line))\n"
         "    return SimpleNamespace(\n"
-        f"        mode={mode!r}, directory=__import__('pathlib').Path({str(directory)!r}),\n"
+        f"        mode={mode!r}, provider={PROVIDERS[provider]!r},\n"
+        f"        directory=__import__('pathlib').Path({str(directory)!r}),\n"
         "        logs=['worker.log'], markers=['MARKER-OF-THE-TEST'], records=lines,\n"
         f"        record=None if {mode!r} == 'counts' else lines[0],\n"
         "    )\n"
@@ -1109,9 +1132,10 @@ def run_file_in_mode(directory: Path, mode: str, provider: str, verdict: str = "
     ],
 )
 def test_each_mode_runs_tests_of_its_own_and_the_answers_test_on_every_provider(
-    tmp_path: Path, mode: str, provider: str, summary: str
+    harness: ModuleType, tmp_path: Path, mode: str, provider: str, summary: str
 ) -> None:
-    output = run_file_in_mode(tmp_path / "session", mode, provider)
+    jobs = harness.counts_jobs(PROVIDERS[provider])
+    output = run_file_in_mode(tmp_path / "session", mode, provider, jobs=jobs)
 
     assert f" {summary} " in output, output[-3000:]
     assert "test_no_answer_is_in_the_record_the_output_or_the_saved_logs PASSED" in output

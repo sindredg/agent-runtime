@@ -475,11 +475,11 @@ jobs:
 
   # The long-job harness on the Claude API: mode counts or graded through
   # `make long-job-claude`, mode must-fail through the list's entry
-  # long-notices-dropped, its control job and then its edited one. Today the
-  # harness refuses every such run: its pass line is proposed and the token
-  # bound of keyed long jobs is not set. The job prints the records only, and
-  # they hold counts: no service log, no saved worker log and no artifact
-  # leaves it. A failure here is read from the record alone.
+  # long-notices-dropped, its control job and then its edited one. The
+  # harness refuses a run that `scripts/long_job_keyed.py check` refuses.
+  # The job prints the records only, and they hold counts: no service log,
+  # no saved worker log and no artifact leaves it. A failure here is read
+  # from the record alone.
   long-job:
     # The reviewer of the environment sees the mode and the model.
     name: long-job ${{ inputs.long_job }} on ${{ inputs.model }}

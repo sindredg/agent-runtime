@@ -83,7 +83,7 @@ def test_every_job_of_a_counts_run_ends_and_is_recorded(
     jobs = [line for line in records if line.get("job") != "total"]
     ended = sum(line.get("status") in grader.FINAL for line in jobs)
     summed = sum(line.get("job") == "total" for line in records)
-    unfinished = counts_jobs() - ended + int(summed != 1)
+    unfinished = counts_jobs(stack.provider) - ended + int(summed != 1)
     assert unfinished == 0, "a job of the counts run did not end, or its line is missing"
 
 

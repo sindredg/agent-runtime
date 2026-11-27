@@ -84,8 +84,9 @@ PAGE = 1000
 # The name of the record's run, and the number of jobs a graded session runs.
 RECORD_TEST = "long-job"
 RUNS = 1
-# The jobs of a `counts` session while `rules.COUNTS_JOBS` is not set. A keyed
-# one is refused then; one on the fake provider runs this many.
+# The jobs of a `counts` session on the fake provider. Its reviewer is
+# scripted, so more jobs would count nothing new. A keyed one runs
+# `rules.COUNTS_JOBS`, and is refused while that is not set.
 FAKE_COUNTS_JOBS = 1
 PROVIDER_NAMES = {"fake": "fake provider", rules.CLAUDE: "Claude API"}
 # The containers of a service, found by the labels compose sets.
@@ -106,8 +107,8 @@ def session_problems(env: Mapping[str, str], root: Path) -> list[str]:
 
     `rules.refusals` is asked on every provider, the fake included, so a
     provider that is neither the fake nor `claude` is refused. On the fake
-    it reads no seed and no key. On the Claude API it refuses every run
-    while the pass line is proposed.
+    it reads no seed and no key. On the Claude API it stops every run that
+    `rules.refusals` refuses.
     """
     found = list(rules.refusals(env, root))
     mode = env.get(rules.MODE, "")
@@ -166,9 +167,11 @@ def run_budget(env: Mapping[str, str], mode: str, provider: str) -> int:
     return int(env[rules.BUDGET])
 
 
-def counts_jobs() -> int:
-    """How many jobs a `counts` session runs, one after another."""
-    return rules.COUNTS_JOBS if rules.COUNTS_JOBS is not None else FAKE_COUNTS_JOBS
+def counts_jobs(provider: str) -> int:
+    """How many jobs a `counts` session on `provider` runs, one after another."""
+    if provider == rules.CLAUDE and rules.COUNTS_JOBS is not None:
+        return rules.COUNTS_JOBS
+    return FAKE_COUNTS_JOBS
 
 
 def submission(
@@ -756,7 +759,7 @@ class Stack:
         gets a line of its counts, and the session a last line of their sum.
         No verdict.
         """
-        return self.jobs(counts_jobs())
+        return self.jobs(counts_jobs(self.provider))
 
     def jobs(self, number: int) -> list[dict[str, Any]]:
         """Bring the stack up, run `number` jobs in turn, keep the logs, and write the lines."""
@@ -1032,7 +1035,7 @@ def counts_line(
     """A line of a `counts` session for its job `number`: no verdict, the job's counts."""
     return {
         **run_fields(stack, line),
-        "runs": counts_jobs(),
+        "runs": counts_jobs(stack.provider),
         "job": number,
         "status": seen.job.get("status"),
         "error": seen.job.get("error"),
@@ -1049,7 +1052,7 @@ def total_line(
     """The last line of a `counts` session: the sum of its jobs' counts, and the jobs not run."""
     return {
         **run_fields(stack, line),
-        "runs": counts_jobs(),
+        "runs": counts_jobs(stack.provider),
         "job": "total",
         "not_started": sum(seen.not_started for seen in seens),
         "harness_error": seens[0].harness_error if seens else None,

@@ -6,8 +6,8 @@ numbers of that line, the refusals of a keyed run, the kill offsets, how a
 job view is reduced to counts and one class, how a crash is read from a
 worker's log, and the reviewer the fake provider plays.
 
-Every number here is proposed until `LINE_FIXED` holds a date. Nothing in
-this module talks to the stack or to a provider.
+The line was fixed on the date in `LINE_FIXED`: a change to a number is a
+new decision. Nothing in this module talks to the stack or to a provider.
 """
 
 import hashlib
@@ -38,12 +38,13 @@ from access_review.commit import SeedError
 
 # The date the line was fixed. None: every number below is proposed, and no
 # keyed run starts.
-LINE_FIXED: str | None = None
+LINE_FIXED: str | None = "2026-11-27"
 # The most tokens the jobs of one keyed short-shape run may be given
-# together. None: not set, and no such run starts.
-LONG_KEYED_TOKEN_BOUND: int | None = None
+# together. None: not set, and no such run starts. Ten `counts` jobs of
+# 1,500,000 tokens; the two jobs of a `must-fail` run fit under it too.
+LONG_KEYED_TOKEN_BOUND: int | None = 15_000_000
 # How many jobs a `counts` run has. None: not set, and no such run starts.
-COUNTS_JOBS: int | None = None
+COUNTS_JOBS: int | None = 10
 # The jobs of a `must-fail` run: the control and the edited one.
 MUST_FAIL_JOBS = 2
 
