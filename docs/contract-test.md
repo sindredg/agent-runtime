@@ -16,7 +16,7 @@ make up
 ANTHROPIC_API_KEY=<key> CONTRACT_MODEL=<model id> uv run pytest tests/contract
 ```
 
-It sends seven small requests to the API, one of which is refused on purpose.
+It sends eight small requests to the API, one of which is refused on purpose.
 
 ```mermaid
 flowchart LR
@@ -36,6 +36,15 @@ instruction as a text block after the last `tool_result`. It passes when the
 provider accepts it and the answer is a usable summary.
 
 Status: written, not run. No run in the table below includes it.
+
+## The one-call request
+
+One entry sends `tool_choice` `{"type": "auto", "disable_parallel_tool_use": true}`,
+which every request but a summary carries in a job with a trigger
+([ADR 0037](adr/0037-ask-for-one-tool-call-per-response-in-a-job-that-summarises.md)), and asks for two files. It passes when the
+answer holds at most one tool call.
+
+Status: written, not run.
 
 ## Both directions
 
@@ -60,7 +69,7 @@ list below and `NOT_MODELLED` in the test hold the same entries.
 |---|---|
 | `block type thinking` | The worker sends every block back unchanged. The API accepted its own `thinking` block back, also after a takeover ([API runs](results/api.md)). |
 | `tool_use block field caller` | The worker does not read it and sends the block back unchanged. |
-| `more than one tool_use block in a response` | No packaged scenario has two calls in one turn. The worker's handling of two calls is tested with a scripted provider in `tests/integration/test_resume.py`. |
+| `more than one tool_use block in a response` | Only `two-calls.json` has two calls in a turn, for unit tests. A job with a trigger fails on them ([ADR 0037](adr/0037-ask-for-one-tool-call-per-response-in-a-job-that-summarises.md)). |
 | `message field container` | The worker does not read it. It was `null` in the run of 2026-11-19. |
 | `message field diagnostics` | The worker does not read it. It was `null` in that run. |
 | `message field stop_details` | Read on a refusal. A run cannot provoke one, so the field is not compared. |

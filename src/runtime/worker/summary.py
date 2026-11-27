@@ -26,6 +26,9 @@ CONTINUATION = (
 )
 # The model may not call a tool in its answer. The tools stay in the request.
 TOOL_CHOICE_NONE: dict[str, Any] = {"type": "none"}
+# Every other request of a job with a trigger: at most one tool call a
+# response, so the trigger is checked after each call's result (issue 258).
+TOOL_CHOICE_ONE_CALL: dict[str, Any] = {"type": "auto", "disable_parallel_tool_use": True}
 
 
 def summary_messages(messages: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:

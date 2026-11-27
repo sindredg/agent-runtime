@@ -60,6 +60,7 @@ from runtime.worker.recovery import Ask, Recovered, decide
 from runtime.worker.replay import MAX_REPEATS, Replay, replay
 from runtime.worker.summary import (
     TOOL_CHOICE_NONE,
+    TOOL_CHOICE_ONE_CALL,
     opening_message,
     summary_messages,
     summary_problem,
@@ -621,10 +622,11 @@ async def _next_tool_call(
     return None
 
 
-def _response_problem(response: ModelResponse, used_ids: set[str]) -> str | None:
+def _response_problem(response: ModelResponse, used_ids: set[str], *, one_call: bool) -> str | None:
     """What is wrong with a response's shape, or None. Checked before any tool runs.
 
     `used_ids` are the ids of the tool calls of earlier responses in the job.
+    `one_call`: the request asked for at most one tool call.
     """
     if not response.stop_reason:
         return "it has no stop_reason"
@@ -648,6 +650,10 @@ def _response_problem(response: ModelResponse, used_ids: set[str]) -> str | None
     # check looks it up.
     if not used_ids.isdisjoint(ids):
         return "a tool_use block has the id of an earlier call"
+    # Run, every call's result would go into the next request at once, and
+    # the trigger is checked only between requests.
+    if one_call and len(ids) > 1:
+        return f"it has {len(ids)} tool_use blocks where one was asked"
     return None
 
 
@@ -764,7 +770,13 @@ async def _loop(
                 system=spec.system,
                 tools=definitions,
                 user_id=str(job.id),
-                tool_choice=TOOL_CHOICE_NONE if summarising else None,
+                # From the pinned trigger, like the summary itself: a takeover
+                # sends the same. A job without a trigger sends none.
+                tool_choice=(
+                    TOOL_CHOICE_NONE
+                    if summarising
+                    else (TOOL_CHOICE_ONE_CALL if trigger is not None else None)
+                ),
                 mid_stream=(
                     (lambda: failpoints.hit("mid_stream", takeovers=job.takeovers))
                     if failpoints.name == "mid_stream"
@@ -830,7 +842,9 @@ async def _loop(
                         None if explanation is None else _storable(_cut(explanation), None)
                     ),
                 }
-            problem = _response_problem(response, state.used_ids)
+            problem = _response_problem(
+                response, state.used_ids, one_call=request.tool_choice == TOOL_CHOICE_ONE_CALL
+            )
             if summarising and problem is None:
                 problem = summary_problem(response.stop_reason, response.content)
             try:

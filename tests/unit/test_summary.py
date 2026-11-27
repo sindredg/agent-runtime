@@ -3,6 +3,8 @@
 The loop runs here against the fake provider in process and a step log in
 memory, so the rules are checked without a database. The same jobs run
 against Postgres and the stack's fake in `tests/integration/test_summary.py`.
+A job with a trigger also asks for one tool call a response, so the trigger
+is checked after each call's result.
 """
 
 import asyncio
@@ -57,6 +59,10 @@ SUMMARY_TEXT = (
 # third and the sixth read. Measured by the fake's own count.
 TRIGGER = 1000
 SUMMARIES = 2
+# The `tool_choice` of a summary request, and of every other request of a
+# job with a trigger, as the API takes them. Held by the test.
+NONE = {"type": "none"}
+ONE_CALL = {"type": "auto", "disable_parallel_tool_use": True}
 
 
 # The texts, word for word as ADR 0033 freezes them
@@ -448,7 +454,7 @@ class Recording:
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
         self.requests.append(request)
-        if self.stop_on_summary and request.tool_choice is not None:
+        if self.stop_on_summary and request.tool_choice == NONE:
             self.stop.set()
             await asyncio.Event().wait()
         answer = await self.inner.complete(request)
@@ -560,7 +566,7 @@ def test_a_long_job_summarises_twice_and_succeeds() -> None:
 
     assert outcome == "succeeded"
     assert len(kinds(writer, StepKind.SUMMARY)) == SUMMARIES
-    summaries = [entry for entry in log if entry["tool_choice"] is not None]
+    summaries = [entry for entry in log if entry["tool_choice"] != ONE_CALL]
     assert [entry["summary"] for entry in summaries] == [1, 2]
     for entry in summaries:
         index = log.index(entry)
@@ -575,7 +581,7 @@ def test_a_long_job_summarises_twice_and_succeeds() -> None:
         assert log[index + 1]["body"]["messages"] == [opening_message(sent)]
     assert [entry["turn"] for entry in summaries] == [3, 6]
     # Every turn of the script was answered once, in order, across the windows.
-    turns = [entry["turn"] for entry in log if entry["tool_choice"] is None]
+    turns = [entry["turn"] for entry in log if entry["tool_choice"] == ONE_CALL]
     assert turns == list(range(9))
 
 
@@ -598,7 +604,7 @@ def test_every_request_step_names_the_trigger_and_the_tools_offered() -> None:
     for written, sent in zip(steps, requests, strict=True):
         assert written.payload["summary_trigger"] == TRIGGER
         assert written.payload["tools"] == [tool["name"] for tool in sent.tools]
-        assert written.payload.get("summary", False) is (sent.tool_choice is not None)
+        assert written.payload.get("summary", False) is (sent.tool_choice == NONE)
 
 
 @pytest.mark.parametrize("other", [None, 400, 5000])
@@ -678,7 +684,7 @@ def test_a_bad_summary_is_stored_with_its_problem_and_fails_the_job(
     assert "message" not in summary.payload
     # The last step: no tool ran after it, and nothing was sent again.
     assert writer.steps[-1] == summary
-    assert sum(1 for entry in logged(app) if entry["tool_choice"] is not None) == 1
+    assert sum(1 for entry in logged(app) if entry["tool_choice"] != ONE_CALL) == 1
     if scenario == "summary-bad-refusal":
         assert summary.payload["refusal"]["category"] == "cyber"
 
@@ -705,6 +711,109 @@ def test_the_job_window_opens_under_the_trigger_in_the_long_job() -> None:
     assert all(step.payload["usage"]["input_tokens"] < TRIGGER for step in after)
 
 
+# One tool call a response (issue 258)
+
+# The `two-calls` scenario: two reads in its first response, then the end.
+TWO_CALLS = {"prompt": "Read a.txt and b.txt, then say you are done.", "model": "two-calls"}
+TWO_CALLS_PROBLEM = "it has 2 tool_use blocks where one was asked"
+# A trigger the `two-calls` job never reaches: it has a trigger and no summary.
+UNREACHED = 100_000
+
+
+def test_a_job_with_a_trigger_asks_for_one_call_in_every_request_but_a_summary() -> None:
+    app = create_app(scenarios())
+    outcome, writer, requests, _ = run_loop(app, TRIGGER)
+    summaries = [s.payload.get("summary", False) for s in kinds(writer, StepKind.MODEL_REQUEST)]
+    expected = [NONE if summary else ONE_CALL for summary in summaries]
+
+    assert outcome == "succeeded"
+    assert summaries.count(True) == SUMMARIES
+    assert [entry["tool_choice"] for entry in logged(app)] == expected
+    assert [request.tool_choice for request in requests] == expected
+
+
+def test_a_job_without_a_trigger_sends_no_tool_choice() -> None:
+    app = create_app(scenarios())
+    outcome, _, requests, _ = run_loop(app, None)
+    log = logged(app)
+
+    assert outcome == "succeeded"
+    assert len(log) == len(requests) == 9
+    assert [request.tool_choice for request in requests] == [None] * 9
+    assert [entry for entry in log if "tool_choice" in entry["body"]] == []
+
+
+def test_two_calls_in_a_response_to_a_one_call_request_fail_the_job_before_a_tool_runs() -> None:
+    app = create_app(scenarios())
+    outcome, writer, _, _ = run_loop(app, UNREACHED, spec=TWO_CALLS)
+
+    assert outcome == f"failed: the model's response is not usable: {TWO_CALLS_PROBLEM}"
+    # The response is the last step: no tool ran after it.
+    assert [s.kind for s in writer.steps] == [StepKind.MODEL_REQUEST, StepKind.MODEL_RESPONSE]
+    response = writer.steps[-1]
+    assert response.payload["problem"] == TWO_CALLS_PROBLEM
+    assert [b["type"] for b in response.payload["content"]].count("tool_use") == 2
+    # One request, which asked for one call, and nothing sent after the answer.
+    assert [entry["tool_choice"] for entry in logged(app)] == [ONE_CALL]
+
+
+def test_without_a_trigger_two_calls_in_a_response_both_run() -> None:
+    """The same script with no trigger: nothing asked for one call, so both calls run."""
+    app = create_app(scenarios())
+    outcome, writer, _, _ = run_loop(app, None, spec=TWO_CALLS)
+    log = logged(app)
+
+    assert outcome == "succeeded"
+    assert len(kinds(writer, StepKind.TOOL_RESULT)) == 2
+    assert len(log) == 2
+    results = [b for b in log[1]["body"]["messages"][-1]["content"] if b["type"] == "tool_result"]
+    assert len(results) == 2
+
+
+@pytest.mark.parametrize(("pinned", "own"), [(UNREACHED, None), (None, UNREACHED)])
+def test_the_pinned_trigger_decides_whether_two_calls_fail_the_job(
+    pinned: int | None, own: int | None
+) -> None:
+    """The job's first request step pinned `pinned`; the worker that takes it over has `own`."""
+    app = create_app(scenarios())
+    opened = request_step(1, summary_trigger=pinned)
+
+    outcome, writer, _, _ = run_loop(app, own, steps=[opened], spec=TWO_CALLS)
+    responses = kinds(writer, StepKind.MODEL_RESPONSE)
+
+    if pinned is not None:
+        assert outcome == f"failed: the model's response is not usable: {TWO_CALLS_PROBLEM}"
+        assert writer.steps[-1] == responses[-1]
+        assert responses[-1].payload["problem"] == TWO_CALLS_PROBLEM
+        assert kinds(writer, StepKind.TOOL_INTENT) == []
+        assert [entry["tool_choice"] for entry in logged(app)] == [ONE_CALL]
+    else:
+        assert outcome == "succeeded"
+        assert len(kinds(writer, StepKind.TOOL_RESULT)) == 2
+        assert [entry["tool_choice"] for entry in logged(app)] == [None, None]
+
+
+@pytest.mark.parametrize("other", [None, 400, 5000])
+@pytest.mark.parametrize("answers", [3, 4, 6])
+def test_a_takeover_sends_the_tool_choice_the_first_worker_would_have(
+    other: int | None, answers: int
+) -> None:
+    """The job's first request pinned the trigger, so the other worker's own setting is not read."""
+    _, _, reference, _ = run_loop(create_app(scenarios()), TRIGGER)
+    outcome, first, before, _ = run_loop(create_app(scenarios()), TRIGGER, stop_after=answers)
+    assert outcome == "queued"
+
+    outcome, _, after, _ = run_loop(create_app(scenarios()), other, steps=first.steps)
+
+    assert outcome == "succeeded"
+    expected = [request.tool_choice for request in reference]
+    assert expected.count(NONE) == SUMMARIES
+    assert expected.count(ONE_CALL) == len(expected) - SUMMARIES
+    assert [request.tool_choice for request in before] == expected[: len(before)]
+    assert [request.tool_choice for request in after] == expected[len(before) :]
+    assert ONE_CALL in [request.tool_choice for request in after]
+
+
 # A halt during an open summary call
 
 
@@ -717,7 +826,7 @@ class Hanging:
         self.given_up = False
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
-        if request.tool_choice is None:
+        if request.tool_choice != NONE:
             return await self.recording.complete(request)
         self.open.set()
         try:

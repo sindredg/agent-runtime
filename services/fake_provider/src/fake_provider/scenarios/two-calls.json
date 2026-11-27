@@ -1,0 +1,35 @@
+{
+  "description": "Reads two files in one response, then ends. A job with a trigger asks for one call a response and fails on the first.",
+  "turns": [
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Reading a.txt and b.txt next."
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "a.txt"
+          }
+        },
+        {
+          "type": "tool_use",
+          "name": "read_file",
+          "input": {
+            "path": "b.txt"
+          }
+        }
+      ]
+    },
+    {
+      "content": [
+        {
+          "type": "text",
+          "text": "Done: both notes files are read."
+        }
+      ]
+    }
+  ]
+}

@@ -73,6 +73,8 @@ Rules of one turn:
   id, a name and an object input, and no id may repeat one the job has seen.
 - A response that fails the check fails the job.
 - The calls of one response run one after another.
+- With a trigger, every request but a summary asks for at most one tool call,
+  and a response with more fails the job ([ADR 0037](adr/0037-ask-for-one-tool-call-per-response-in-a-job-that-summarises.md)).
 - A failed tool call is an error result for the model, and the job goes on.
 - A 429, a 529 or, up to a cap, an error that may pass makes
   the job wait in `waiting` ([Backoff](backoff.md)). Any other failed model

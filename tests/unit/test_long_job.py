@@ -36,6 +36,8 @@ from runtime.tools.trackers import FakeTracker
 from runtime.worker import agent
 from runtime.worker.halt import Halt
 from runtime.worker.lease import Lease
+from runtime.worker.summary import TOOL_CHOICE_NONE as NONE
+from runtime.worker.summary import TOOL_CHOICE_ONE_CALL as ONE_CALL
 
 JOB = uuid.UUID("01a1d655-88bd-7468-afc4-5ca3a1947908")
 NOW = datetime.now(UTC)
@@ -215,7 +217,7 @@ def kinds(writer: Writer, kind: StepKind) -> list[Step]:
 
 
 def first_summary(log: list[dict[str, Any]]) -> dict[str, Any]:
-    return next(entry for entry in log if entry["tool_choice"] is not None)
+    return next(entry for entry in log if entry["tool_choice"] == NONE)
 
 
 # The scenario's size
@@ -255,26 +257,28 @@ def test_with_the_trigger_the_job_summarises_three_times_and_fits_the_window(
     tmp_path: Path,
 ) -> None:
     outcome, writer, log = run(tmp_path / "w", TRIGGER)
-    summaries = [entry for entry in log if entry["tool_choice"] is not None]
+    summaries = [entry for entry in log if entry["tool_choice"] == NONE]
 
     assert outcome == "succeeded"
     assert len(kinds(writer, StepKind.SUMMARY)) == SUMMARIES
     assert [entry["summary"] for entry in summaries] == [1, 2, 3]
+    # Every request asks for a summary or for one call: nothing else is sent.
+    assert all(entry["tool_choice"] in (NONE, ONE_CALL) for entry in log)
     # Every request, summary requests included, is answered and inside the window.
     assert all(entry["status"] == 200 for entry in log)
     assert max(entry["input_estimate"] for entry in log) <= window()
     assert all(entry["input_estimate"] <= window() for entry in summaries)
     # Every turn of the script was answered once, in order, across the windows.
-    turns = [entry["turn"] for entry in log if entry["tool_choice"] is None]
+    turns = [entry["turn"] for entry in log if entry["tool_choice"] == ONE_CALL]
     assert turns == list(range(len(scenario().turns)))
     # The requests of each window, its summary request included: 13, 12, 12 and
     # 10. The long-job suite plans its kills by these numbers.
-    ends = [index for index, entry in enumerate(log) if entry["tool_choice"] is not None]
+    ends = [index for index, entry in enumerate(log) if entry["tool_choice"] == NONE]
     windows = [b - a for a, b in zip([-1, *ends], [*ends, len(log) - 1], strict=True)]
     assert tuple(windows) == long_rules().WINDOW_REQUESTS == (13, 12, 12, 10)
     # A response of a later window counts at least 2800 and under the trigger:
     # workers with a trigger of 2800 would summarise there, a turn early.
-    later = [tokens(entry) for entry in log[ends[0] + 1 :] if entry["tool_choice"] is None]
+    later = [tokens(entry) for entry in log[ends[0] + 1 :] if entry["tool_choice"] == ONE_CALL]
     assert any(2800 <= counted < TRIGGER for counted in later)
 
 
@@ -346,7 +350,7 @@ def test_every_request_of_a_summarising_job_carries_the_specs_system(tmp_path: P
     window after it, which carries nothing else of the conversation before.
     """
     outcome, writer, log = run(tmp_path / "w", TRIGGER, system=SYSTEM)
-    summaries = [index for index, entry in enumerate(log) if entry["tool_choice"] is not None]
+    summaries = [index for index, entry in enumerate(log) if entry["tool_choice"] == NONE]
     openers = [log[index + 1] for index in summaries if index + 1 < len(log)]
 
     assert outcome == "succeeded"

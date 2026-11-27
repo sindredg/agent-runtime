@@ -45,6 +45,8 @@ SUMMARIES = len(WINDOW_TURNS)
 # The pass line of G7: a halted job stops within 5 s.
 WITHIN = 5.0
 NONE = {"type": "none"}
+# Every other request of a job with a trigger: one tool call at most.
+ONE_CALL = {"type": "auto", "disable_parallel_tool_use": True}
 
 
 def notes(path: str) -> str:
@@ -71,7 +73,7 @@ def of_kind(steps: list[Step], kind: StepKind) -> list[Step]:
 
 
 def summary_requests(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [entry for entry in entries if entry["tool_choice"] is not None]
+    return [entry for entry in entries if entry["tool_choice"] == NONE]
 
 
 def without_job_id(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -104,7 +106,7 @@ class Stopping:
         self.job: Job | None = None
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
-        if self.in_summary and request.tool_choice is not None:
+        if self.in_summary and request.tool_choice == NONE:
             call = asyncio.ensure_future(self.inner.complete(request))
             try:
                 assert self.job is not None
@@ -225,7 +227,8 @@ def test_a_long_job_summarises_twice_and_each_window_opens_from_its_summary(
         # The first request of the next window is the summary and the continuation line.
         assert after["body"]["messages"] == [opening(entry["summary"])]
     # The script went on after each summary: every turn answered once, in order.
-    assert [entry["turn"] for entry in entries if entry["tool_choice"] is None] == list(range(9))
+    turns = [entry["turn"] for entry in entries if entry["tool_choice"] == ONE_CALL]
+    assert turns == list(range(9))
     # The summary's tokens count like any response's.
     counted = sum(
         step.payload["usage"]["input_tokens"] + step.payload["usage"]["output_tokens"]
@@ -245,7 +248,7 @@ def test_every_request_step_names_the_tools_its_request_offered(stack: Stack) ->
     for step, entry in zip(requests, entries, strict=True):
         assert step.payload["tools"] == [tool["name"] for tool in entry["body"]["tools"]]
         assert step.payload["summary_trigger"] == TRIGGER
-        assert step.payload.get("summary", False) is (entry["tool_choice"] is not None)
+        assert step.payload.get("summary", False) is (entry["tool_choice"] == NONE)
 
 
 def test_the_tools_named_are_every_tool_offered_in_order(

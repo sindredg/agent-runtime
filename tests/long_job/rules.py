@@ -435,8 +435,9 @@ def scripted_reviewer(review: Review, *, delay_seconds: float = 0.0) -> dict[str
     """A fake-provider scenario that reviews `review` as its answer key says.
 
     It reads the index, then each file in index order, one read a turn.
-    After a file with violations it opens one issue for each, in one turn,
-    with the grant's id and the reference code in the title. Then it says it
+    After a file with violations it opens one issue for each, one a turn in
+    the file's order, with the grant's id and the reference code in the
+    title: a job with a trigger takes one call a response. Then it says it
     is done. The key is the one over the files and the notices. Every turn
     and every summary waits `delay_seconds` before its answer.
     """
@@ -451,12 +452,14 @@ def scripted_reviewer(review: Review, *, delay_seconds: float = 0.0) -> dict[str
             for grant in file.grants
             if grant.id in violations
         ]
-        if found:
-            issues = [
-                {"title": f"{grant}: access to remove, {code}", "body": f"Found in {path}."}
-                for grant in found
-            ]
-            turns.append(_calls("create_issue", issues, delay_seconds))
+        turns += [
+            _calls(
+                "create_issue",
+                [{"title": f"{grant}: access to remove, {code}", "body": f"Found in {path}."}],
+                delay_seconds,
+            )
+            for grant in found
+        ]
     last: dict[str, Any] = {"content": [{"type": "text", "text": LAST_TURN}]}
     summary: dict[str, Any] = {"text": SUMMARY_TEXT}
     if delay_seconds:

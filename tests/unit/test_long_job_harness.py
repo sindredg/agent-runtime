@@ -1034,13 +1034,18 @@ def test_the_scripted_reviewer_opens_one_issue_for_each_violation_after_its_file
     key = answer_key(short_review)
     code = short_review.reference_code
     titles: list[str] = []
+    read: dict[str, str] = {}
     for before, turn in itertools.pairwise(turns):
+        if calls(before) and calls(before)[0][0] == "read_file":
+            ((_, read),) = calls(before)
         opened = [given for name, given in calls(turn) if name == "create_issue"]
         if not opened:
             continue
-        # The turn before is the read of the file these grants are in.
-        ((name, read),) = calls(before)
-        assert name == "read_file"
+        # One issue a turn. The turn before is the read of the file these
+        # grants are in, or an issue of that file.
+        assert [name for name, _ in calls(turn)] == ["create_issue"]
+        assert [name for name, _ in calls(before)] in (["read_file"], ["create_issue"])
+        assert read
         for given in opened:
             grant = given["title"].split(":")[0]
             assert f"\n{grant}: " in short_review.files[read["path"]]
