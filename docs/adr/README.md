@@ -46,10 +46,11 @@ Read [the queue](0002-postgres-as-the-job-queue.md),
 | [0030](0030-wait-out-a-provider-error-up-to-a-cap.md) | Wait out a provider error that may pass, up to a cap | [Yes](../backoff.md#the-caps) |
 | [0031](0031-stop-a-job-that-repeats-one-call-with-the-same-result.md) | Stop a job that repeats one call with the same result five times in a row | [Yes](../halt.md#a-job-that-repeats-itself) |
 | [0032](0032-seed-files-up-to-8-mib.md) | Seed a job's workspace with up to 8 MiB of files, the same limit for every job | Yes |
-| [0033](0033-summarise-a-long-conversation-as-a-step.md) | Summarise a long conversation as a step and start the next context window from it. Amends 0028. | Yes, migration 0012. Off unless `SUMMARY_TRIGGER` is set. |
+| [0033](0033-summarise-a-long-conversation-as-a-step.md) | Summarise a long conversation as a step and start the next context window from it. Amends 0028. | Yes, migration 0012, off unless `SUMMARY_TRIGGER` is set. Extended by [0037](0037-ask-for-one-tool-call-per-response-in-a-job-that-summarises.md). |
 | [0034](0034-judge-a-keyed-long-job-entry-by-a-control-and-an-edited-job.md) | Judge a keyed long-job entry by a control job and an edited job. Extends 0022. | Yes. Amended by [0036](0036-judge-a-leak-first-and-require-the-edited-job-to-finish.md). |
 | [0035](0035-prove-the-runtime-on-defensive-jobs-over-synthetic-data-first.md) | Prove the runtime on defensive jobs over synthetic data first. Narrows 0007. | The access review: [generator](../access-review.md) and [grader](../long-job-grader.md). The log investigation is planned. |
 | [0036](0036-judge-a-leak-first-and-require-the-edited-job-to-finish.md) | Judge a leak of the job's answers first, and require the edited job to run to its end. Amends 0034. | Yes. |
+| [0037](0037-ask-for-one-tool-call-per-response-in-a-job-that-summarises.md) | Ask for one tool call per response in a job with a summary trigger, and fail a response with more. Extends 0033. | Yes. |
 
 There is no record 0024: it was withdrawn before anything was built.
 

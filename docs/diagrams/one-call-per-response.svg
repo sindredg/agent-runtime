@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="776" height="304" viewBox="0 0 776 304" role="img" aria-labelledby="one-call-title one-call-desc">
+  <title id="one-call-title">One tool call per response in a job that summarises</title>
+  <desc id="one-call-desc">Without a limit, one response asks for 36 file reads and the next request holds about 379K tokens, past the 20,000 trigger, so no summary can run. With one call per response, each request adds one result, the trigger is checked before every call, and the summary step runs when it is reached. A response with two or more tool calls to such a request fails the job before any tool runs.</desc>
+  <defs>
+    <marker id="one-call-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="m0 0 8 4-8 4z" fill="#bdc8d6"/>
+    </marker>
+  </defs>
+  <rect width="776" height="304" rx="8" fill="#0d1117"/>
+  <g fill="none" stroke="#bdc8d6" stroke-width="1.5" marker-end="url(#one-call-arrow)">
+    <path d="M176 72h30"/>
+    <path d="M448 72h30"/>
+    <path d="M176 192h30"/>
+    <path d="M448 192h30"/>
+    <path d="M620 224v20a8 8 0 0 1-8 8H104a8 8 0 0 1-8-8v-18"/>
+  </g>
+  <g fill="#1b2531" stroke="#788798">
+    <rect x="16" y="40" width="160" height="64" rx="5"/>
+    <rect x="208" y="40" width="240" height="64" rx="5"/>
+    <rect x="16" y="160" width="160" height="64" rx="5"/>
+    <rect x="208" y="160" width="240" height="64" rx="5"/>
+    <rect x="480" y="160" width="280" height="64" rx="5"/>
+  </g>
+  <rect x="480" y="40" width="280" height="64" rx="5" fill="#3b2b25" stroke="#ffb991"/>
+  <g font-family="system-ui, sans-serif" fill="#eef2f6">
+    <g font-size="14" fill="#d6dfe9">
+      <text x="16" y="28">Without a limit</text>
+      <text x="16" y="148">One call per response</text>
+    </g>
+    <g text-anchor="middle">
+      <g font-size="16" font-weight="600">
+        <text x="96" y="67">Request</text>
+        <text x="328" y="67">Response</text>
+        <text x="620" y="67" fill="#ffb991">Next request</text>
+        <text x="96" y="187">Request</text>
+        <text x="328" y="187">Response</text>
+        <text x="620" y="187">Trigger checked</text>
+      </g>
+      <g font-size="14" fill="#d6dfe9">
+        <text x="96" y="89">about 2K tokens</text>
+        <text x="328" y="89">36 read_file calls</text>
+        <text x="620" y="89" fill="#ffb991">379K tokens, past the 20,000 trigger</text>
+        <text x="96" y="209">one result more</text>
+        <text x="328" y="209">one read_file call</text>
+        <text x="620" y="209">at 20,000: summary, new window</text>
+        <text x="360" y="272">below it: the next call</text>
+        <text x="388" y="296">Two or more tool calls in such a response fail the job before any tool runs.</text>
+      </g>
+    </g>
+  </g>
+</svg>
