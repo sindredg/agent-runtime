@@ -140,10 +140,13 @@ def test_no_pure_module_names_another_or_the_sdk() -> None:
 # The line as it ships
 
 
-def test_the_line_ships_proposed_with_no_bound_and_no_number_of_jobs(rules: ModuleType) -> None:
-    assert rules.LINE_FIXED is None
-    assert rules.LONG_KEYED_TOKEN_BOUND is None
-    assert rules.COUNTS_JOBS is None
+def test_the_line_ships_fixed_with_its_bound_and_number_of_jobs(rules: ModuleType) -> None:
+    """Fixed on 2026-11-27: ten counts jobs of the short cap, and the must-fail pair fits too."""
+    assert rules.LINE_FIXED == "2026-11-27"
+    assert rules.COUNTS_JOBS == 10
+    assert rules.LONG_KEYED_TOKEN_BOUND == 15_000_000
+    assert rules.COUNTS_JOBS * rules.SHORT.budget_cap == rules.LONG_KEYED_TOKEN_BOUND
+    assert rules.MUST_FAIL_JOBS * rules.SHORT.budget_cap <= rules.LONG_KEYED_TOKEN_BOUND
     assert json.loads((SUITE / "commitment.json").read_text()) == {"full": None}
 
 
@@ -266,10 +269,26 @@ def test_an_open_run_has_no_refusal(
     assert rules.refusals(run_env("graded"), full) == []
 
 
-def test_the_shipped_line_refuses_every_keyed_run(
+def test_the_shipped_line_refuses_no_run_that_sets_its_numbers(
+    rules: ModuleType, tmp_path: Path, other_commitment: str
+) -> None:
+    """The date, the bound and the number of jobs as they ship. The run gives its own."""
+    short = checkout(tmp_path / "short")
+    full = checkout(tmp_path / "full", other_commitment)
+    counts = run_env("counts", LONG_JOB_JOBS="10")
+
+    assert rules.refusals(counts, short) == []
+    assert rules.refusals(run_env("must-fail"), short) == []
+    assert rules.refusals(run_env("graded"), full) == []
+    # One job more than the line fixes is refused.
+    assert rules.refusals(run_env("counts", LONG_JOB_JOBS="11"), short) == [rules.JOBS_NOT_FIXED]
+
+
+def test_a_line_with_no_date_refuses_every_keyed_run(
     rules: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, other_commitment: str
 ) -> None:
-    """`LINE_FIXED` is read as it ships. Everything else is open."""
+    """`LINE_FIXED` unset. Everything else is open."""
+    monkeypatch.setattr(rules, "LINE_FIXED", None)
     monkeypatch.setattr(rules, "LONG_KEYED_TOKEN_BOUND", 3_000_000)
     monkeypatch.setattr(rules, "COUNTS_JOBS", 2)
     short = checkout(tmp_path / "short")
@@ -286,10 +305,7 @@ def test_on_the_fake_provider_nothing_is_refused(rules: ModuleType, tmp_path: Pa
         env = run_env("no-such-mode", LONG_JOB_PROVIDER=provider, LONG_JOB_SEED=None)
         assert rules.refusals(env, tmp_path) == []
     # The same run on the Claude API is refused, so the cases above show the provider's part.
-    assert rules.refusals(run_env("no-such-mode", LONG_JOB_SEED=None), tmp_path) == [
-        rules.PROPOSED,
-        rules.BAD_MODE,
-    ]
+    assert rules.refusals(run_env("no-such-mode", LONG_JOB_SEED=None), tmp_path) == [rules.BAD_MODE]
 
 
 @pytest.mark.parametrize("provider", ["Claude", "anthropic", "fake ", "claude-api", "none"])
@@ -486,8 +502,12 @@ def test_a_counts_run_needs_the_fixed_number_of_jobs(
     assert rules.refusals(run_env("must-fail", LONG_JOB_JOBS="9"), root) == []
 
 
-def test_no_refusal_quotes_a_value(rules: ModuleType, tmp_path: Path) -> None:
-    """Every refusal at once, from values that would be seen in a sentence."""
+def test_no_refusal_quotes_a_value(
+    rules: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every refusal at once, from values that would be seen in a sentence. The line is open."""
+    for name in ("LINE_FIXED", "LONG_KEYED_TOKEN_BOUND", "COUNTS_JOBS"):
+        monkeypatch.setattr(rules, name, None)
     sentences = {
         getattr(rules, name)
         for name in (

@@ -5,9 +5,8 @@ than the model's context window. The job is judged by its outcome: its
 stored steps, the tracker's issues and what the harness saw. No reference
 run is compared. The code is in `tests/long_job/`.
 
-Status: **configured, not tested**. The numbers of the pass line are
-proposed and live in `tests/long_job/rules.py`. No job has run on a real
-model.
+Status: **configured, not tested**. The pass line was fixed on 2026-11-27
+and lives in `tests/long_job/rules.py`. No job has run on a real model.
 
 ![The grader checks six outcomes from top to bottom and the first that matches is the verdict: a runtime failure, void, no class, an outcome failure, inconclusive, and pass. Every clause that holds is listed with its count, whatever the verdict.](diagrams/long-job-verdict.svg)
 
@@ -104,8 +103,9 @@ worker calls the run's provider.
 
 ## On the Claude API
 
-Every run on the Claude API is refused today: the pass line is proposed and
-the token bound of keyed long jobs is not set.
+A run starts only when `scripts/long_job_keyed.py check` finds nothing to
+refuse. A `counts` run has 10 jobs, and a short-shape run's jobs together
+get at most 15,000,000 tokens.
 
 | Path | What it runs |
 |---|---|
@@ -142,8 +142,6 @@ saved logs and `results.jsonl`.
 
 - The reviewer on the fake provider is scripted. The run shows the harness,
   the kills and the grader end to end, not how a model reviews.
-- The failure classes, NO CLASS and the floors are proposed, like the
-  numbers.
 - The keyed paths are tested with stubs and recorders only. The fake's
   reviewer does not follow an edited summary, so the entry's edited job
   shows nothing on the fake provider.

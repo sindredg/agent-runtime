@@ -91,20 +91,21 @@ def test_check_refuses_nothing_on_the_fake_provider() -> None:
         assert keyed.check({**provider, "LONG_JOB_SEED": "not a seed"}) == []
 
 
-def test_check_refuses_every_keyed_run_today_and_quotes_nothing(
+def test_check_refuses_a_counts_run_without_its_numbers_and_quotes_nothing(
     capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    for name, value in env(LONG_JOB_MODE="must-fail", LONG_JOB_SEED=OTHER_SEED).items():
+    for name, value in env(LONG_JOB_MODE="counts", LONG_JOB_SEED=OTHER_SEED).items():
         monkeypatch.setenv(name, value)
-    monkeypatch.delenv("LONG_JOB_TOKEN_BUDGET", raising=False)
+    for name in ("LONG_JOB_TOKEN_BUDGET", "LONG_JOB_JOBS"):
+        monkeypatch.delenv(name, raising=False)
     code = keyed.main(["check"])
     printed = capsys.readouterr()
 
     assert code == 1
-    lines = printed.err.splitlines()
-    assert "Not run: The pass line is proposed." in lines
-    assert "Not run: The token bound of keyed long jobs is not set, or the run is over it." in lines
-    assert all(line.startswith("Not run: ") for line in lines)
+    assert printed.err.splitlines() == [
+        "Not run: The token budget is not set.",
+        "Not run: The number of jobs is not fixed, or the run names another number.",
+    ]
     assert OTHER_SEED not in printed.out + printed.err
     assert NOT_A_KEY not in printed.out + printed.err
 
@@ -163,6 +164,8 @@ def test_a_refused_corpus_count_builds_no_client(
     rules = modules["rules"]
     if line_fixed:
         opened(modules)
+    else:
+        modules.change("rules", LINE_FIXED=None)
     wanted = keyed.NOT_CLAUDE if sentence == "NOT_CLAUDE" else getattr(rules, sentence)
 
     assert keyed.corpus_refusals(given, ROOT, rules) == [wanted]
