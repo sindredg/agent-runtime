@@ -101,6 +101,7 @@ on:
           - scope-from-text
           - summary-split-blocks
           - guard-drop-uncounted
+          - one-call-off
       provider:
         description: fake costs nothing; claude waits for a reviewer and costs money
         type: choice

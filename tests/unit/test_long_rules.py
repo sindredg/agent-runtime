@@ -24,6 +24,7 @@ import pytest
 from _pytest.junitxml import shorten_message
 
 from fake_provider.scenario import NAME_PATTERN, parse_scenario
+from runtime.worker.summary import TOOL_CHOICE_NONE, TOOL_CHOICE_ONE_CALL
 
 RULES = Path(__file__).resolve().parents[1] / "long" / "rules.py"
 JOB = "0a0a"
@@ -38,6 +39,8 @@ WINDOWS = ((0, 3), (3, 5), (5, 7))
 FOUR_WINDOWS = ((0, 3), (3, 5), (5, 7), (7, 9))
 ISSUE_TURNS = (1, 4)
 NONE = {"type": "none"}
+# Every other request of a job with a trigger, as the stack's jobs send it.
+ONE_CALL = {"type": "auto", "disable_parallel_tool_use": True}
 TESTS = Path(__file__).resolve().parents[1]
 
 
@@ -149,8 +152,8 @@ class Log:
             "messages": len(messages),
             "tools": [tool["name"] for tool in TOOLS],
         }
+        body["tool_choice"] = dict(NONE if summary else ONE_CALL)
         if summary:
-            body["tool_choice"] = dict(NONE)
             payload["summary"] = True
         self.step("model_request", **payload)
         self.entries.append(
@@ -328,6 +331,15 @@ def test_a_resent_summary_request_and_a_refused_request_have_keys_too(rules: Mod
     assert rules.key(refused["body"]) == (1, 4)
     assert rules.summary_keys(log.entries) == [(0, 3), (0, 3), (1, 5)]
     assert rules.repeated_keys(log.entries) == [(0, 3), (1, 4)]
+
+
+def test_a_request_that_asks_for_one_call_is_no_summary_request(rules: ModuleType) -> None:
+    """The suite's copies of the worker's two choices, and what each makes of a request."""
+    assert rules.NONE == TOOL_CHOICE_NONE
+    assert rules.ONE_CALL == TOOL_CHOICE_ONE_CALL
+    shapes = [dict(ONE_CALL), None, dict(NONE), {"type": "auto"}]
+    found = [rules.is_summary({"body": {"tool_choice": shape}}) for shape in shapes]
+    assert found == [False, False, True, True]
 
 
 # The job's end and its summaries

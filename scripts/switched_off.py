@@ -120,6 +120,9 @@ LONG_RUNS_ISSUE = 237
 RECORD_SHAPED = "tests/unit/test_record_shaped_text.py"
 RECORD_SHAPED_STACK = "tests/integration/test_record_shaped_text_in_stack.py"
 RECORD_SHAPED_ISSUE = 160
+# One tool call a response of a job with a trigger: its tests, and the issue.
+ONE_CALL_TESTS = "tests/unit/test_summary.py"
+ONE_CALL_ISSUE = 258
 # The long-job harness: its tests, its rules and grader, where a session leaves its
 # records, the record's test, and the issue of its entry.
 LONG_JOB = "tests/long_job/test_long_job_run.py"
@@ -1583,6 +1586,47 @@ ENTRIES: dict[str, SwitchedOff] = {
             Expect(
                 f"{RECORD_SHAPED_STACK}::test_a_connect_outside_the_scope_is_dropped_and_counted",
                 'assert result["dropped_packets"] > 0',
+            ),
+        ),
+    ),
+    "one-call-off": SwitchedOff(
+        issue=ONE_CALL_ISSUE,
+        what="one tool call a response: the request no longer asks for it, and more are run",
+        edits=(
+            Edit(
+                AGENT,
+                "else (TOOL_CHOICE_ONE_CALL if trigger is not None else None)\n",
+                "else None  # switched off\n",
+            ),
+            Edit(AGENT, "    if one_call and len(ids) > 1:\n", "    if False:  # switched off\n"),
+        ),
+        stack="none",
+        expect=(
+            Expect(
+                f"{ONE_CALL_TESTS}"
+                "::test_a_job_with_a_trigger_asks_for_one_call_in_every_request_but_a_summary",
+                'assert [entry["tool_choice"] for entry in logged(app)] == expected',
+            ),
+            Expect(
+                f"{ONE_CALL_TESTS}"
+                "::test_two_calls_in_a_response_to_a_one_call_request_fail_the_job_before_a_tool_runs",
+                "assert outcome == f\"failed: the model's response is not usable:"
+                ' {TWO_CALLS_PROBLEM}"',
+            ),
+            *(
+                Expect(
+                    f"{ONE_CALL_TESTS}"
+                    "::test_a_takeover_sends_the_tool_choice_the_first_worker_would_have"
+                    f"[{answers}-{other}]",
+                    "assert expected.count(ONE_CALL) == len(expected) - SUMMARIES",
+                )
+                for answers in (3, 4, 6)
+                for other in (None, 400, 5000)
+            ),
+            Expect(
+                "tests/unit/test_response_check.py"
+                "::test_more_calls_than_the_one_asked_are_a_problem",
+                'assert problem == "it has 3 tool_use blocks where one was asked"',
             ),
         ),
     ),

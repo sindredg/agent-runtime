@@ -1,6 +1,6 @@
 """The fake provider and the Claude API answer the same requests the same way.
 
-Started by hand, never in CI: it calls the Claude API (seven small requests,
+Started by hand, never in CI: it calls the Claude API (eight small requests,
 one of them refused on purpose) and needs a key. A recorded run starts from
 the Manual runs workflow (docs/contract-test.md). On a local machine:
 
@@ -29,7 +29,12 @@ from runtime.logs import json_safe, text_safe
 from runtime.provider.base import ModelRequest, ModelResponse
 from runtime.provider.messages import AnthropicProvider
 from runtime.worker.budget import input_bound
-from runtime.worker.summary import TOOL_CHOICE_NONE, summary_messages, summary_problem
+from runtime.worker.summary import (
+    TOOL_CHOICE_NONE,
+    TOOL_CHOICE_ONE_CALL,
+    summary_messages,
+    summary_problem,
+)
 
 FAKE_URL = os.environ.get("FAKE_PROVIDER_URL", "http://127.0.0.1:8001")
 CLAUDE_URL = "https://api.anthropic.com"
@@ -235,6 +240,47 @@ def test_a_summary_request_keeps_the_tools_and_is_answered_with_text_only(name: 
 
     assert summary_problem(summary.stop_reason, summary.content) is None
     assert all(block["type"] != "tool_use" for block in summary.content)
+
+
+TWO_FILES = {
+    "role": "user",
+    "content": (
+        "Use the read_file tool to read a.txt and b.txt, then tell me in one sentence what"
+        " each says."
+    ),
+}
+
+
+def one_call_answer(name: str) -> ModelResponse:
+    """The answer to a request that asks for one tool call, as a job with a trigger sends it."""
+
+    async def run() -> ModelResponse:
+        base_url, secret, model = target(name)
+        provider = AnthropicProvider(api_key=secret, base_url=base_url)
+        try:
+            return await provider.complete(
+                ModelRequest(
+                    model=model,
+                    max_tokens=2048,
+                    messages=[TWO_FILES],
+                    tools=(TOOL,),
+                    user_id="contract",
+                    tool_choice=TOOL_CHOICE_ONE_CALL,
+                )
+            )
+        finally:
+            await provider.aclose()
+
+    return asyncio.run(run())
+
+
+@pytest.mark.parametrize("name", ["fake", "claude"])
+def test_a_one_call_request_is_answered_with_one_tool_call_at_most(name: str) -> None:
+    """`tool_choice` `auto` with parallel tool use off, and a prompt that names two files.
+    The provider accepts it, and the answer calls one tool at most."""
+    answer = one_call_answer(name)
+
+    assert len([block for block in answer.content if block["type"] == "tool_use"]) <= 1
 
 
 def raw_message(name: str, messages: list[dict[str, Any]]) -> dict[str, Any]:

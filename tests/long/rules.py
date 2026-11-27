@@ -70,6 +70,8 @@ TOO_LONG = re.compile(r"prompt is too long: (\d+) tokens > (\d+) maximum")
 CREATED = re.compile(r"created issue (\d+):")
 MASKED = "created issue N:"
 NONE = {"type": "none"}
+# The `tool_choice` of every other request of a job with a trigger: one call at most.
+ONE_CALL = {"type": "auto", "disable_parallel_tool_use": True}
 # pytest keeps whole lines of a failure's message while they fit in this many
 # characters, and the message starts with the exception's name.
 MESSAGE_BUDGET = 500
@@ -210,7 +212,11 @@ def key(body: Mapping[str, Any]) -> Key:
 
 
 def is_summary(entry: Mapping[str, Any]) -> bool:
-    return entry["body"].get("tool_choice") is not None
+    """Whether the request asks for a summary: any `tool_choice` but none and the one-call one.
+
+    A summary request with a wrong `tool_choice` still counts as one, so its check names it.
+    """
+    return entry["body"].get("tool_choice") not in (None, ONE_CALL)
 
 
 def by_key(entries: Sequence[dict[str, Any]]) -> dict[tuple[Key, bool], dict[str, Any]]:
