@@ -98,7 +98,7 @@ runner. Every test ended as the list says.
 ### The long job
 
 Runs from `main` on the fake provider, each on a GitHub-hosted
-`ubuntu-26.04` runner, 2026-11-27. Every test ended as the list says.
+`ubuntu-26.04` runner, 2026-11-27. Each run in the table ended as the list says.
 
 | Entry | Mechanism switched off | Commit | Tests | Run |
 |---|---|---|---|---|

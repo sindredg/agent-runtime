@@ -46,7 +46,7 @@ suite failed on the named assertion: [switched-off runs](switched-off.md#the-lon
 - One run of each test at one commit. Later commits run the same suite in CI.
 - No real model. A real model's summaries, refusals and token counts are
   not here, and the suite's sizes are the fake's estimate, not a tokenizer.
-- The fake's window is 3,400 tokens, so a job crosses it in 47 requests. A
-  window of a real model's size is not run here.
+- The fake's window is 3,400 tokens, so a job of 47 requests crosses it three
+  times. A window of a real model's size is not run here.
 - No halt is timed. The gap for a lost lease or database is in
   [OWASP APTS](../apts.md#halt-and-approval).
