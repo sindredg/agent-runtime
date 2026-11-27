@@ -843,7 +843,7 @@ async def _loop(
                     ),
                 }
             problem = _response_problem(
-                response, state.used_ids, one_call=trigger is not None and not summarising
+                response, state.used_ids, one_call=request.tool_choice == TOOL_CHOICE_ONE_CALL
             )
             if summarising and problem is None:
                 problem = summary_problem(response.stop_reason, response.content)

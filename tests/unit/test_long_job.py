@@ -217,7 +217,7 @@ def kinds(writer: Writer, kind: StepKind) -> list[Step]:
 
 
 def first_summary(log: list[dict[str, Any]]) -> dict[str, Any]:
-    return next(entry for entry in log if entry["tool_choice"] != ONE_CALL)
+    return next(entry for entry in log if entry["tool_choice"] == NONE)
 
 
 # The scenario's size
@@ -257,12 +257,13 @@ def test_with_the_trigger_the_job_summarises_three_times_and_fits_the_window(
     tmp_path: Path,
 ) -> None:
     outcome, writer, log = run(tmp_path / "w", TRIGGER)
-    summaries = [entry for entry in log if entry["tool_choice"] != ONE_CALL]
+    summaries = [entry for entry in log if entry["tool_choice"] == NONE]
 
     assert outcome == "succeeded"
     assert len(kinds(writer, StepKind.SUMMARY)) == SUMMARIES
     assert [entry["summary"] for entry in summaries] == [1, 2, 3]
-    assert [entry["tool_choice"] for entry in summaries] == [NONE] * SUMMARIES
+    # Every request asks for a summary or for one call: nothing else is sent.
+    assert all(entry["tool_choice"] in (NONE, ONE_CALL) for entry in log)
     # Every request, summary requests included, is answered and inside the window.
     assert all(entry["status"] == 200 for entry in log)
     assert max(entry["input_estimate"] for entry in log) <= window()
@@ -272,7 +273,7 @@ def test_with_the_trigger_the_job_summarises_three_times_and_fits_the_window(
     assert turns == list(range(len(scenario().turns)))
     # The requests of each window, its summary request included: 13, 12, 12 and
     # 10. The long-job suite plans its kills by these numbers.
-    ends = [index for index, entry in enumerate(log) if entry["tool_choice"] != ONE_CALL]
+    ends = [index for index, entry in enumerate(log) if entry["tool_choice"] == NONE]
     windows = [b - a for a, b in zip([-1, *ends], [*ends, len(log) - 1], strict=True)]
     assert tuple(windows) == long_rules().WINDOW_REQUESTS == (13, 12, 12, 10)
     # A response of a later window counts at least 2800 and under the trigger:
@@ -349,7 +350,7 @@ def test_every_request_of_a_summarising_job_carries_the_specs_system(tmp_path: P
     window after it, which carries nothing else of the conversation before.
     """
     outcome, writer, log = run(tmp_path / "w", TRIGGER, system=SYSTEM)
-    summaries = [index for index, entry in enumerate(log) if entry["tool_choice"] != ONE_CALL]
+    summaries = [index for index, entry in enumerate(log) if entry["tool_choice"] == NONE]
     openers = [log[index + 1] for index in summaries if index + 1 < len(log)]
 
     assert outcome == "succeeded"

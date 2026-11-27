@@ -73,8 +73,7 @@ def of_kind(steps: list[Step], kind: StepKind) -> list[Step]:
 
 
 def summary_requests(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Every request of a job with a trigger that does not ask for one call."""
-    return [entry for entry in entries if entry["tool_choice"] != ONE_CALL]
+    return [entry for entry in entries if entry["tool_choice"] == NONE]
 
 
 def without_job_id(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
