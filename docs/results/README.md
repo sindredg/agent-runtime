@@ -4,13 +4,14 @@ Each tested guarantee has a test with a pass line fixed before the run, and
 a run with the mechanism switched off to show that the test can fail.
 
 The table with one line per guarantee is in the
-[README](../../README.md#results). The evidence is on five pages:
+[README](../../README.md#results). The evidence is on six pages:
 
 - [Durability](durability.md): lost workers, unsafe calls, the step log.
 - [Scope and sandbox](sandbox.md): what a tool can reach.
 - [Budget, approval, backoff, tool output, the repeat stop](controls.md): what a job may do.
 - [Switched-off runs](switched-off.md): each mechanism removed, and the result.
 - [A parked job tells the operator](notify.md): the question to `NOTIFY_URL`.
+- [A job longer than its context window](long-job.md): summaries and takeovers.
 
 Jobs that ran with a real model, which are not the evidence for a guarantee:
 [Runs against the Claude API](api.md) and [Kill run results](kill-runs.md).
@@ -80,6 +81,7 @@ Runs at other commits:
 | `11b6792` | Seven switched-off runs | [Durability](durability.md), [Controls](controls.md) |
 | `5a5bfa6` | Stored signature changed, Claude API: 5 of 5 jobs refused | [Kill runs](kill-runs.md#with-the-stored-signature-changed) |
 | `30108d4` | The notification's 5 s timing run | [Notification](notify.md#the-first-delivery-comes-within-5-s) |
+| `96172b5` to `7395f47` | Provider errors, the repeat stop, the long job's five entries | [Switched-off runs](switched-off.md#run-at-96172b5) |
 
 ## How a kill run works
 

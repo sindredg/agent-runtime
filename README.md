@@ -66,6 +66,7 @@ that such a run did not reach is named with its result.
 | A job that repeats one call with the same result is stopped | Tested, with [stated limits](docs/limits.md#halt-and-budget) | [Stopped at the fifth repeat, also across a takeover](docs/results/controls.md#a-job-that-repeats-itself) |
 | A provider's rate limit (429) slows a job, it does not fail it | Tested for one job. No limit shared by workers. | [One job waits out 60 s of 429s](docs/results/controls.md#a-busy-provider-slows-a-job) |
 | The step log cannot be changed without detection | Tested, with [stated limits](docs/step-log-chain.md#what-it-does-not-catch) | [Changes refused or found; 483 jobs verified](docs/results/durability.md#the-step-log-cannot-be-changed-without-detection) |
+| A job goes on past its context window, and a takeover sends the same requests | Tested on the fake provider. No real model yet. | [Three summaries; the same requests after 12 kills](docs/results/long-job.md) |
 | A job that waits for a person tells the operator, at least once | Tested. In the kill run the receiver holds each POST 1.5 s. | [Every question arrived, in three runs of 20 jobs](docs/results/notify.md) |
 | Throughput scales with workers | Not measured | |
 

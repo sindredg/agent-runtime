@@ -95,6 +95,25 @@ runner. Every test ended as the list says.
 |---|---|---|---|---|
 | `repeat-stop-off` | The stop of a job that repeats one call with the same result (ADR 0031) | Normal | 2 of 2 | [45343453661](https://github.com/sindredg/agent-runtime/actions/runs/45343453661) |
 
+### The long job
+
+Runs from `main` on the fake provider, each on a GitHub-hosted
+`ubuntu-26.04` runner, 2026-11-27. Each run in the table ended as the list says.
+
+| Entry | Mechanism switched off | Commit | Tests | Run |
+|---|---|---|---|---|
+| `long-trigger-off` | The summary trigger | `20a2582` | 1 of 1 | [46065717220](https://github.com/sindredg/agent-runtime/actions/runs/46065717220) |
+| `long-replay-skips-summary` | Summary steps in a replayed log | `20a2582` | 3 of 3, one passes as listed | [46065720346](https://github.com/sindredg/agent-runtime/actions/runs/46065720346) |
+| `long-summary-cut` | Half of the summary in a window's opening message | `20a2582` | 1 of 1 | [46065723399](https://github.com/sindredg/agent-runtime/actions/runs/46065723399) |
+| `long-own-trigger` | The trigger the first request pinned | `7395f47` | 1 of 1 | [46069200626](https://github.com/sindredg/agent-runtime/actions/runs/46069200626) |
+| `long-oversize-off` | The stop of a window that opens at the trigger | `20a2582` | 1 of 1 | [46065729503](https://github.com/sindredg/agent-runtime/actions/runs/46065729503) |
+
+The first run of `long-own-trigger`, at `20a2582`, did not count. The test
+stopped before the takeover: a killed worker was still listed as running
+([issue 255](https://github.com/sindredg/agent-runtime/issues/255)). The
+harness now waits up to 10 s for killed workers to stop. The run at `7395f47`
+failed on the named assertion.
+
 ### Earlier outcomes
 
 Two outcomes read at earlier commits. With the bound off, at `fbb293f`, two
