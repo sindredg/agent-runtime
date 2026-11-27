@@ -81,8 +81,7 @@ Runs at other commits:
 | `11b6792` | Seven switched-off runs | [Durability](durability.md), [Controls](controls.md) |
 | `5a5bfa6` | Stored signature changed, Claude API: 5 of 5 jobs refused | [Kill runs](kill-runs.md#with-the-stored-signature-changed) |
 | `30108d4` | The notification's 5 s timing run | [Notification](notify.md#the-first-delivery-comes-within-5-s) |
-| `96172b5`, `377304c` | Provider errors and the repeat stop | [Switched-off runs](switched-off.md#run-at-96172b5) |
-| `20a2582`, `7395f47` | The long job's five entries | [Switched-off runs](switched-off.md#the-long-job) |
+| `96172b5` to `7395f47` | Provider errors, the repeat stop, the long job's five entries | [Switched-off runs](switched-off.md#run-at-96172b5) |
 
 ## How a kill run works
 
