@@ -4,13 +4,14 @@ Each tested guarantee has a test with a pass line fixed before the run, and
 a run with the mechanism switched off to show that the test can fail.
 
 The table with one line per guarantee is in the
-[README](../../README.md#results). The evidence is on five pages:
+[README](../../README.md#results). The evidence is on six pages:
 
 - [Durability](durability.md): lost workers, unsafe calls, the step log.
 - [Scope and sandbox](sandbox.md): what a tool can reach.
 - [Budget, approval, backoff, tool output, the repeat stop](controls.md): what a job may do.
 - [Switched-off runs](switched-off.md): each mechanism removed, and the result.
 - [A parked job tells the operator](notify.md): the question to `NOTIFY_URL`.
+- [A job longer than its context window](long-job.md): summaries and takeovers.
 
 Jobs that ran with a real model, which are not the evidence for a guarantee:
 [Runs against the Claude API](api.md) and [Kill run results](kill-runs.md).

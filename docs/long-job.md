@@ -5,7 +5,7 @@ One job is longer than the model's context window and goes on through
 suite in `tests/long` runs it on the fake provider and compares every
 request the provider received with the run that nobody interrupted.
 
-Status: **configured, not tested**.
+Status: **tested**, on the fake provider ([results](results/long-job.md)).
 
 A long job judged by its outcome instead of a reference run is on the
 [Long-job grader](long-job-grader.md) page.
@@ -109,8 +109,8 @@ call ([Halt](halt.md)). The gap for a lost lease or database is in
 ## Runs that have to fail
 
 Five entries of `scripts/switched_off.py` each switch one mechanism off on
-the long stack ([Testing](testing.md#must-fail-runs)). None has a recorded
-run yet.
+the long stack ([Testing](testing.md#must-fail-runs)). Each has a recorded
+run from `main` ([switched-off runs](results/switched-off.md#the-long-job)).
 
 | Entry | Switched off | The test has to fail on |
 |---|---|---|
