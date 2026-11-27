@@ -132,6 +132,8 @@ LONG_JOB_ISSUE = 243
 # Run in each phase of such an entry beside its tests: the session's answers
 # in what it printed, recorded and kept. It is no test of the entry's.
 LONG_JOB_ANSWERS = f"{LONG_JOB}::test_no_answer_is_in_the_record_the_output_or_the_saved_logs"
+# The message of that test's assert on what it found: its one failure that is a leak.
+ANSWER_FOUND = "the record, the output or a saved worker log holds an answer of the job"
 # How pytest runs a phase: short tracebacks, and output captured for the
 # answers test. A failure then prints its message and the count, no more.
 LONG_JOB_PYTEST = ("-v", "--tb=short")
@@ -206,8 +208,8 @@ class Verdicts:
 
     The control job runs the checkout as it is: its record's verdict is
     `control` and every test of the entry passes. Only then is the edit
-    written. The edited job's record lists each clause of `fires`, and
-    meets every floor.
+    written. The edited job runs to its end: its record lists each clause
+    of `fires`, meets every floor, and has neither R1 nor NO_CLASS.
     """
 
     control: str = "PASS"
@@ -1905,8 +1907,7 @@ def outcomes(junit: Path) -> dict[str, tuple[str, str]]:
     """
     found: dict[str, tuple[str, str]] = {}
     for case in ET.parse(junit).getroot().iter("testcase"):  # noqa: S314 - pytest wrote it
-        path = case.get("classname", "").replace(".", "/") + ".py"
-        node = f"{path}::{case.get('name', '')}"
+        node = _node(case)
         result, text = "passed", ""
         for kind in ("failure", "error", "skipped"):
             element = case.find(kind)
@@ -1918,6 +1919,12 @@ def outcomes(junit: Path) -> dict[str, tuple[str, str]]:
             continue
         found[node] = (result, text)
     return found
+
+
+def _node(case: ET.Element) -> str:
+    """The node id of a junit test case."""
+    path = case.get("classname", "").replace(".", "/") + ".py"
+    return f"{path}::{case.get('name', '')}"
 
 
 def _failing_lines(message: str, traceback: str) -> str:
@@ -2100,19 +2107,23 @@ def judge_rehearsal(
 
 @dataclass(frozen=True)
 class Phase:
-    """One phase of a run of the long-job harness: `judge`'s lines and the record it left."""
+    """One phase of a run of the long-job harness: `judge`'s lines, the record it left, and
+    whether its answers test found an answer of the job."""
 
     name: str
     lines: tuple[str, ...]
     records: tuple[dict[str, Any], ...]
     trouble: tuple[str, ...]
+    leaked: bool = False
 
 
 # A clause in either job's record that makes the run a finding whatever else
 # the record holds: the runtime's own failures.
 RUNTIME_CLAUSES = ("R2", "R5", "R6", "crash", "runtime")
-# Reported for the edited job, not judged.
-REPORTED_CLAUSES = ("R1", "no_class", "kill_failpoint", "kill_2", "kill_3", "kill_windows")
+# The edited job's stops before its end: a finding. It must be graded on R7, R8 and R9.
+STOP_CLAUSES = ("R1", "no_class")
+# Reported for the edited job, not judged: the control showed the kills land.
+REPORTED_CLAUSES = ("kill_failpoint", "kill_2", "kill_3", "kill_windows", "takeovers")
 ANSWERS_KEPT_OUT = "no answer of the job is printed, recorded or kept"
 
 
@@ -2129,6 +2140,24 @@ def phase_entry(entry: SwitchedOff, phase: str) -> SwitchedOff:
             for e in expect
         )
     return replace(entry, expect=(*expect, Expect(LONG_JOB_ANSWERS, None, ANSWERS_KEPT_OUT)))
+
+
+def answers_leaked(junit: Path) -> bool:
+    """Whether the answers test failed on its assert that found an answer of the job.
+
+    Read from every case of that test in the junit: `outcomes` keeps one per
+    node, and a teardown error after the failure would hide it. Its other
+    failures, an error alone and a test that did not run show no leak.
+    """
+    if not junit.is_file():
+        return False
+    failures = [
+        f"{failure.get('message', '')}\n{failure.text or ''}"
+        for case in ET.parse(junit).getroot().iter("testcase")  # noqa: S314 - pytest wrote it
+        if _node(case) == LONG_JOB_ANSWERS
+        for failure in case.findall("failure")
+    ]
+    return any(ANSWER_FOUND in text for text in failures)
 
 
 def _clauses(record: Mapping[str, Any]) -> dict[str, int]:
@@ -2174,21 +2203,25 @@ def judge_verdicts(
 
     The first of these that holds gives the verdict:
 
-    1. Either job's record lists R2, R5, R6, a crash or a runtime failure:
+    1. The answers test of either phase found an answer of the job:
+       FINDING, whatever else happened.
+    2. Either job's record lists R2, R5, R6, a crash or a runtime failure:
        FINDING, even beside a void.
-    2. A phase that ran left no record of this run (its commit, provider,
+    3. A phase that ran left no record of this run (its commit, provider,
        model, mode, phase and one job): INCONCLUSIVE.
-    3. Either record is void: INCONCLUSIVE.
-    4. The control's verdict is not the entry's, or a test of the control
+    4. Either record is void: INCONCLUSIVE.
+    5. The control's verdict is not the entry's, or a test of the control
        did not end as listed: FINDING. The edit was never written.
-    5. The edited job did not run: INCONCLUSIVE.
-    6. The edited record does not list each clause that must fire, misses
-       a floor, or a test of it did not end as listed: FINDING.
-    7. PASS.
+    6. The edited job did not run: INCONCLUSIVE.
+    7. The edited record does not list each clause that must fire, misses
+       a floor, lists R1 or NO_CLASS, or a test of it did not end as
+       listed: FINDING.
+    8. PASS.
 
-    With `control_only` the judge stops after rule 4: the control half,
+    With `control_only` the judge stops after rule 5: the control half,
     which `run` asks before it writes the edit, and a rehearsal asks alone.
-    R1, NO_CLASS and the kills of the edited job are reported, not judged.
+    A missed kill in the edited job, too few takeovers included, is
+    reported, not judged.
     """
     if not isinstance(entry.record, Verdicts) or entry.model is None:
         raise ValueError("only an entry with `Verdicts` and a model is judged by two jobs")
@@ -2223,6 +2256,13 @@ def judge_verdicts(
         for name, record in records.items()
         if (found := _runtime(record))
     ]
+    leaks = [
+        f"{name}: an answer of the job is in what the session printed, recorded or kept"
+        for name in asked
+        if name in phases and phases[name].leaked
+    ]
+    if leaks:
+        return "FINDING", [*lines, *leaks, *broken, *missing]
     if broken:
         return "FINDING", [*lines, *broken]
     if missing:
@@ -2246,6 +2286,8 @@ def judge_verdicts(
         reasons.append(f"edited: did not fire: {', '.join(quiet)}")
     if floors := [name for name in _clauses(edited) if name.startswith("floor_")]:
         reasons.append(f"edited: a floor is missed: {', '.join(floors)}")
+    if stopped := _listed(edited, STOP_CLAUSES):
+        reasons.append(f"edited: the job did not run to its end: {', '.join(stopped)}")
     if not all(line.startswith("ok") for line in phases["edited"].lines):
         reasons.append("edited: a test did not end as listed")
     reported = [
@@ -2526,7 +2568,8 @@ def run_phase(entry: SwitchedOff, provider: str, phase: str) -> Phase:
     lines = judge(checked, found) if found else ["WRONG: pytest wrote no results"]
     _say("\n".join(f"{phase}: {line}" for line in lines))
     records, trouble = new_records(kept, before, LONG_JOB_TEST)
-    return Phase(phase, tuple(lines), tuple(records), tuple(trouble))
+    leaked = answers_leaked(ROOT / junit)
+    return Phase(phase, tuple(lines), tuple(records), tuple(trouble), leaked)
 
 
 def main(argv: list[str]) -> int:

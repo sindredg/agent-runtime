@@ -80,7 +80,7 @@ mechanism switched off, which had to fail. The outcomes are in
 Recorded switched-off runs start from the Manual runs workflow, from `main`.
 An entry names its provider. One on the Claude API runs in a job that holds the key, and is
 [judged by its record](kill-runs.md#a-switched-off-run-on-the-claude-api) ([ADR 0022](adr/0022-run-switched-off-entries-on-the-claude-api-from-the-list.md)),
-or by a control and an edited job ([ADR 0034](adr/0034-judge-a-keyed-long-job-entry-by-a-control-and-an-edited-job.md)).
+or by a control and an edited job ([ADR 0034](adr/0034-judge-a-keyed-long-job-entry-by-a-control-and-an-edited-job.md), [0036](adr/0036-judge-a-leak-first-and-require-the-edited-job-to-finish.md)).
 
 `suite: switched-off-all` runs every entry of the fake provider from `main`,
 one job and one verdict each. The names come from `main`'s list, and no job

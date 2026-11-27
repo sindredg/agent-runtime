@@ -102,6 +102,14 @@ def test_the_entry_runs_the_five_tests_of_the_harness_with_their_fixed_messages(
     assert f"def {switched_off.LONG_JOB_ANSWERS.split('::')[1]}(" in text
 
 
+def test_the_judge_knows_a_leak_by_the_literal_of_the_answers_tests_assert() -> None:
+    """The leak is the one failure of the answers test that the judge reads first."""
+    text = (ROOT / switched_off.LONG_JOB).read_text()
+    literal = f'"{switched_off.ANSWER_FOUND}"'
+    found = [line.strip() for line in text.splitlines() if literal in line]
+    assert found == [f"assert found == 0, {literal}"]
+
+
 def test_the_edit_holds_the_text_of_the_harness_as_a_literal() -> None:
     rules = switched_off.long_job_rules()
     (edit,) = LONG.edits
@@ -315,10 +323,13 @@ def lines(phase: str, failed: tuple[str, ...] = ()) -> tuple[str, ...]:
     )
 
 
-def phase(name: str, found: dict[str, Any] | None, failed: tuple[str, ...] = ()) -> Any:
+def phase(
+    name: str, found: dict[str, Any] | None, failed: tuple[str, ...] = (), *, leaked: bool = False
+) -> Any:
     if found is None:
-        return switched_off.Phase(name, lines(name, failed), (), ("the run left 0 directories",))
-    return switched_off.Phase(name, lines(name, failed), (found,), ())
+        trouble = ("the run left 0 directories",)
+        return switched_off.Phase(name, lines(name, failed), (), trouble, leaked)
+    return switched_off.Phase(name, lines(name, failed), (found,), (), leaked)
 
 
 def judged(control: Any, edited_phase: Any = None, **more: Any) -> tuple[str, list[str]]:
@@ -337,6 +348,15 @@ def judged(control: Any, edited_phase: Any = None, **more: Any) -> tuple[str, li
 
 
 RUN_SHOWS = "test_the_run_shows_enough"
+ANSWERS = switched_off.LONG_JOB_ANSWERS.split("::")[1]
+LEAK = "an answer of the job is in what the session printed, recorded or kept"
+VOID_CONTROL = record(verdict="VOID", clauses={"void_clock": 1}, floors={}, voids=["clock"])
+# A record whose grade threw: only the grading error, no clause of the job.
+GRADING_ERROR: dict[str, Any] = {
+    "verdict": "INCONCLUSIVE",
+    "clauses": {"grading_error": 1},
+    "grading_error": "KeyError",
+}
 
 
 @pytest.mark.parametrize(
@@ -368,17 +388,40 @@ RUN_SHOWS = "test_the_run_shows_enough"
         (phase("control", record(phase="edited")), None, "INCONCLUSIVE", "the record's phase"),
         (phase("control", record(runs=2)), None, "INCONCLUSIVE", "the record's runs is 2"),
         (phase("control", record()), None, "INCONCLUSIVE", "the edited job did not run"),
-        # NO CLASS by the budget, with the three fired and the floors met: reported only.
+        # NO CLASS by the budget, with the three fired and the floors met: the edited job
+        # has to run to its end, so a stop before it is a finding, as R1 is.
         (phase("control", record()), phase("edited", edited(no_class=1) | {"verdict": "NO_CLASS"}),
-         "PASS", "reported and not judged: no_class"),
+         "FINDING", "edited: the job did not run to its end: no_class"),
+        (phase("control", record()), phase("edited", edited(R1=1)), "FINDING",
+         "edited: the job did not run to its end: R1"),
+        # A missed kill in the edited job is reported, and the run still passes.
+        (phase("control", record()), phase("edited", edited(kill_2=1)), "PASS",
+         "edited, reported and not judged: kill_2"),
+        (phase("control", record()), phase("edited", edited(takeovers=1)), "PASS",
+         "edited, reported and not judged: takeovers"),
         (phase("control", record()), phase("edited", edited(), ("test_the_log_holds",)),
          "FINDING", "edited: a test did not end as listed"),
+        # A grade that threw is no pass of the control, and no fire in the edited job.
+        (phase("control", record(**GRADING_ERROR)), None, "FINDING",
+         "the control job did not pass"),
+        (phase("control", record()), phase("edited", record("edited", **GRADING_ERROR)),
+         "FINDING", "edited: did not fire"),
+        # A leak is judged first: beside a void, beside a record of another run, and before
+        # a runtime failure.
+        (phase("control", VOID_CONTROL, (RUN_SHOWS, ANSWERS), leaked=True), None, "FINDING",
+         f"control: {LEAK}"),
+        (phase("control", record()), phase("edited", record("edited", commit="fedcba9"),
+         (ANSWERS,), leaked=True), "FINDING", f"edited: {LEAK}"),
+        (phase("control", record(verdict="FAIL_RUNTIME", clauses={"R5": 1}), (ANSWERS,),
+         leaked=True), None, "FINDING", f"control: {LEAK}"),
     ],
     ids=[
         "pass", "control-failed", "control-test-wrong", "r8-quiet", "floor-missed", "r5-fired",
         "void-control", "void-edited", "no-record", "no-edited-record", "other-commit",
         "other-model", "other-phase", "other-runs", "edited-missing", "no-class-budget",
-        "edited-test-wrong",
+        "r1-edited", "kill-missed-reported", "takeovers-reported", "edited-test-wrong",
+        "grading-error-control", "grading-error-edited", "leak-beside-void",
+        "leak-beside-no-edited-record", "leak-beside-runtime",
     ],
 )  # fmt: skip
 def test_each_case_of_the_judge(control: Any, edited_phase: Any, verdict: str, reason: str) -> None:
@@ -394,20 +437,27 @@ def test_a_runtime_failure_in_either_job_is_a_finding_even_beside_a_void(
 ) -> None:
     void = {"void_clock": 1}
     if where == "control":
-        control = record(verdict="VOID", clauses={clause: 1, **void}, voids=["clock"])
+        control = record(verdict="FAIL_RUNTIME", clauses={clause: 1, **void}, voids=["clock"])
         found, reasons = judged(phase("control", control))
     else:
         found, reasons = judged(
             phase("control", record()),
-            phase("edited", edited(**{clause: 1}, **void) | {"verdict": "VOID"}),
+            phase("edited", edited(**{clause: 1}, **void) | {"verdict": "FAIL_RUNTIME"}),
         )
     assert found == "FINDING", reasons
     assert f"{where}: the runtime failed the job: {clause}" in reasons
 
 
 def test_a_crash_the_grade_could_not_count_is_a_finding_too() -> None:
-    """A record made void before grading has no clause, and still says a worker crashed."""
-    control = record(verdict="VOID", clauses={"void_harness_error": 1}, floors={}, crashed=True)
+    """A job never graded, after a harness error, has no clause of its own, and its record
+    still says a worker crashed."""
+    control = record(
+        verdict="VOID",
+        clauses={"void_harness_error": 1},
+        voids=["harness_error"],
+        floors={},
+        crashed=True,
+    )
     found, reasons = judged(phase("control", control, (RUN_SHOWS,)))
     assert found == "FINDING", reasons
     assert "control: the runtime failed the job: crash" in reasons
@@ -438,6 +488,20 @@ def test_the_control_half_stops_after_the_control() -> None:
     assert judged(phase("control", record(verdict="INCONCLUSIVE")), control_only=True)[0] == (
         "FINDING"
     )
+    # A run asks the control half alone first: a leak beside a void is judged there too.
+    leaked = phase("control", VOID_CONTROL, (RUN_SHOWS, ANSWERS), leaked=True)
+    assert judged(leaked, control_only=True)[0] == "FINDING"
+
+
+def test_a_leak_lists_beside_it_what_else_the_jobs_show() -> None:
+    runtime = phase(
+        "control", record(verdict="FAIL_RUNTIME", clauses={"R5": 1}), (ANSWERS,), leaked=True
+    )
+    _, reasons = judged(runtime)
+    assert "control: the runtime failed the job: R5" in reasons
+    other_run = phase("edited", record("edited", commit="fedcba9"), (ANSWERS,), leaked=True)
+    _, reasons = judged(phase("control", record()), other_run)
+    assert any(line.startswith("edited: the record's commit is 'fedcba9'") for line in reasons)
 
 
 def test_the_judge_prints_counts_and_fixed_names_only() -> None:
@@ -597,6 +661,66 @@ def test_a_phase_starts_its_stack_and_runs_the_tests_with_short_tracebacks(
     assert (tests_env["LONG_JOB_SEED"], tests_env["CLAUDE_API_KEY"]) == (OTHER_SEED, NOT_A_KEY)
     assert "LONG_JOB_TOKEN_BUDGET" not in tests_env
     assert found.lines == ("WRONG: pytest wrote no results",)
+
+
+FOUND_FAILURE = f'<failure message="AssertionError: {switched_off.ANSWER_FOUND}">x</failure>'
+# Each case's children of the answers test's junit cases, one tuple item per case: pytest
+# writes a second case for a test whose teardown failed after the test itself.
+ANSWERS_FAILURES = {
+    "found": (FOUND_FAILURE,),
+    "nothing-to-look-in": ('<failure message="AssertionError: nothing to look in">x</failure>',),
+    "no-records-file": ('<failure message="FileNotFoundError: results.jsonl">x</failure>',),
+    "fixture-error": (f'<error message="{switched_off.ANSWER_FOUND}">x</error>',),
+    "teardown-error-after-leak": (
+        FOUND_FAILURE,
+        '<error message="failed on teardown with &quot;RuntimeError&quot;">x</error>',
+    ),
+    "passed": ("",),
+}
+
+
+@pytest.mark.parametrize("case", ANSWERS_FAILURES)
+def test_a_phase_is_leaked_only_when_the_answers_test_failed_on_a_found_answer(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, case: str
+) -> None:
+    """The answers test's junit as `run_phase` reads it; no stack, no job."""
+    monkeypatch.setattr(switched_off, "ROOT", tmp_path)
+    monkeypatch.setattr(switched_off, "_sh", lambda *args, env: None)
+    test = switched_off.LONG_JOB_ANSWERS.split("::")[1]
+    case_xml = "".join(
+        f'<testcase classname="tests.long_job.test_long_job_run" name="{test}">{child}</testcase>'
+        for child in ANSWERS_FAILURES[case]
+    )
+
+    def pytest_run(args: list[str], **more: Any) -> Any:
+        (junit,) = [arg.split("=", 1)[1] for arg in args if arg.startswith("--junitxml=")]
+        (tmp_path / junit).write_text(f"<testsuites><testsuite>{case_xml}</testsuite></testsuites>")
+        return SimpleNamespace(returncode=1)
+
+    monkeypatch.setattr(switched_off.subprocess, "run", pytest_run)
+    found = switched_off.run_phase(LONG, "fake", "control")
+
+    assert found.leaked is (case in ("found", "teardown-error-after-leak"))
+
+
+def answers_junit(tmp_path: Path, name: str, child: str) -> Path:
+    junit = tmp_path / "junit.xml"
+    case = (
+        f'<testcase classname="tests.long_job.test_long_job_run" name="{name}">{child}</testcase>'
+    )
+    junit.write_text(f"<testsuites><testsuite>{case}</testsuite></testsuites>")
+    return junit
+
+
+def test_a_found_answer_counts_only_in_the_answers_test_and_also_in_its_text(
+    tmp_path: Path,
+) -> None:
+    answers = switched_off.LONG_JOB_ANSWERS.split("::")[1]
+    in_text = f'<failure message="AssertionError">{switched_off.ANSWER_FOUND}</failure>'
+    assert switched_off.answers_leaked(answers_junit(tmp_path, answers, in_text)) is True
+    other = answers_junit(tmp_path, "test_the_log_holds", FOUND_FAILURE)
+    assert switched_off.answers_leaked(other) is False
+    assert switched_off.answers_leaked(tmp_path / "missing.xml") is False
 
 
 # The rehearsal: the control only, on the fake provider, and the bound not asked

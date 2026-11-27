@@ -112,7 +112,7 @@ the token bound of keyed long jobs is not set.
 | `make long-job-claude LONG_JOB_MODEL=claude-haiku-5-5` | Mode `counts` or `graded` on the long stack with the Claude overlay. |
 | `scripts/long_job_keyed.py check` | The run's refusals, before the key or any stack. |
 | `scripts/long_job_keyed.py corpus-count` | The tokens of a seed's whole corpus. |
-| Entry `long-notices-dropped` | Mode `must-fail`: a control job, then a job whose first summary drops the notices ([ADR 0034](adr/0034-judge-a-keyed-long-job-entry-by-a-control-and-an-edited-job.md)). |
+| Entry `long-notices-dropped` | Mode `must-fail`: a control job, then a job whose first summary drops the notices ([ADR 0034](adr/0034-judge-a-keyed-long-job-entry-by-a-control-and-an-edited-job.md), [0036](adr/0036-judge-a-leak-first-and-require-the-edited-job-to-finish.md)). |
 
 - **`counts`** runs short jobs one after another, with no kill, and records
   their counts with no verdict.

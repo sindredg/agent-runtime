@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="776" height="636" viewBox="0 0 776 636" role="img" aria-labelledby="long-must-fail-judge-title long-must-fail-judge-desc">
+  <title id="long-must-fail-judge-title">How the long-job list entry is judged</title>
+  <desc id="long-must-fail-judge-desc">The judge checks seven outcomes from top to bottom and the first that matches is the verdict: an answer of the job found in either job, a runtime failure in either job, no record or a void, a control that did not pass, an edited job that did not run, an edited job that did not fail as listed or stopped before its end, and pass. A missed kill in the edited job is reported, not judged.</desc>
+  <defs>
+    <marker id="long-must-fail-judge-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="m0 0 8 4-8 4z" fill="#bdc8d6"/>
+    </marker>
+  </defs>
+  <rect width="776" height="636" rx="8" fill="#0d1117"/>
+  <g fill="none" stroke="#bdc8d6" stroke-width="1.5" marker-end="url(#long-must-fail-judge-arrow)">
+    <path d="M64 80v22"/>
+    <path d="M64 160v22"/>
+    <path d="M64 240v22"/>
+    <path d="M64 320v22"/>
+    <path d="M64 400v22"/>
+    <path d="M64 480v22"/>
+  </g>
+  <g fill="#1b2531" stroke="#788798">
+    <rect x="16" y="104" width="744" height="56" rx="5"/>
+    <rect x="16" y="184" width="744" height="56" rx="5"/>
+    <rect x="16" y="264" width="744" height="56" rx="5"/>
+    <rect x="16" y="344" width="744" height="56" rx="5"/>
+  </g>
+  <rect x="16" y="24" width="744" height="56" rx="5" fill="#3b2b25" stroke="#ffb991"/>
+  <rect x="16" y="424" width="744" height="56" rx="5" fill="#3b2b25" stroke="#ffb991"/>
+  <rect x="16" y="504" width="744" height="56" rx="5" fill="#1b2531" stroke="#eef2f6"/>
+  <g font-family="system-ui, sans-serif" fill="#eef2f6">
+    <g font-size="16" font-weight="600">
+      <text x="32" y="48" fill="#ffb991">FINDING</text>
+      <text x="32" y="128">FINDING</text>
+      <text x="32" y="208">INCONCLUSIVE</text>
+      <text x="32" y="288">FINDING</text>
+      <text x="32" y="368">INCONCLUSIVE</text>
+      <text x="32" y="448" fill="#ffb991">FINDING</text>
+      <text x="32" y="528">PASS</text>
+    </g>
+    <g font-size="14" fill="#d6dfe9">
+      <text x="32" y="69" fill="#ffb991">An answer of the job is in what either job printed, recorded or kept</text>
+      <text x="32" y="149">A runtime failure in either job: R2, R5, R6, a crash, a runtime error</text>
+      <text x="32" y="229">A job left no record of this run, or either record is void</text>
+      <text x="32" y="309">The control did not pass, INCONCLUSIVE included. No edit is written.</text>
+      <text x="32" y="389">The edited job did not run</text>
+      <text x="32" y="469" fill="#ffb991">Edited: R7, R8 or R9 did not fire, a floor is missed, R1 or no class, a test not as listed</text>
+      <text x="32" y="549">None of the above. A missed kill in the edited job is reported, not judged.</text>
+      <text x="76" y="94">no</text>
+      <text x="76" y="174">no</text>
+      <text x="76" y="254">no</text>
+      <text x="76" y="334">no</text>
+      <text x="76" y="414">no</text>
+      <text x="76" y="494">no</text>
+      <text x="388" y="612" text-anchor="middle">Checked top to bottom; the first match is the verdict. Highlighted: the two outcomes ADR 0036 changes.</text>
+    </g>
+  </g>
+</svg>
