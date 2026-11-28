@@ -66,7 +66,7 @@ def long_rules(**values: Any) -> ModuleType:
 @pytest.fixture
 def bound(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     """The rules with the long bound set to the entry's two short jobs: 3,000,000."""
-    rules = long_rules(LONG_KEYED_TOKEN_BOUND=3_000_000)
+    rules = long_rules(LONG_KEYED_TOKEN_BOUND=8_000_000)
     monkeypatch.setattr(switched_off, "long_job_rules", lambda root=ROOT: rules)
     return rules
 
@@ -178,7 +178,7 @@ def test_the_check_is_green_while_the_bound_is_not_set_and_a_start_is_refused(
     assert capsys.readouterr().err == f"not started: {rules.NO_BOUND}\n"
 
 
-@pytest.mark.parametrize(("value", "refused"), [(3_000_000, False), (2_999_999, True)])
+@pytest.mark.parametrize(("value", "refused"), [(8_000_000, False), (7_999_999, True)])
 def test_a_set_bound_lets_a_start_past_it_only_when_both_jobs_fit(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], value: int, refused: bool
 ) -> None:
@@ -573,7 +573,7 @@ def stub_run(
     outcomes: Mapping[str, dict[str, Any]],
 ) -> list[tuple[str, Any]]:
     """`run` with its git, its stack and its phases recorded; the checkout is `tmp_path`."""
-    rules = long_rules(LONG_KEYED_TOKEN_BOUND=3_000_000, refusals=lambda env, root: [])
+    rules = long_rules(LONG_KEYED_TOKEN_BOUND=8_000_000, refusals=lambda env, root: [])
     monkeypatch.setattr(switched_off, "long_job_rules", lambda root=ROOT: rules)
     monkeypatch.setattr(switched_off, "ROOT", tmp_path)
     agent = tmp_path / switched_off.AGENT

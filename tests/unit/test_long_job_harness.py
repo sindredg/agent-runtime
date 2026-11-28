@@ -40,9 +40,11 @@ from runtime.store.steps import Step, StepKind
 from runtime.tools.base import ToolRegistry
 from runtime.tools.read_file import READ_FILE
 from runtime.worker import agent
+from runtime.worker.budget import ALLOWANCE
 from runtime.worker.halt import Halt
 from runtime.worker.lease import Lease
 from runtime.worker.replay import replay
+from runtime.worker.summary import SUMMARY_INSTRUCTION
 
 ROOT = Path(__file__).resolve().parents[2]
 SUITE = ROOT / "tests" / "long_job"
@@ -141,11 +143,15 @@ def test_no_pure_module_names_another_or_the_sdk() -> None:
 
 
 def test_the_line_ships_fixed_with_its_bound_and_number_of_jobs(rules: ModuleType) -> None:
-    """Fixed on 2026-11-27: ten counts jobs of the short cap, and the must-fail pair fits too."""
-    assert rules.LINE_FIXED == "2026-11-27"
+    """Fixed on 2026-11-28: the must-fail pair at the short cap fits the bound.
+
+    Ten counts jobs fit it only at 1,500,000 tokens each, the budget of the
+    pilots.
+    """
+    assert rules.LINE_FIXED == "2026-11-28"
     assert rules.COUNTS_JOBS == 10
     assert rules.LONG_KEYED_TOKEN_BOUND == 15_000_000
-    assert rules.COUNTS_JOBS * rules.SHORT.budget_cap == rules.LONG_KEYED_TOKEN_BOUND
+    assert rules.COUNTS_JOBS * 1_500_000 == rules.LONG_KEYED_TOKEN_BOUND
     assert rules.MUST_FAIL_JOBS * rules.SHORT.budget_cap <= rules.LONG_KEYED_TOKEN_BOUND
     assert json.loads((SUITE / "commitment.json").read_text()) == {"full": None}
 
@@ -156,7 +162,7 @@ def test_the_numbers_of_the_line(rules: ModuleType) -> None:
     assert rules.MAX_TOKENS == 32_000
     assert (full.files, short.files) == (FULL.files, SHORT.files) == (293, 36)
     assert rules.FILE_BYTES == 16_384
-    assert (full.trigger, short.trigger) == (80_000, 20_000)
+    assert (full.trigger, short.trigger) == (rules.TRIGGER, rules.TRIGGER) == (32_000, 32_000)
     assert (full.kill_after, short.kill_after) == ((3, 7), (2, 4))
     assert (full.floor_made, full.floor_cleared, full.floor_windows) == (6, 2, 3)
     assert (short.floor_made, short.floor_cleared, short.floor_windows) == (6, 2, 3)
@@ -165,12 +171,41 @@ def test_the_numbers_of_the_line(rules: ModuleType) -> None:
     assert (full.takeovers, short.takeovers) == (3, 3)
     assert (rules.CROSSING_FLOOR, rules.CORPUS_FLOOR) == (1_000_000, 1_200_000)
     assert rules.CHUNK_BYTES == 524_288
-    assert (full.budget_cap, short.budget_cap) == (20_000_000, 1_500_000)
+    assert (full.budget_cap, short.budget_cap) == (25_000_000, 4_000_000)
+    assert (short.timeout_seconds, short.job_minutes) == (3_600, 70)
     assert {mode: line.name for mode, line in rules.MODES.items()} == {
         "counts": "short",
         "must-fail": "short",
         "graded": "full",
     }
+
+
+@pytest.mark.parametrize("shape", [FULL, SHORT], ids=["full", "short"])
+def test_a_summary_request_stays_under_the_price_line_of_100k_tokens(
+    rules: ModuleType, shape: Any
+) -> None:
+    """ADR 0038: trigger, two tool results, one response, the allowance, the instruction.
+
+    The trigger is checked on the last response's input and output. One tool
+    result went into that request and one more follows it, so the summary
+    request holds at most the trigger, two of the job's largest results, one
+    response of `MAX_TOKENS`, the budget's allowance on each of the two
+    requests and the instruction. A token is at least one byte of text.
+    """
+    files = generate(bytes.fromhex(PUBLIC_SEED), shape).files
+    largest = max(len(text.encode()) for text in files.values())
+    line = rules.LINES[shape.name]
+    bound = (
+        line.trigger
+        + 2 * largest
+        + rules.MAX_TOKENS
+        + 2 * ALLOWANCE
+        + len(SUMMARY_INSTRUCTION.encode())
+    )
+
+    assert largest == rules.FILE_BYTES
+    # Over 100,000 input tokens the model's price per token is higher.
+    assert bound < 100_000
 
 
 # The times
@@ -188,13 +223,13 @@ def test_a_full_job_ends_inside_its_session_and_the_session_inside_the_workflow_
 
 def test_a_short_job_is_started_only_while_its_wait_fits_the_session(rules: ModuleType) -> None:
     short = rules.SHORT
-    assert (short.timeout_seconds, short.job_minutes) == (1_800, 40)
+    assert (short.timeout_seconds, short.job_minutes) == (3_600, 70)
     assert short.timeout_seconds < short.job_minutes * 60
-    # Ten jobs one after another, each taking its whole wait: eight start.
+    # Ten jobs one after another, each taking its whole wait: four start.
     started = [n for n in range(10) if rules.may_start(n * short.job_minutes * 60, short)]
-    assert started == list(range(8))
-    assert rules.may_start(280 * 60, short)
-    assert not rules.may_start(280 * 60 + 1, short)
+    assert started == list(range(4))
+    assert rules.may_start(250 * 60, short)
+    assert not rules.may_start(250 * 60 + 1, short)
     assert rules.may_start(0, rules.FULL)
     assert not rules.may_start(1, rules.FULL)
 
@@ -202,7 +237,7 @@ def test_a_short_job_is_started_only_while_its_wait_fits_the_session(rules: Modu
 def test_two_short_sessions_and_two_builds_fit_the_workflow_job(rules: ModuleType) -> None:
     sessions = rules.MUST_FAIL_JOBS * rules.SHORT.job_minutes
     builds = rules.MUST_FAIL_JOBS * rules.BUILD_MINUTES
-    assert (rules.MUST_FAIL_JOBS, sessions, builds) == (2, 80, 60)
+    assert (rules.MUST_FAIL_JOBS, sessions, builds) == (2, 140, 60)
     assert sessions + builds < rules.WORKFLOW_MINUTES
 
 
@@ -213,7 +248,7 @@ def test_two_short_sessions_and_two_builds_fit_the_workflow_job(rules: ModuleTyp
 def open_line(rules: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
     """The line as it would be once fixed: a date, a bound and a number of jobs."""
     monkeypatch.setattr(rules, "LINE_FIXED", "2026-01-01")
-    monkeypatch.setattr(rules, "LONG_KEYED_TOKEN_BOUND", 3_000_000)
+    monkeypatch.setattr(rules, "LONG_KEYED_TOKEN_BOUND", 8_000_000)
     monkeypatch.setattr(rules, "COUNTS_JOBS", 2)
 
 
@@ -245,9 +280,9 @@ def run_env(mode: str, **changes: str | None) -> dict[str, str]:
     """A keyed run nothing refuses once the line is open. None takes a variable out."""
     env = {"LONG_JOB_PROVIDER": "claude", "LONG_JOB_MODE": mode, "LONG_JOB_SEED": OTHER_SEED}
     if mode == "counts":
-        env |= {BUDGET: "1500000", "LONG_JOB_JOBS": "2"}
+        env |= {BUDGET: "4000000", "LONG_JOB_JOBS": "2"}
     if mode == "graded":
-        env[BUDGET] = "20000000"
+        env[BUDGET] = "25000000"
     for name, value in changes.items():
         if value is None:
             env.pop(name, None)
@@ -275,13 +310,17 @@ def test_the_shipped_line_refuses_no_run_that_sets_its_numbers(
     """The date, the bound and the number of jobs as they ship. The run gives its own."""
     short = checkout(tmp_path / "short")
     full = checkout(tmp_path / "full", other_commitment)
-    counts = run_env("counts", LONG_JOB_JOBS="10")
+    # Ten counts jobs fit the bound at 1,500,000 tokens each, not one more.
+    counts = run_env("counts", **{BUDGET: "1500000"}, LONG_JOB_JOBS="10")
+    over = run_env("counts", **{BUDGET: "1500001"}, LONG_JOB_JOBS="10")
 
     assert rules.refusals(counts, short) == []
+    assert rules.refusals(over, short) == [rules.NO_BOUND]
     assert rules.refusals(run_env("must-fail"), short) == []
     assert rules.refusals(run_env("graded"), full) == []
     # One job more than the line fixes is refused.
-    assert rules.refusals(run_env("counts", LONG_JOB_JOBS="11"), short) == [rules.JOBS_NOT_FIXED]
+    eleven = run_env("counts", **{BUDGET: "1000000"}, LONG_JOB_JOBS="11")
+    assert rules.refusals(eleven, short) == [rules.JOBS_NOT_FIXED]
 
 
 def test_a_line_with_no_date_refuses_every_keyed_run(
@@ -289,7 +328,7 @@ def test_a_line_with_no_date_refuses_every_keyed_run(
 ) -> None:
     """`LINE_FIXED` unset. Everything else is open."""
     monkeypatch.setattr(rules, "LINE_FIXED", None)
-    monkeypatch.setattr(rules, "LONG_KEYED_TOKEN_BOUND", 3_000_000)
+    monkeypatch.setattr(rules, "LONG_KEYED_TOKEN_BOUND", 8_000_000)
     monkeypatch.setattr(rules, "COUNTS_JOBS", 2)
     short = checkout(tmp_path / "short")
     full = checkout(tmp_path / "full", other_commitment)
@@ -347,7 +386,7 @@ def test_a_run_with_no_token_budget_is_refused(rules: ModuleType, tmp_path: Path
         " 1500000",
         "1500000\n",
         "1_500_000",
-        "1500001",
+        "4000001",
         "\u0661\u0665",
     ],
 )
@@ -363,9 +402,9 @@ def test_a_token_budget_that_is_not_a_number_inside_the_cap_is_refused(
 def test_the_cap_of_a_token_budget_is_the_shapes(
     rules: ModuleType, tmp_path: Path, other_commitment: str
 ) -> None:
-    """20,000,000 opens a full job and 1 more does not; `run_env` gives a short job its cap."""
+    """25,000,000 opens a full job and 1 more does not; `run_env` gives a short job its cap."""
     root = checkout(tmp_path, other_commitment)
-    over = run_env("graded", **{BUDGET: "20000001"})
+    over = run_env("graded", **{BUDGET: "25000001"})
 
     assert rules.refusals(over, root) == [rules.BAD_BUDGET]
     assert rules.refusals(run_env("graded", **{BUDGET: "1"}), root) == []
@@ -468,14 +507,14 @@ def test_a_seed_whose_job_cannot_be_made_is_refused_with_the_same_sentence(
 def test_a_short_run_is_refused_without_the_token_bound_or_over_it(
     rules: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Two jobs of 1,500,000 tokens are 3,000,000: the bound of `open_line`, to the token."""
+    """Two jobs of 4,000,000 tokens are 8,000,000: the bound of `open_line`, to the token."""
     root = checkout(tmp_path)
-    for bound in (None, 2_999_999):
+    for bound in (None, 7_999_999):
         monkeypatch.setattr(rules, "LONG_KEYED_TOKEN_BOUND", bound)
         assert rules.refusals(run_env("must-fail"), root) == [rules.NO_BOUND]
         assert rules.refusals(run_env("counts"), root) == [rules.NO_BOUND]
     # A smaller budget for each job fits the smaller bound.
-    assert rules.refusals(run_env("counts", **{BUDGET: "1499999"}), root) == []
+    assert rules.refusals(run_env("counts", **{BUDGET: "3999999"}), root) == []
 
 
 @pytest.mark.usefixtures("open_line")
