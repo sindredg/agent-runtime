@@ -99,8 +99,9 @@ integration suite.
 - No request of the job reached the fake less than 5 s after a 429 to it.
   The fake refused at most 6 of its requests.
 
-With the mechanism off, each of the three failed its tests: a 429 treated as
-an error (5), `retry-after` ignored (4), the claim ignoring `not_before` (5).
+With the mechanism off, at `3b38cdf`, each of the three failed its tests: a
+429 treated as an error (5), `retry-after` ignored (4), the claim ignoring
+`not_before` (5).
 
 ## A job that repeats itself
 

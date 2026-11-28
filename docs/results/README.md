@@ -28,13 +28,13 @@ flowchart LR
     S3 --> S4[make lab]
     S4 --> S4b[make long]
     S4b --> S5[make up]
-    S5 --> S6[one run per<br/>switched-off mechanism]
+    S5 --> S6[the four switches<br/>with no list entry]
 ```
 
 | | |
 |---|---|
 | Commit | `3b38cdf`, 2026-11-28, 11:40 to 13:15 UTC. The clock was steady for 120 s before the start. |
-| Runs and seed | 200 random kill times for the lost-worker test, 200 for the approval test, seed `20261113`. Every other test: 1 run. |
+| Runs and seed | 200 random kill times for the lost-worker test and 200 for the approval test, seed `20261113`; seed `293` for the long suite's kills. Every other test: 1 run. |
 | Workers | 3 in the chaos stack, 2 in the lab and the long stack, 1 in the normal stack |
 | Provider | The fake provider. The issue tracker is a fake, except Gitea in the lab. |
 | Where | Docker Compose on one machine: Linux aarch64 under WSL2, 8 CPUs, Docker 29.1.3, read after the run |
@@ -61,9 +61,9 @@ flowchart LR
 ## Runs with a mechanism switched off
 
 Each switch is a change to the source, made for one run and then restored.
-At `3b38cdf`, all 54 entries of the fake provider in `scripts/switched_off.py`
-ended as listed, 171 of 171 tests ([run](https://github.com/sindredg/agent-runtime/actions/runs/46140675351)). The four switches with no
-entry ([issue 163](https://github.com/sindredg/agent-runtime/issues/163)) each failed their tests, on the machine above.
+At `3b38cdf`, all 54 fake-provider entries of `scripts/switched_off.py` ended
+as listed, 171 of 171 tests ([run](https://github.com/sindredg/agent-runtime/actions/runs/46140675351)), on GitHub from 11:36 to 11:51 UTC.
+The four switches with no entry ([issue 163](https://github.com/sindredg/agent-runtime/issues/163)) failed their tests last, locally.
 
 The outcomes on the guarantee pages are from 30 switches at `1f57ee4`, unless
 a line names another commit. Their output is kept on the machine that ran

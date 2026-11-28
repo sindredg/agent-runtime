@@ -36,7 +36,8 @@ Every run passed its clauses ([what a job is checked on](../long-job.md#what-a-j
 ## Runs that have to fail
 
 Each of the five mechanisms was switched off in a run from `main` at
-`3b38cdf`, and the suite failed on the named assertion:
+`3b38cdf`. Every test failed on its named assertion, except one test of
+`long-replay-skips-summary` that passes as listed:
 [switched-off runs](switched-off.md#the-entries).
 
 ## What these results do not show
