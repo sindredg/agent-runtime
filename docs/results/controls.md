@@ -17,7 +17,8 @@ flowchart LR
     A -->|no| T[tool runs]
     A -->|yes| P[wait for a person]
     P -->|approved| T
-    P -->|denied, or the deadline| N[call not run]
+    P -->|denied| N[call not run]
+    P -->|the deadline| F
     T --> C[output cut to 64 KiB]
     C --> B
     N --> B
@@ -27,7 +28,7 @@ flowchart LR
 
 Tested. Integration suite, 805 of 805 tests.
 
-- `test_budget.py`: a job that loops, set to read a 2 KB file thirty times,
+- `test_budget.py`: a job that loops, set to read two 2 KB files in turn thirty times,
   with a budget of 20,000 tokens.
 - It ends `failed` with "the token budget does not cover the next model
   call", after at least 3 and fewer than 30 calls.
@@ -55,7 +56,7 @@ With the mechanism off:
 |---|---|
 | The check that the next call fits | The call was made with no valid `max_tokens`, and the provider refused it. The job failed with that error, not the budget's. |
 | The check and the cut of `max_tokens`, at `11b6792` ([run](https://github.com/sindredg/agent-runtime/actions/runs/44808413841)) | The job spent 282,118 tokens against its 20,000, by the provider's count. The test fails on the spend. |
-| The cancel check | Both cancel tests fail: neither job ended within the test's wait |
+| The cancel check | Both cancel tests fail. One ends in the test's wait; the command test ends either there or on its status, `succeeded` not `cancelled` |
 | The deadline timer | Both deadline tests fail |
 | The claim's deadline check | Both cases of the claim's deadline test fail. The job stayed `running`. |
 | The claim's cancel, at `11b6792` ([run](https://github.com/sindredg/agent-runtime/actions/runs/44808446584)) | The claim took the job, still `running`, instead of cancelling it. The test fails. |
@@ -65,8 +66,9 @@ With the mechanism off:
 
 Tested. `tests/chaos/test_approval.py`, 200 runs in the chaos run.
 
-- 200 jobs that ask before `create_issue`. The worker holding the job was
-  killed at a random time before the question, and again after the answer.
+- 200 jobs that ask before `create_issue`. A worker holding the job was
+  killed at a random time in the first 1.5 s, and again after the answer.
+  A kill is sent only when a worker holds the job.
 - 238 kills sent, 184 takeovers. 134 jobs were approved and 66 denied. No
   run failed.
 - The tracker holds 134 issues for 134 approvals, each created after its
@@ -83,8 +85,9 @@ records its own runs. It also checks that a spec cannot take a tool out, and
 that an answer counts only for the question it names.
 
 With the mechanism off: with the gate removed, all 4 chaos tests fail. In 20
-short runs the tracker holds 20 issues for 0 approvals. 14 of the 19
-integration tests fail.
+short runs the tracker holds 20 issues for 0 approvals. At `1f57ee4`, 14 of the 19
+integration tests failed. The file has 21 tests now; its list entry runs
+those 14 ([switched-off runs](switched-off.md#the-entries)).
 
 ## A busy provider slows a job
 

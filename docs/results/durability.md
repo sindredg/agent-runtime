@@ -57,8 +57,9 @@ and the [limits of tool calls](../limits.md#tool-calls).
   for one approval.
 
 Against a real tracker, Gitea in a container (`make lab`,
-[Lab demo](../lab-demo.md)): 2 of 2 cases. In each the worker stopped
-itself in the call, another took over, and Gitea held exactly one issue.
+[Lab demo](../lab-demo.md)): 2 of 2 cases. The worker stopped itself once
+before the call and once after it, another took over, and Gitea held
+exactly one issue.
 
 With the mechanism off:
 
