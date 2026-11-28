@@ -14,6 +14,7 @@ import io
 import itertools
 import json
 import logging
+import re
 import subprocess
 import sys
 import time
@@ -153,7 +154,15 @@ def test_the_line_ships_fixed_with_its_bound_and_number_of_jobs(rules: ModuleTyp
     assert rules.LONG_KEYED_TOKEN_BOUND == 15_000_000
     assert rules.COUNTS_JOBS * 1_500_000 == rules.LONG_KEYED_TOKEN_BOUND
     assert rules.MUST_FAIL_JOBS * rules.SHORT.budget_cap <= rules.LONG_KEYED_TOKEN_BOUND
-    assert json.loads((SUITE / "commitment.json").read_text()) == {"full": None}
+
+
+def test_the_commitment_ships_set_to_a_private_seed() -> None:
+    """The full shape's commitment is a SHA-256, and not the public seed's."""
+    committed = json.loads((SUITE / "commitment.json").read_text())
+
+    assert list(committed) == ["full"]
+    assert re.fullmatch(r"sha256:[0-9a-f]{64}", committed["full"])
+    assert committed["full"] != committed_to(PUBLIC_SEED)
 
 
 def test_the_numbers_of_the_line(rules: ModuleType) -> None:

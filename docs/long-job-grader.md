@@ -119,6 +119,8 @@ get at most 15,000,000 tokens.
 - **`graded`** runs one full-shape job with the three kills. After the job
   it counts the stored text with `CLAUDE_API_KEY` from the environment. The
   session is green only on PASS: any other verdict, VOID included, fails it.
+- A `graded` run takes only the seed whose [commitment](access-review.md#the-command)
+  is in `tests/long_job/commitment.json`. `counts` and `must-fail` refuse that seed.
 - A keyed run reads its seed from `LONG_JOB_SEED`, writes no scenario and
   records `seed: private`. Its own answers are looked for in every record,
   output and saved log.
