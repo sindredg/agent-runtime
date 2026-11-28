@@ -2,8 +2,8 @@
 
 The evidence that a job goes on past the model's context window through
 summary steps, and that a takeover sends the same requests. How it works is
-on [Long job](../long-job.md). Every run here is on the fake provider. One
-job on a real model has [its own page](long-job-real-model.md).
+on [Long job](../long-job.md). Every run here is on the fake provider. The
+graded job on a real model has [its own page](long-job-real-model.md).
 
 ![One job runs past its context window with nobody interrupting it and is the reference. A job whose worker is stopped or killed is taken over and must send the same requests. A job whose summary answer is bad, or whose next window opens at the trigger, must end failed; after a bad answer no tool runs.](../diagrams/long-job-runs.svg)
 
@@ -26,9 +26,9 @@ Every run passed its clauses ([what a job is checked on](../long-job.md#what-a-j
 |---|---|---|
 | 1, nobody interrupts | 1 | `succeeded`: 3 summaries, 47 requests, 180 steps, 88,551 tokens |
 | 2, stop after the first summary | 1 | `succeeded`, 1 takeover. The requests are run 1's. |
-| 3, stop inside a summary request | 1 | `succeeded`, 1 takeover. The requests are run 1's. |
+| 3, stop at a summary request, before it is sent | 1 | `succeeded`, 1 takeover. The requests are run 1's. |
 | 4, planned kills | 5 | `succeeded`, 12 takeovers. 12 kills planned, 12 reached inside their request. |
-| 5, bad summary answers | 6 | `failed` on the stored summary. No tool ran and no issue was opened. |
+| 5, bad summary answers | 6 | `failed` on the stored summary. No tool ran after it, and the bad answer's own call opened no issue. |
 | 6, other tracker numbers | 2 | `succeeded`. Six digits moved no summary; seven moved the first a turn earlier. |
 | 7, workers with another trigger | 4 | 2 taken over `succeeded` with run 1's requests. A job begun with no trigger and its reference were both refused for the window. |
 | 8, a window opens at the trigger | 2 | `failed` with the error that names size 293 and the trigger |

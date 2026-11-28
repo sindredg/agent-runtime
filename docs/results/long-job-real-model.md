@@ -1,6 +1,6 @@
 # One long job on a real model
 
-One long job ran on the Claude API with `claude-haiku-5-5`. The runtime
+One long job was graded on the Claude API with `claude-haiku-5-5`. The runtime
 carried it through 20 summaries and 3 takeovers to `succeeded`. The model's
 review missed 2 of the 12 violations that a late notice decides, so the run
 did not pass and ended as a finding.
@@ -53,6 +53,18 @@ did not run. The entry ended as `FINDING: long-notices-dropped`
 ([issue 243](https://github.com/sindredg/agent-runtime/issues/243)).
 
 No graded run of the full job, 293 files, was attempted.
+
+## Earlier jobs, not graded
+
+Two earlier runs of the harness in mode
+[`counts`](../long-job-grader.md#on-the-claude-api) had 10 short jobs each on
+`claude-haiku-5-5`, with trigger 20,000 and budget 1,500,000. All 20 jobs
+ended `failed`.
+
+- `7395f47` ([46072515563](https://github.com/sindredg/agent-runtime/actions/runs/46072515563)): all 10 on `max_tokens`, with no
+  summary. This led to [ADR 0037](../adr/0037-ask-for-one-tool-call-per-response-in-a-job-that-summarises.md).
+- `bbb805a` ([46081719563](https://github.com/sindredg/agent-runtime/actions/runs/46081719563)): 8 on the budget, 2 on
+  `max_tokens`. This led to [ADR 0038](../adr/0038-size-the-long-job-trigger-so-no-request-passes-100k-tokens.md).
 
 ## What it does not show
 

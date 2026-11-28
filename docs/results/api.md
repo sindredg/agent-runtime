@@ -64,4 +64,5 @@ workers killed at random times and at two failpoints:
   twice.
 - No refusal by the model and no rate limit was met.
 - The kill was at one point, in a model call.
-- Their output was not kept, and the job files are not in the repository.
+- Their output was not kept. The job files are not in the repository,
+  except `examples/hello.json`.

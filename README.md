@@ -66,13 +66,14 @@ that such a run did not reach is named with its result.
 | A job that repeats one call with the same result is stopped | Tested, with [stated limits](docs/limits.md#halt-and-budget) | [Stopped at the fifth repeat, also across a takeover](docs/results/controls.md#a-job-that-repeats-itself) |
 | A provider's rate limit (429) slows a job, it does not fail it | Tested for one job. No limit shared by workers. | [One job waits out 60 s of 429s](docs/results/controls.md#a-busy-provider-slows-a-job) |
 | The step log cannot be changed without detection | Tested, with [stated limits](docs/step-log-chain.md#what-it-does-not-catch) | [Changes refused or found; 484 jobs verified](docs/results/durability.md#the-step-log-cannot-be-changed-without-detection) |
-| A job goes on past its context window, and a takeover sends the same requests | Tested on the fake provider. One job on a real model ran and did not pass. | [Three summaries; the same requests after 12 kills](docs/results/long-job.md) |
+| A job goes on past its context window, and a takeover sends the same requests | Tested on the fake provider. One job on a real model was graded and did not pass. | [Three summaries; the same requests after 12 kills](docs/results/long-job.md) |
 | A job that waits for a person tells the operator, at least once | Tested. In the kill run the receiver holds each POST 1.5 s. | [Every question arrived, in three runs of 20 jobs](docs/results/notify.md) |
 | Throughput scales with workers | Not measured | |
 
-The table's results are from one run of every suite at `3b38cdf`, on one
-machine, against the fake provider. CI runs the suites on each pull request
-that changes more than `docs/`, with 20 kills. Runs at other commits are named on [Results](docs/results/README.md).
+The table's results are from one run at `3b38cdf` of the suites named on
+[Results](docs/results/README.md#the-run), which also names runs at other
+commits. It ran on one machine, against the fake provider. CI runs the
+suites on each pull request that changes more than `docs/`, with 20 kills.
 
 The fake provider is compared with the Claude API by a contract test that is
 started by hand: [The contract test](docs/contract-test.md). Eight single
@@ -82,7 +83,7 @@ The kill runs also passed on the Claude API, 33 jobs on each of three
 models: every job succeeded and no issue was opened twice
 ([Kill run results](docs/results/kill-runs.md#runs)).
 
-One long job also ran on the Claude API with `claude-haiku-5-5`. It finished
+One long job was also graded on the Claude API with `claude-haiku-5-5`. It finished
 through 20 summaries and 3 takeovers, and its review missed 2 of the 12
 violations that a late notice in the job's prompt decides, so it did not pass
 ([One long job on a real model](docs/results/long-job-real-model.md)).

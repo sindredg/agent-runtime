@@ -114,10 +114,11 @@ and the tracker token in a tool result and in two answers of the API.
 - Four switches have no entry: the takeover cap, the cancel check, the
   deadline timer, and the skip in the workspace walk. Each failed its tests
   at `3b38cdf`, on the full run's machine. Their tests end in a timeout or an
-  error, not on an assertion
+  error, except the cancel check's command test, which can end on its
+  status assertion
   ([issue 163](https://github.com/sindredg/agent-runtime/issues/163)).
-- Two more have no entry: the deny list without the runtime's networks
-  ([sandbox](sandbox.md)) and both cuts for `list_dir`
-  ([controls](controls.md#bad-tool-output)).
+- Others have no entry, among them the escape suite's two switches and
+  the deny list without the runtime's networks ([sandbox](sandbox.md)),
+  and both cuts for `list_dir` ([controls](controls.md#bad-tool-output)).
 - An entry shows that its tests can fail. It does not show that they catch
   every way the mechanism can break.

@@ -18,14 +18,14 @@ Jobs on a real model, not the evidence for a guarantee: [Runs against the Claude
 
 ## The run
 
-The results in the README's table are from one run of every suite at one
-commit, on one machine with no other test run, in this order:
+The results in the README's table are from one run of the suites below at
+one commit, on one machine with no other test run, in this order:
 
 ```mermaid
 flowchart LR
     S1[make clean, make up,<br/>pre-commit,<br/>unit, integration] --> S2[make escape,<br/>then its two switches]
     S2 --> S3[CHAOS_RUNS=200<br/>make chaos,<br/>runtime verify --all]
-    S3 --> S4[make lab]
+    S3 --> S4[make lab,<br/>make up]
     S4 --> S4b[make long]
     S4b --> S5[make up]
     S5 --> S6[the four switches<br/>with no list entry]

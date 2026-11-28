@@ -5,9 +5,9 @@ than the model's context window. The job is judged by its outcome: its
 stored steps, the tracker's issues and what the harness saw. No reference
 run is compared. The code is in `tests/long_job/`.
 
-Status: **configured, not tested**. The pass line was fixed on 2026-11-27
-and lives in `tests/long_job/rules.py`. One job on the Claude API was
-graded FAIL on R7 ([one long job on a real model](results/long-job-real-model.md)).
+Status: **configured, not tested**. The pass line was fixed on 2026-11-27,
+moved on 2026-11-28 with the trigger, and lives in `tests/long_job/rules.py`.
+One job on the Claude API was graded FAIL on R7 ([one long job on a real model](results/long-job-real-model.md)).
 
 ![The grader checks six outcomes from top to bottom and the first that matches is the verdict: a runtime failure, void, no class, an outcome failure, inconclusive, and pass. Every clause that holds is listed with its count, whatever the verdict.](diagrams/long-job-verdict.svg)
 
