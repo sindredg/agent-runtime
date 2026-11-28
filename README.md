@@ -84,7 +84,7 @@ models: every job succeeded and no issue was opened twice
 
 One long job also ran on the Claude API with `claude-haiku-5-5`. It finished
 through 20 summaries and 3 takeovers, and its review missed 2 of the 12
-violations that only the job's prompt decides, so it did not pass
+violations that a late notice in the job's prompt decides, so it did not pass
 ([One long job on a real model](docs/results/long-job-real-model.md)).
 
 ## Documentation
