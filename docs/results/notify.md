@@ -5,7 +5,7 @@ posts its question to `NOTIFY_URL`, at least once. How the delivery works is in
 [ADR 0029](../adr/0029-notify-from-a-row-the-park-writes.md).
 
 The three chaos tests also ran in the [full run](README.md#the-run) at
-`4ed43c0`. The other results are from CI and Manual runs on GitHub, each from
+`3b38cdf`. The other results are from CI and Manual runs on GitHub, each from
 `main`, each named with its commit and run.
 
 ![Three runs of 20 parked jobs: with no kill each question arrives once; with workers killed while the receiver holds each POST 1.5 s, a killed POST is sent again; with the receiver down 30 s, every question arrives after its return.](../diagrams/notify-runs.svg)
@@ -20,7 +20,7 @@ steps.
 | | |
 |---|---|
 | Runs | The chaos job of CI on `main`: [45032112259](https://github.com/sindredg/agent-runtime/actions/runs/45032112259) at `30108d4`, [45047730136](https://github.com/sindredg/agent-runtime/actions/runs/45047730136) at `7096a5c`, 2026-11-22. 1 run of each test per CI run. |
-| Full run | `4ed43c0`, 2026-11-23, 1 run of each test. Linux aarch64, 8 CPUs. |
+| Full run | `3b38cdf`, 2026-11-28, 1 run of each test. Linux aarch64, 8 CPUs. |
 | Jobs and seed | 20 jobs per test, scenario `ci-triage-slow`, gated on `create_issue`. Kill seed `20261113`. |
 | Workers and lease | 3 in the chaos stack, lease 2 s |
 | Provider | The fake provider and the fake receiver |
@@ -28,11 +28,11 @@ steps.
 
 Each test's pass line, and its result at each commit:
 
-| Test | Pass line | `30108d4` | `7096a5c` | `4ed43c0` |
+| Test | Pass line | `30108d4` | `7096a5c` | `3b38cdf` |
 |---|---|---|---|---|
 | No kill | Each question arrives exactly once | 20 of 20 once | 20 of 20 once | 20 of 20 once |
-| Random kills | Each arrives at least once; at least one repeat | 20 of 20; 9 kills, 8 repeats | 20 of 20; 8 kills, 5 repeats | 20 of 20; 7 kills, 7 repeats |
-| Receiver down 30 s | No job ends; each arrives within 60 s of the return | 20 of 20, slowest 8.5 s | 20 of 20, slowest 8.0 s | 20 of 20, slowest 7.9 s |
+| Random kills | Each arrives at least once; at least one repeat | 20 of 20; 9 kills, 8 repeats | 20 of 20; 8 kills, 5 repeats | 20 of 20; 6 kills, 6 repeats |
+| Receiver down 30 s | No job ends; each arrives within 60 s of the return | 20 of 20, slowest 8.5 s | 20 of 20, slowest 8.0 s | 20 of 20, slowest 8.1 s |
 
 The no-kill test holds every job parked 16 s after the last first arrival,
 past the 12 s a claim pushes a row ahead. A second POST of any question in
@@ -61,7 +61,7 @@ suite `notify-timing`.
 Two entries of the [switched-off list](switched-off.md), each run once from
 `main` at `30108d4` on the chaos stack. Each ended 3 of 3 tests on
 `assert missing == []`: no question arrived. Both ended as listed again in
-the [run at `4ed43c0`](https://github.com/sindredg/agent-runtime/actions/runs/45204873674).
+the [run at `3b38cdf`](https://github.com/sindredg/agent-runtime/actions/runs/46140675351).
 
 | Entry | Removed | Run |
 |---|---|---|

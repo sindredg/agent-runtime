@@ -110,7 +110,7 @@ call ([Halt](halt.md)). The gap for a lost lease or database is in
 
 Five entries of `scripts/switched_off.py` each switch one mechanism off on
 the long stack ([Testing](testing.md#must-fail-runs)). Each has a recorded
-run from `main` ([switched-off runs](results/switched-off.md#the-long-job)).
+run from `main` ([switched-off runs](results/switched-off.md#the-entries)).
 
 | Entry | Switched off | The test has to fail on |
 |---|---|---|

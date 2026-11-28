@@ -4,7 +4,7 @@ The evidence that a tool reaches only its job's scope, and nothing else of
 the host. The conditions of the runs are on the [Results](README.md) page.
 The mechanisms are in [Sandbox](../sandbox.md) and [Scope](../scope.md).
 
-Tested. `make escape`, 23 of 23 tests, in the run at `4ed43c0`, unless a
+Tested. `make escape`, 23 of 23 tests, in the run at `3b38cdf`, unless a
 line names another commit. Docker 29.1.3, `kernel.yama.ptrace_scope` 1,
 both read from the host and not recorded by the run.
 
