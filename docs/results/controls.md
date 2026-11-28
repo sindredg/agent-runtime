@@ -1,7 +1,7 @@
 # Results: budget, approval and tool output
 
 The evidence for the guarantees about what a job may spend and do. Every
-result here is from the run at `4ed43c0`, and each outcome with a mechanism
+result here is from the run at `3b38cdf`, and each outcome with a mechanism
 off from `1f57ee4`, unless a line names another commit. The run's conditions
 are on the [Results](README.md) page. What a job may reach is on
 [Scope and sandbox](sandbox.md).
@@ -25,7 +25,7 @@ flowchart LR
 
 ## Budget, deadline and cancel
 
-Tested. Integration suite, 699 of 699 tests.
+Tested. Integration suite, 805 of 805 tests.
 
 - `test_budget.py`: a job that loops, set to read a 2 KB file thirty times,
   with a budget of 20,000 tokens.
@@ -67,7 +67,7 @@ Tested. `tests/chaos/test_approval.py`, 200 runs in the chaos run.
 
 - 200 jobs that ask before `create_issue`. The worker holding the job was
   killed at a random time before the question, and again after the answer.
-- 244 kills sent, 146 takeovers. 134 jobs were approved and 66 denied. No
+- 238 kills sent, 184 takeovers. 134 jobs were approved and 66 denied. No
   run failed.
 - The tracker holds 134 issues for 134 approvals, each created after its
   approval by the tracker's own time, and none for a denied call.
@@ -75,7 +75,7 @@ Tested. `tests/chaos/test_approval.py`, 200 runs in the chaos run.
   again. Two approvals, one issue.
 - Worker stopped after the approved call ran: the check finds the issue. One
   approval, one issue.
-- A job nobody answered, with an 8 s timeout: `failed` 0.02 s after its
+- A job nobody answered, with an 8 s timeout: `failed` 0.18 s after its
   deadline, no issue.
 
 `tests/integration/test_approval.py` covers the same with a tool that
@@ -99,15 +99,14 @@ integration suite.
 - No request of the job reached the fake less than 5 s after a 429 to it.
   The fake refused at most 6 of its requests.
 
-With the mechanism off, each of the three failed 5 tests: a 429 treated as an
-error, `retry-after` ignored, the claim ignoring `not_before`.
+With the mechanism off, at `3b38cdf`, each of the three failed its tests: a
+429 treated as an error (5), `retry-after` ignored (4), the claim ignoring
+`not_before` (5).
 
 ## A job that repeats itself
 
-Tested at `76f0c09`, on the fake provider, in the integration suite of
-[CI run 45890486073](https://github.com/sindredg/agent-runtime/actions/runs/45890486073),
-on a GitHub-hosted runner: 4 of 4 tests of `test_repeat_stop.py` passed, 1 run
-each, one worker at a time. The stop is described in [Halt](../halt.md#a-job-that-repeats-itself)
+Tested in the integration suite of the run at `3b38cdf`: 4 of 4 tests of
+`test_repeat_stop.py` passed, 1 run each, one worker at a time. The stop is described in [Halt](../halt.md#a-job-that-repeats-itself)
 and [ADR 0031](../adr/0031-stop-a-job-that-repeats-one-call-with-the-same-result.md).
 
 ![Each tool result with the same call and result as the one before adds one to a count. Before the next model call, a count of five fails the job and the call is not sent.](../diagrams/repeat-stop.svg)
@@ -120,8 +119,8 @@ and [ADR 0031](../adr/0031-stop-a-job-that-repeats-one-call-with-the-same-result
   changes between reads, do not stop the job.
 
 With the stop off, both stop tests fail on the number of calls the fake
-received: [`repeat-stop-off`](switched-off.md#run-at-377304c), from `main`
-at `377304c`, 2 of 2.
+received: [`repeat-stop-off`](switched-off.md#the-entries), from `main`
+at `3b38cdf`, 2 of 2.
 
 ## Bad tool output
 

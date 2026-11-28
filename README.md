@@ -65,12 +65,12 @@ that such a run did not reach is named with its result.
 | Bad tool output does not break a job | Tested | [100 MB cut to 64 KiB, the job goes on](docs/results/controls.md#bad-tool-output) |
 | A job that repeats one call with the same result is stopped | Tested, with [stated limits](docs/limits.md#halt-and-budget) | [Stopped at the fifth repeat, also across a takeover](docs/results/controls.md#a-job-that-repeats-itself) |
 | A provider's rate limit (429) slows a job, it does not fail it | Tested for one job. No limit shared by workers. | [One job waits out 60 s of 429s](docs/results/controls.md#a-busy-provider-slows-a-job) |
-| The step log cannot be changed without detection | Tested, with [stated limits](docs/step-log-chain.md#what-it-does-not-catch) | [Changes refused or found; 483 jobs verified](docs/results/durability.md#the-step-log-cannot-be-changed-without-detection) |
+| The step log cannot be changed without detection | Tested, with [stated limits](docs/step-log-chain.md#what-it-does-not-catch) | [Changes refused or found; 484 jobs verified](docs/results/durability.md#the-step-log-cannot-be-changed-without-detection) |
 | A job goes on past its context window, and a takeover sends the same requests | Tested on the fake provider. One job on a real model ran and did not pass. | [Three summaries; the same requests after 12 kills](docs/results/long-job.md) |
 | A job that waits for a person tells the operator, at least once | Tested. In the kill run the receiver holds each POST 1.5 s. | [Every question arrived, in three runs of 20 jobs](docs/results/notify.md) |
 | Throughput scales with workers | Not measured | |
 
-The table's results are from one run of every suite at `4ed43c0`, on one
+The table's results are from one run of every suite at `3b38cdf`, on one
 machine, against the fake provider. CI runs the suites on each pull request
 that changes more than `docs/`, with 20 kills. Runs at other commits are named on [Results](docs/results/README.md).
 

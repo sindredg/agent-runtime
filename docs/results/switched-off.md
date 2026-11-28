@@ -7,26 +7,25 @@ A test that ends any other way is red.
 
 The list can also say that a test passes, with the reason. Three tests of
 `resume-off` kill the worker before any step is complete, so starting over
-is the same as resuming.
+is the same as resuming. One test of `long-replay-skips-summary` has no
+takeover, so no worker reads a log with a summary in it.
 
-Status: tested. The 40 entries of the run below ran from `main` at
-`4ed43c0`. Three entries ran again at `96172b5`, after the provider-error
-change ([below](#run-at-96172b5)). `repeat-stop-off` ran at `377304c`
-([below](#run-at-377304c)).
+Status: tested. All 54 entries of the fake provider ran in one run from
+`main` at `3b38cdf`.
 
 ```mermaid
 flowchart LR
-    S[one start,<br/>suite switched-off-all] --> N[40 entries of the<br/>fake provider, from main]
+    S[one start,<br/>suite switched-off-all] --> N[54 entries of the<br/>fake provider, from main]
     N --> J[one job each:<br/>edit, stack, tests]
-    J --> V[108 tests judged:<br/>105 failed on their assertion,<br/>3 passed as listed]
+    J --> V[171 tests judged:<br/>167 failed on their assertion,<br/>4 passed as listed]
 ```
 
 | | |
 |---|---|
-| Run | [45204873674](https://github.com/sindredg/agent-runtime/actions/runs/45204873674), 2026-11-23 |
-| Commit | `4ed43c0` |
-| Entries | 40 of 40 ended as the list says. 1 run each. |
-| Tests | 108 of 108 ended as the list says: 105 failed on their named assertion, 3 passed as listed. |
+| Run | [46140675351](https://github.com/sindredg/agent-runtime/actions/runs/46140675351), 2026-11-28 |
+| Commit | `3b38cdf` |
+| Entries | 54 of 54 ended as the list says. 1 run each. |
+| Tests | 171 of 171 ended as the list says: 167 failed on their named assertion, 4 passed as listed. |
 | Provider | The fake provider. No job of the run holds a secret. |
 | Where | GitHub-hosted `ubuntu-26.04` runners, one job per entry. The logs are public and kept 90 days. |
 
@@ -50,12 +49,15 @@ flowchart LR
 | `refusal-triggers-off` | The triggers that refuse a change to the step log | Normal | 3 |
 | `chain-check-off` | The comparison of each step's hash in verify | Normal | 15 |
 | `budget-check-off` | The check that the next call fits the budget; the cut of max_tokens stays | Normal | 1 |
+| `repeat-stop-off` | The stop of a job that repeats one call with the same result (ADR 0031) | Normal | 2 |
 | `claim-deadline-off` | The claim's check of a job's deadline | Normal | 2 |
 | `approval-gate-off` | The gate that asks a person before a tool call that needs approval | Normal | 14 |
 | `approval-gate-off-chaos` | The gate that asks a person before a tool call, with workers killed | Chaos | 4 |
 | `busy-answer-fails` | The wait on a busy answer: a 429 or 529 fails the job | Normal | 5 |
 | `retry-after-ignored` | The floor that the provider's retry-after sets on a wait | None | 4 |
 | `claim-ignores-not-before` | The claim's wait for a waiting job's not_before | Normal | 5 |
+| `provider-error-fails` | The wait on a provider error that may pass: it fails the job | Normal | 21 |
+| `provider-error-cap-off` | The caps on waits for a provider error, in a row and in the job | Normal | 6 |
 | `stream-cut-off` | The cut of a command's output stream at the limit | Normal | 1 |
 | `result-cut-off` | The cut of a tool result to its limit | Normal | 1 |
 | `tool-timeout-off` | The timeout of a sandboxed command, in the runner and in the container | Normal | 2 |
@@ -74,53 +76,29 @@ flowchart LR
 | `notify-loop-off` | The loop in every worker that posts a parked job's question | Chaos | 3 |
 | `notify-row-off` | The notification row the park writes with the job's move | Chaos | 3 |
 | `tool-env-passed-on` | The tool container's environment, which holds nothing of the worker's | Normal | 1 |
+| `long-trigger-off` | The summary trigger | Long | 1 |
+| `long-replay-skips-summary` | Summary steps in a replayed log | Long | 3 |
+| `long-summary-cut` | Half of the summary in a window's opening message | Long | 1 |
+| `long-own-trigger` | The trigger the first request pinned | Long | 1 |
+| `long-oversize-off` | The stop of a window that opens at the trigger | Long | 1 |
+| `tool-result-parse` | A tool result kept as one string: replay parses its lines into blocks | None | 2 |
+| `gate-from-text` | The approval gate: a call id in a user message counts as approved | Normal | 8 |
+| `scope-from-text` | A call's scope from the spec alone: an address in a user message is added | Normal | 3 |
+| `summary-split-blocks` | The summary as one text block: the window's opening message parses its lines | None | 1 |
+| `guard-drop-uncounted` | The guard's count of the packets it drops outside the scope | Normal | 1 |
+| `one-call-off` | The request for one tool call per response, and its check (ADR 0037) | None | 12 |
 
-### Run at `96172b5`
+## Earlier runs and outcomes
 
-One run each, from `main`, on the fake provider, on GitHub-hosted
-`ubuntu-26.04` runners. Every test ended as the list says.
-
-| Entry | Mechanism switched off | Stack | Tests | Run |
-|---|---|---|---|---|
-| `provider-error-fails` | The wait on a provider error that may pass: it fails the job | Normal | 21 of 21 | [45296388449](https://github.com/sindredg/agent-runtime/actions/runs/45296388449) |
-| `provider-error-cap-off` | The caps on waits for a provider error, in a row and in the job | Normal | 6 of 6 | [45296393483](https://github.com/sindredg/agent-runtime/actions/runs/45296393483) |
-| `busy-answer-fails` | The wait on a 429 or 529. Its edit now fails the job itself | Normal | 5 of 5 | [45296384558](https://github.com/sindredg/agent-runtime/actions/runs/45296384558) |
-
-### Run at `377304c`
-
-One run, from `main`, on the fake provider, on a GitHub-hosted `ubuntu-26.04`
-runner. Every test ended as the list says.
-
-| Entry | Mechanism switched off | Stack | Tests | Run |
-|---|---|---|---|---|
-| `repeat-stop-off` | The stop of a job that repeats one call with the same result (ADR 0031) | Normal | 2 of 2 | [45343453661](https://github.com/sindredg/agent-runtime/actions/runs/45343453661) |
-
-### The long job
-
-Runs from `main` on the fake provider, each on a GitHub-hosted
-`ubuntu-26.04` runner. Each run in the table ended as the list says.
-
-| Entry | Mechanism switched off | Commit | Tests | Run |
-|---|---|---|---|---|
-| `long-trigger-off` | The summary trigger | `20a2582` | 1 of 1 | [46065717220](https://github.com/sindredg/agent-runtime/actions/runs/46065717220) |
-| `long-replay-skips-summary` | Summary steps in a replayed log | `20a2582` | 3 of 3, one passes as listed | [46065720346](https://github.com/sindredg/agent-runtime/actions/runs/46065720346) |
-| `long-summary-cut` | Half of the summary in a window's opening message | `20a2582` | 1 of 1 | [46065723399](https://github.com/sindredg/agent-runtime/actions/runs/46065723399) |
-| `long-own-trigger` | The trigger the first request pinned | `7395f47` | 1 of 1 | [46069200626](https://github.com/sindredg/agent-runtime/actions/runs/46069200626) |
-| `long-oversize-off` | The stop of a window that opens at the trigger | `20a2582` | 1 of 1 | [46065729503](https://github.com/sindredg/agent-runtime/actions/runs/46065729503) |
-| `one-call-off` | The request for one tool call per response, and its check (ADR 0037) | `bbb805a` | 12 of 12 | [46081656858](https://github.com/sindredg/agent-runtime/actions/runs/46081656858) |
-
-The first run of `long-own-trigger`, at `20a2582`, did not count. The test
-stopped before the takeover: a killed worker was still listed as running
+A run of `long-own-trigger` at `20a2582` did not count. The test stopped
+before the takeover: a killed worker was still listed as running
 ([issue 255](https://github.com/sindredg/agent-runtime/issues/255)). The
-harness now waits up to 10 s for killed workers to stop. The run at `7395f47`
-failed on the named assertion.
+harness now waits up to 10 s for killed workers to stop.
 
 `long-notices-dropped` runs on the Claude API. At `a4022e9`, in
 [run 46132784497](https://github.com/sindredg/agent-runtime/actions/runs/46132784497),
 it ended as a finding: the control job failed R7, so the edited job did not
 run ([result](long-job-real-model.md), [issue 243](https://github.com/sindredg/agent-runtime/issues/243)).
-
-### Earlier outcomes
 
 Two outcomes read at earlier commits. With the bound off, at `fbb293f`, two
 workers and a stalled tracker ended with two issues for one call. With the
@@ -135,7 +113,7 @@ and the tracker token in a tool result and in two answers of the API.
   times, so a second run takes other paths.
 - Four switches have no entry: the takeover cap, the cancel check, the
   deadline timer, and the skip in the workspace walk. Each failed its tests
-  at `4ed43c0`, on the full run's machine. Their tests end in a timeout or an
+  at `3b38cdf`, on the full run's machine. Their tests end in a timeout or an
   error, not on an assertion
   ([issue 163](https://github.com/sindredg/agent-runtime/issues/163)).
 - Two more have no entry: the deny list without the runtime's networks

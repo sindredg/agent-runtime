@@ -1,14 +1,14 @@
 # Results: durability
 
 The evidence for the durability guarantees and the step log, from the run at
-`4ed43c0`. Its conditions are on the [Results](README.md) page. Outcomes with
+`3b38cdf`. Its conditions are on the [Results](README.md) page. Outcomes with
 a mechanism off are from `1f57ee4`, unless a line names another commit. The
 mechanisms are in [Durability](../durability.md) and [Hash chain](../step-log-chain.md).
 
 ```mermaid
 pie showData title 200 kill runs, by what the kill hit
-    "Job taken over in the middle" : 140
-    "Kill sent, no takeover needed" : 29
+    "Job taken over in the middle" : 146
+    "Kill sent, no takeover needed" : 23
     "No worker held the job at the kill time" : 31
 ```
 
@@ -20,10 +20,10 @@ Tested. `tests/chaos/test_kills.py`, 200 runs.
   `docker kill` at a random time from a seed. 169 kills were sent.
 - 200 of 200 jobs succeeded, each with the same final conversation as a job
   nobody interrupted. The provider was never asked an earlier turn again.
-- 140 jobs were taken over in the middle, each once.
+- 146 jobs were taken over in the middle, each once.
 - At 31 kill times no worker held the job, before the claim or after the end.
 - Every takeover followed a kill at 1.49 s or earlier. The runs with no
-  takeover had kill times of 0.04 to 0.17 s or 1.35 s and later.
+  takeover had kill times of 0.04 to 0.11 s or 1.32 s and later.
 - One more run at each of the six failpoints a job without a summary
   passes, with the worker ending its own process: 6 of 6, each resumed with
   one takeover and one issue.
@@ -106,7 +106,7 @@ Tested, with [stated limits](../step-log-chain.md#what-it-does-not-catch). Integ
   rehashed steps, moved the head and cut the tail. Verify named each of the
   9 cases. The owner cutting the tail and setting the head back is not found.
 - After the chaos run, `runtime verify --all` checked every job in the
-  database, 483, the chaos run's among them: 0 mismatches.
+  database, 484, the chaos run's among them: 0 mismatches.
 
 With the mechanism off:
 
@@ -118,7 +118,7 @@ With the mechanism off:
 ## Also tested
 
 - **A graceful stop.** A worker stopped with `docker stop` (SIGTERM) handed
-  its job back and ended in 0.9 s. The job finished on another worker with no
+  its job back and ended in 0.7 s. The job finished on another worker with no
   takeover counted.
 - **A kill during a sandboxed call.** The next worker removed the killed
   worker's container and asked a person only once the call's bound (40 s)

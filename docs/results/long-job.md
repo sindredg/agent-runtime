@@ -11,13 +11,12 @@ job on a real model has [its own page](long-job-real-model.md).
 
 | | |
 |---|---|
-| Run | CI on `main`, [46065646734](https://github.com/sindredg/agent-runtime/actions/runs/46065646734), 2026-11-27. 1 run of each test. |
-| Commit | `20a2582` |
-| Jobs | The three `Long job (fake provider, <part>)` jobs of CI. Not required checks. |
+| Run | `make long` in the [full run](README.md#the-run), 2026-11-28. 1 run of each test, 8 passed in 30 min. |
+| Commit | `3b38cdf` |
 | Workers and lease | 2 in the long stack, the default 30 s lease |
 | Provider | The fake provider, window 3,400 of its tokens, trigger 3,000. The fake tracker. |
 | Seed | `293` for the planned kills of run 4. The other runs draw nothing. |
-| Where | GitHub-hosted `ubuntu-26.04` runners, Linux x86_64, 4 CPUs. The logs are public and kept 90 days. |
+| Where | Docker Compose on one machine: Linux aarch64 under WSL2, 8 CPUs. The logs stay on that machine. |
 
 ## Each run
 
@@ -34,12 +33,12 @@ Every run passed its clauses ([what a job is checked on](../long-job.md#what-a-j
 | 7, workers with another trigger | 4 | 2 taken over `succeeded` with run 1's requests. A job begun with no trigger and its reference were both refused for the window. |
 | 8, a window opens at the trigger | 2 | `failed` with the error that names size 293 and the trigger |
 
-Run 1 also ran in each of the other two CI jobs, with the same counts.
-
 ## Runs that have to fail
 
-Each of the five mechanisms was switched off in a run from `main`, and the
-suite failed on the named assertion: [switched-off runs](switched-off.md#the-long-job).
+Each of the five mechanisms was switched off in a run from `main` at
+`3b38cdf`. Every test failed on its named assertion, except one test of
+`long-replay-skips-summary` that passes as listed:
+[switched-off runs](switched-off.md#the-entries).
 
 ## What these results do not show
 
