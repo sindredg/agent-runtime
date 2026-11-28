@@ -109,7 +109,7 @@ on:
       model:
         description: The Claude model (ignored on the fake provider)
         type: choice
-        options: [claude-haiku-5-5, claude-opus-5-5, claude-fable-5-2]
+        options: [claude-haiku-5-5, claude-sonnet-5-5, claude-opus-5-5, claude-fable-5-2]
       long_job:
         description: >-
           For suite long-job on the Claude API: counts (short jobs, a report and no

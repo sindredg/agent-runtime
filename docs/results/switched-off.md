@@ -98,7 +98,7 @@ runner. Every test ended as the list says.
 ### The long job
 
 Runs from `main` on the fake provider, each on a GitHub-hosted
-`ubuntu-26.04` runner, 2026-11-27. Each run in the table ended as the list says.
+`ubuntu-26.04` runner. Each run in the table ended as the list says.
 
 | Entry | Mechanism switched off | Commit | Tests | Run |
 |---|---|---|---|---|
@@ -107,12 +107,18 @@ Runs from `main` on the fake provider, each on a GitHub-hosted
 | `long-summary-cut` | Half of the summary in a window's opening message | `20a2582` | 1 of 1 | [46065723399](https://github.com/sindredg/agent-runtime/actions/runs/46065723399) |
 | `long-own-trigger` | The trigger the first request pinned | `7395f47` | 1 of 1 | [46069200626](https://github.com/sindredg/agent-runtime/actions/runs/46069200626) |
 | `long-oversize-off` | The stop of a window that opens at the trigger | `20a2582` | 1 of 1 | [46065729503](https://github.com/sindredg/agent-runtime/actions/runs/46065729503) |
+| `one-call-off` | The request for one tool call per response, and its check (ADR 0037) | `bbb805a` | 12 of 12 | [46081656858](https://github.com/sindredg/agent-runtime/actions/runs/46081656858) |
 
 The first run of `long-own-trigger`, at `20a2582`, did not count. The test
 stopped before the takeover: a killed worker was still listed as running
 ([issue 255](https://github.com/sindredg/agent-runtime/issues/255)). The
 harness now waits up to 10 s for killed workers to stop. The run at `7395f47`
 failed on the named assertion.
+
+`long-notices-dropped` runs on the Claude API. At `a4022e9`, in
+[run 46132784497](https://github.com/sindredg/agent-runtime/actions/runs/46132784497),
+it ended as a finding: the control job failed R7, so the edited job did not
+run ([result](long-job-real-model.md), [issue 243](https://github.com/sindredg/agent-runtime/issues/243)).
 
 ### Earlier outcomes
 
@@ -121,8 +127,7 @@ workers and a stalled tracker ended with two issues for one call. With the
 environment passed on, at `7096a5c`, the secret test found the provider key
 and the tracker token in a tool result and in two answers of the API.
 
-The one entry on the Claude API, `thinking-signature-changed`, did not run
-here. It has [its own run](kill-runs.md#with-the-stored-signature-changed) at `5a5bfa6`.
+`thinking-signature-changed`, on the Claude API, did not run here. It has [its own run](kill-runs.md#with-the-stored-signature-changed) at `5a5bfa6`.
 
 ## What this run does not show
 
