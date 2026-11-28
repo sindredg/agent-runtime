@@ -45,7 +45,8 @@ it holds two results. Past 100,000 input tokens, a token costs more.
   it costs more than the output price.
 - The full job summarises about twice as often as at 80,000. Each summary
   can drop a notice, so a pass is harder to reach.
-- The bound rests on the largest file being 16,384 bytes. A seed with a
-  larger file fails the test.
+- The bound rests on the largest file being 16,384 bytes. The generator's
+  checks hold every corpus file at that size for any seed, and the index
+  depends only on the number of files.
 - ADR 0037's text stays. This record corrects its bound for the summary
   request.

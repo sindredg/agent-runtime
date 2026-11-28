@@ -44,6 +44,9 @@ LINE_FIXED: str | None = "2026-11-28"
 # `must-fail` run, 4,000,000 tokens each, fit under it.
 LONG_KEYED_TOKEN_BOUND: int | None = 15_000_000
 # How many jobs a `counts` run has. None: not set, and no such run starts.
+# Ten fit the bound only at 1,500,000 tokens each, and a session starts at
+# most four short jobs that each use their whole wait: a new counts run needs
+# a new decision on both.
 COUNTS_JOBS: int | None = 10
 # The jobs of a `must-fail` run: the control and the edited one.
 MUST_FAIL_JOBS = 2

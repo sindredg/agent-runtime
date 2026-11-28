@@ -65,7 +65,7 @@ def long_rules(**values: Any) -> ModuleType:
 
 @pytest.fixture
 def bound(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
-    """The rules with the long bound set to the entry's two short jobs: 3,000,000."""
+    """The rules with the long bound set to the entry's two short jobs: 8,000,000."""
     rules = long_rules(LONG_KEYED_TOKEN_BOUND=8_000_000)
     monkeypatch.setattr(switched_off, "long_job_rules", lambda root=ROOT: rules)
     return rules
