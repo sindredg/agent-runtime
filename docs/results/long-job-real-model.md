@@ -56,11 +56,15 @@ No graded run of the full job, 293 files, was attempted.
 
 ## Earlier jobs, not graded
 
-Two earlier runs of the entry in mode `counts` sized the trigger: 10 short
-jobs each on `claude-haiku-5-5`, trigger 20,000, budget 1,500,000. All 20
-ended `failed`, all 10 on `max_tokens` at `7395f47`
-([46072515563](https://github.com/sindredg/agent-runtime/actions/runs/46072515563)), and 8 on the budget and 2 on `max_tokens` at
-`bbb805a` ([46081719563](https://github.com/sindredg/agent-runtime/actions/runs/46081719563)).
+Two earlier runs of the harness in mode
+[`counts`](../long-job-grader.md#on-the-claude-api) had 10 short jobs each on
+`claude-haiku-5-5`, with trigger 20,000 and budget 1,500,000. All 20 jobs
+ended `failed`.
+
+- `7395f47` ([46072515563](https://github.com/sindredg/agent-runtime/actions/runs/46072515563)): all 10 on `max_tokens`, with no
+  summary. This led to [ADR 0037](../adr/0037-ask-for-one-tool-call-per-response-in-a-job-that-summarises.md).
+- `bbb805a` ([46081719563](https://github.com/sindredg/agent-runtime/actions/runs/46081719563)): 8 on the budget, 2 on
+  `max_tokens`. This led to [ADR 0038](../adr/0038-size-the-long-job-trigger-so-no-request-passes-100k-tokens.md).
 
 ## What it does not show
 

@@ -28,7 +28,7 @@ flowchart LR
 
 Tested. Integration suite, 805 of 805 tests.
 
-- `test_budget.py`: a job that loops, set to read two 2 KB files in turn thirty times,
+- `test_budget.py`: a job that loops, set to make thirty reads of two 2 KB files in turn,
   with a budget of 20,000 tokens.
 - It ends `failed` with "the token budget does not cover the next model
   call", after at least 3 and fewer than 30 calls.
@@ -56,7 +56,7 @@ With the mechanism off:
 |---|---|
 | The check that the next call fits | The call was made with no valid `max_tokens`, and the provider refused it. The job failed with that error, not the budget's. |
 | The check and the cut of `max_tokens`, at `11b6792` ([run](https://github.com/sindredg/agent-runtime/actions/runs/44808413841)) | The job spent 282,118 tokens against its 20,000, by the provider's count. The test fails on the spend. |
-| The cancel check | Both cancel tests fail. One ends in the test's wait; the command test ends either there or on its status, `succeeded` not `cancelled` |
+| The cancel check | Both cancel tests fail. The other test ends in the test's wait; the command test ends there or on its status, `succeeded` not `cancelled` |
 | The deadline timer | Both deadline tests fail |
 | The claim's deadline check | Both cases of the claim's deadline test fail. The job stayed `running`. |
 | The claim's cancel, at `11b6792` ([run](https://github.com/sindredg/agent-runtime/actions/runs/44808446584)) | The claim took the job, still `running`, instead of cancelling it. The test fails. |
@@ -87,7 +87,7 @@ that an answer counts only for the question it names.
 With the mechanism off: with the gate removed, all 4 chaos tests fail. In 20
 short runs the tracker holds 20 issues for 0 approvals. At `1f57ee4`, 14 of the 19
 integration tests failed. The file has 21 tests now; its list entry runs
-those 14 ([switched-off runs](switched-off.md#the-entries)).
+14 of them ([switched-off runs](switched-off.md#the-entries)).
 
 ## A busy provider slows a job
 
