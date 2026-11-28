@@ -98,7 +98,7 @@ runtime are listed. Posts: [Scaling Managed Agents](https://www.anthropic.com/re
 | One interface for every tool: name and input in, text out | MA | built, not tested | [base.py:83](https://github.com/sindredg/agent-runtime/blob/5d7c43b074ed42d49af4fe11d44b3ab182e4d768/src/runtime/tools/base.py#L83) |
 | A container only when a call needs one | MA | built, not tested | [runner.py:395](https://github.com/sindredg/agent-runtime/blob/5d7c43b074ed42d49af4fe11d44b3ab182e4d768/src/runtime/sandbox/runner.py#L395) |
 | No irreversible compaction; the full history stays recoverable | MA, EH | accepted limit | [ADR 0028](adr/0028-send-the-whole-conversation-and-fail-past-the-context-window.md) |
-| A context reset with a structured handoff for long work | EH, HD | built, off by default: a `summary` step opens the next window. Not run on a real model. | [ADR 0033](adr/0033-summarise-a-long-conversation-as-a-step.md) |
+| A context reset with a structured handoff for long work | EH, HD | built, off by default: a `summary` step opens the next window. One graded job ran on a real model ([result](results/long-job-real-model.md)). | [ADR 0033](adr/0033-summarise-a-long-conversation-as-a-step.md) |
 | A separate check of the outcome before work counts as done | EH, HD | gap | [issue 159](https://github.com/sindredg/agent-runtime/issues/159) |
 | Remove one component at a time to see which ones carry weight | HD | tested | [Switched-off runs](results/switched-off.md) |
 

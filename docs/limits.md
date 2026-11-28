@@ -34,12 +34,14 @@ refused, but the tool ran. An idempotency key on the other side closes this.
   reasons that have nothing to do with the job. The limit is a constant.
 - A 429 or 529 and, up to a cap, an error that may pass are waited out.
   Other failed calls fail the job. Workers share no limit ([Backoff](backoff.md#limits)).
+- The runtime calls Claude models only, through one provider client. The step
+  log stores Anthropic's message shapes, so a second provider needs a new
+  step format ([issue 265](https://github.com/sindredg/agent-runtime/issues/265)).
 - A response cut off at `max_tokens`, or a refusal, fails the job. It is not continued.
 - Without `SUMMARY_TRIGGER` a job that outgrows the model's context window
   fails. With it, a summary can drop what a later step needs, and no older
-  worker may run ([ADR 0033](adr/0033-summarise-a-long-conversation-as-a-step.md#consequences)).
-- All workers have to see the same workspace directory. The stack does that
-  with one volume on one host.
+  worker may run ([ADR 0033](adr/0033-summarise-a-long-conversation-as-a-step.md#consequences), [one job on a real model](results/long-job-real-model.md)).
+- All workers have to see the same workspace directory. The stack uses one volume on one host.
 - A workspace left behind waits up to `SWEEP_INTERVAL_SECONDS` for the sweep.
   A workspace root that no running worker mounts is not swept.
 
@@ -61,8 +63,7 @@ refused, but the tool ran. An idempotency key on the other side closes this.
   timeout. One that outlasts the stop grace period is killed with its worker.
 - A worker told to stop while it writes a `tool_intent` still runs the tool.
 - A worker that takes over an interrupted call of a tool it does not offer
-  stores "unknown tool". The call may have run. Run every worker of a
-  deployment with the same tools.
+  stores "unknown tool". The call may have run. Give all workers the same tools.
 - The wait before a decision about an interrupted sandboxed call assumes the
   worker was not paused before the start request, and that Docker does not
   act on a request late. A container that starts later can still be running.
@@ -111,9 +112,8 @@ refused, but the tool ran. An idempotency key on the other side closes this.
 - The [repeat stop](halt.md#a-job-that-repeats-itself) misses a loop over two or more calls, an input
   that changes a little each time, and a result that changes on its own, such
   as a time stamp. A poll that sees the same answer 5 times is stopped too.
-- A halt waits for what it cannot race: container removals and the fenced
-  write that ends the job. A slow Docker daemon can push a cancel or a
-  deadline past 5 s.
+- A halt waits for container removals and the fenced write that ends the job.
+  A slow Docker daemon can push a cancel or a deadline past 5 s.
 - A cancel answered 202 can still end `succeeded` or `failed` as the job ends.
 - The deadline timer reads the database clock once, then counts on the
   monotonic clock. A wall clock step while it waits moves the stop by as much.

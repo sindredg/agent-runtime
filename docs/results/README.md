@@ -13,8 +13,8 @@ The table with one line per guarantee is in the
 - [A parked job tells the operator](notify.md): the question to `NOTIFY_URL`.
 - [A job longer than its context window](long-job.md): summaries and takeovers.
 
-Jobs that ran with a real model, which are not the evidence for a guarantee:
-[Runs against the Claude API](api.md) and [Kill run results](kill-runs.md).
+Jobs on a real model, not the evidence for a guarantee: [Runs against the Claude API](api.md),
+[Kill run results](kill-runs.md) and [One long job on a real model](long-job-real-model.md).
 
 ## The run
 
@@ -81,7 +81,7 @@ Runs at other commits:
 | `11b6792` | Seven switched-off runs | [Durability](durability.md), [Controls](controls.md) |
 | `5a5bfa6` | Stored signature changed, Claude API: 5 of 5 jobs refused | [Kill runs](kill-runs.md#with-the-stored-signature-changed) |
 | `30108d4` | The notification's 5 s timing run | [Notification](notify.md#the-first-delivery-comes-within-5-s) |
-| `96172b5` to `7395f47` | Provider errors, the repeat stop, the long job's five entries | [Switched-off runs](switched-off.md#run-at-96172b5) |
+| `96172b5` to `bbb805a` | Provider errors, the repeat stop, the long job's entries | [Switched-off runs](switched-off.md#run-at-96172b5) |
 
 ## How a kill run works
 

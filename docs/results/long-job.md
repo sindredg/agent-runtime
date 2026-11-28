@@ -2,8 +2,8 @@
 
 The evidence that a job goes on past the model's context window through
 summary steps, and that a takeover sends the same requests. How it works is
-on [Long job](../long-job.md). Every run here is on the fake provider; no run
-of a real model is in this result.
+on [Long job](../long-job.md). Every run here is on the fake provider. One
+job on a real model has [its own page](long-job-real-model.md).
 
 ![One job runs past its context window with nobody interrupting it and is the reference. A job whose worker is stopped or killed is taken over and must send the same requests. A job whose summary answer is bad, or whose next window opens at the trigger, must end failed; after a bad answer no tool runs.](../diagrams/long-job-runs.svg)
 

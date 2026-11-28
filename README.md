@@ -66,7 +66,7 @@ that such a run did not reach is named with its result.
 | A job that repeats one call with the same result is stopped | Tested, with [stated limits](docs/limits.md#halt-and-budget) | [Stopped at the fifth repeat, also across a takeover](docs/results/controls.md#a-job-that-repeats-itself) |
 | A provider's rate limit (429) slows a job, it does not fail it | Tested for one job. No limit shared by workers. | [One job waits out 60 s of 429s](docs/results/controls.md#a-busy-provider-slows-a-job) |
 | The step log cannot be changed without detection | Tested, with [stated limits](docs/step-log-chain.md#what-it-does-not-catch) | [Changes refused or found; 483 jobs verified](docs/results/durability.md#the-step-log-cannot-be-changed-without-detection) |
-| A job goes on past its context window, and a takeover sends the same requests | Tested on the fake provider. No real model yet. | [Three summaries; the same requests after 12 kills](docs/results/long-job.md) |
+| A job goes on past its context window, and a takeover sends the same requests | Tested on the fake provider. One job on a real model ran and did not pass. | [Three summaries; the same requests after 12 kills](docs/results/long-job.md) |
 | A job that waits for a person tells the operator, at least once | Tested. In the kill run the receiver holds each POST 1.5 s. | [Every question arrived, in three runs of 20 jobs](docs/results/notify.md) |
 | Throughput scales with workers | Not measured | |
 
@@ -81,6 +81,11 @@ jobs ran against the API first: [Runs against the Claude API](docs/results/api.m
 The kill runs also passed on the Claude API, 33 jobs on each of three
 models: every job succeeded and no issue was opened twice
 ([Kill run results](docs/results/kill-runs.md#runs)).
+
+One long job also ran on the Claude API with `claude-haiku-5-5`. It finished
+through 20 summaries and 3 takeovers, and its review missed 2 of the 12
+violations that only the job's prompt decides, so it did not pass
+([One long job on a real model](docs/results/long-job-real-model.md)).
 
 ## Documentation
 

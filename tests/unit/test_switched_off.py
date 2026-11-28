@@ -170,7 +170,7 @@ RANDOM_KILLS = replace(
 @pytest.mark.parametrize(
     ("changed", "problem"),
     [
-        (replace(KEYED, model="claude-sonnet-5-5"), "the workflow offers no model"),
+        (replace(KEYED, model="claude-haiku-5-5-x"), "the workflow offers no model"),
         (replace(KEYED, model=None), "the workflow offers no model None"),
         (replace(KEYED, stack="chaos"), "a run on the Claude API uses the kills or the long stack"),
         # The long stack on the Claude API is the long-job harness's, judged by two jobs.

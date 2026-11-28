@@ -6,7 +6,8 @@ stored steps, the tracker's issues and what the harness saw. No reference
 run is compared. The code is in `tests/long_job/`.
 
 Status: **configured, not tested**. The pass line was fixed on 2026-11-27
-and lives in `tests/long_job/rules.py`. No job has run on a real model.
+and lives in `tests/long_job/rules.py`. One job on the Claude API was
+graded FAIL on R7 ([one long job on a real model](results/long-job-real-model.md)).
 
 ![The grader checks six outcomes from top to bottom and the first that matches is the verdict: a runtime failure, void, no class, an outcome failure, inconclusive, and pass. Every clause that holds is listed with its count, whatever the verdict.](diagrams/long-job-verdict.svg)
 
@@ -144,6 +145,6 @@ saved logs and `results.jsonl`.
 
 - The reviewer on the fake provider is scripted. The run shows the harness,
   the kills and the grader end to end, not how a model reviews.
-- The keyed paths are tested with stubs and recorders only. The fake's
-  reviewer does not follow an edited summary, so the entry's edited job
-  shows nothing on the fake provider.
+- The keyed paths are tested with stubs and recorders. The entry ran on the
+  Claude API ([result](results/long-job-real-model.md)). The fake's reviewer does not
+  follow an edited summary, so on the fake the entry's edited job shows nothing.
