@@ -329,7 +329,7 @@ def test_a_stack_on_the_runs_provider_is_sent_the_job(
     assert (record["harness_error"], record["submission_status"]) == ("SubmissionRefused", 500)
     assert record["verdict"] == "VOID"
     assert body["model"] == "fake-long-job"
-    assert (body["token_budget"], body["timeout_seconds"]) == (1_500_000, 1_800)
+    assert (body["token_budget"], body["timeout_seconds"]) == (4_000_000, 3_600)
     assert len(body["files"]) == 37
     assert API_WORDS not in json.dumps(record)
 
@@ -426,7 +426,7 @@ def test_the_record_names_its_run(
     assert (record["workers"], record["lease_seconds"], record["token_budget"]) == (
         2,
         30.0,
-        1_500_000,
+        4_000_000,
     )
     assert record["seed"] == "committed"
     assert record["where"] in ("local Docker Compose", "GitHub Actions")
@@ -912,8 +912,8 @@ def test_a_keyed_session_runs_its_own_seed_writes_no_scenario_and_keeps_no_answe
 
     assert (body["model"], body["token_budget"], body["timeout_seconds"]) == (
         "claude-haiku-5-5",
-        1_500_000,
-        1_800,
+        4_000_000,
+        3_600,
     )
     # The job is the seed's own, not the committed seed's.
     assert body["files"] == review.files
@@ -921,7 +921,7 @@ def test_a_keyed_session_runs_its_own_seed_writes_no_scenario_and_keeps_no_answe
     assert docker.calls[0][:9] == (*harness.COMPOSE, "-f", "docker-compose.claude.yml", "up")
     assert {key: compose.get(key) for key in SETTINGS} == {
         "LONG_SCENARIO_DIR": "",
-        "SUMMARY_TRIGGER": "20000",
+        "SUMMARY_TRIGGER": "32000",
         "FAILPOINT": "after_summary",
         "FAILPOINT_SUMMARY": "",
         "FAKE_TRACKER_FIRST_ISSUE": "",
@@ -956,7 +956,7 @@ def test_a_keyed_graded_session_counts_the_job_once_with_the_key_on_the_full_sha
     printed = capsys.readouterr()
     compose = docker.envs[0]
 
-    assert (compose["SUMMARY_TRIGGER"], compose["FAILPOINT"]) == ("80000", "after_summary")
+    assert (compose["SUMMARY_TRIGGER"], compose["FAILPOINT"]) == ("32000", "after_summary")
     assert api.posted()[0]["token_budget"] == 2_000_000
     assert (record["shape"], record["token_budget"]) == ("full", 2_000_000)
     assert Counted.built == [{"api_key": NOT_A_KEY, "base_url": CLAUDE_API_URL}]

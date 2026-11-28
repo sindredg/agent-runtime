@@ -50,7 +50,8 @@ Read [the queue](0002-postgres-as-the-job-queue.md),
 | [0034](0034-judge-a-keyed-long-job-entry-by-a-control-and-an-edited-job.md) | Judge a keyed long-job entry by a control job and an edited job. Extends 0022. | Yes. Amended by [0036](0036-judge-a-leak-first-and-require-the-edited-job-to-finish.md). |
 | [0035](0035-prove-the-runtime-on-defensive-jobs-over-synthetic-data-first.md) | Prove the runtime on defensive jobs over synthetic data first. Narrows 0007. | The access review: [generator](../access-review.md) and [grader](../long-job-grader.md). The log investigation is planned. |
 | [0036](0036-judge-a-leak-first-and-require-the-edited-job-to-finish.md) | Judge a leak of the job's answers first, and require the edited job to run to its end. Amends 0034. | Yes. |
-| [0037](0037-ask-for-one-tool-call-per-response-in-a-job-that-summarises.md) | Ask for one tool call per response in a job with a summary trigger, and fail a response with more. Extends 0033. | Yes. |
+| [0037](0037-ask-for-one-tool-call-per-response-in-a-job-that-summarises.md) | Ask for one tool call per response in a job with a summary trigger, and fail a response with more. Extends 0033. | Yes. Its bound for the summary request is corrected by [0038](0038-size-the-long-job-trigger-so-no-request-passes-100k-tokens.md). |
+| [0038](0038-size-the-long-job-trigger-so-no-request-passes-100k-tokens.md) | Size the keyed long job's trigger at 32,000 so no request passes 100,000 tokens. Corrects 0037's bound. | Yes, in the long-job suite's numbers. |
 
 There is no record 0024: it was withdrawn before anything was built.
 

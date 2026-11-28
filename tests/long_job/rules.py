@@ -38,12 +38,15 @@ from access_review.commit import SeedError
 
 # The date the line was fixed. None: every number below is proposed, and no
 # keyed run starts.
-LINE_FIXED: str | None = "2026-11-27"
+LINE_FIXED: str | None = "2026-11-28"
 # The most tokens the jobs of one keyed short-shape run may be given
-# together. None: not set, and no such run starts. Ten `counts` jobs of
-# 1,500,000 tokens; the two jobs of a `must-fail` run fit under it too.
+# together. None: not set, and no such run starts. The two jobs of a
+# `must-fail` run, 4,000,000 tokens each, fit under it.
 LONG_KEYED_TOKEN_BOUND: int | None = 15_000_000
 # How many jobs a `counts` run has. None: not set, and no such run starts.
+# Ten fit the bound only at 1,500,000 tokens each, and a session starts at
+# most four short jobs that each use their whole wait: a new counts run needs
+# a new decision on both.
 COUNTS_JOBS: int | None = 10
 # The jobs of a `must-fail` run: the control and the edited one.
 MUST_FAIL_JOBS = 2
@@ -53,6 +56,10 @@ MODEL = "claude-haiku-5-5"
 FAKE_MODEL = "fake-long-job"
 MAX_TOKENS = 32_000
 FILE_BYTES = 16 * 1024
+# The summary trigger of both shapes on the Claude API (ADR 0038). A summary
+# request holds at most the trigger, two tool results, one response, the
+# budget's allowance and the instruction: under 100,000 input tokens.
+TRIGGER = 32_000
 # The crossing count: its floor for one job, the floor for a whole corpus,
 # and the most UTF-8 bytes of one counted request.
 CROSSING_FLOOR = 1_000_000
@@ -102,7 +109,7 @@ class Line:
 FULL = Line(
     name="full",
     files=293,
-    trigger=80_000,
+    trigger=TRIGGER,
     kill_after=(3, 7),
     floor_made=6,
     floor_cleared=2,
@@ -110,14 +117,14 @@ FULL = Line(
     floor_summaries=0,
     crossing=True,
     takeovers=KILLS,
-    budget_cap=20_000_000,
+    budget_cap=25_000_000,
     timeout_seconds=18_600,
     job_minutes=HARNESS_MINUTES,
 )
 SHORT = Line(
     name="short",
     files=36,
-    trigger=20_000,
+    trigger=TRIGGER,
     kill_after=(2, 4),
     floor_made=6,
     floor_cleared=2,
@@ -125,9 +132,9 @@ SHORT = Line(
     floor_summaries=6,
     crossing=False,
     takeovers=KILLS,
-    budget_cap=1_500_000,
-    timeout_seconds=1_800,
-    job_minutes=40,
+    budget_cap=4_000_000,
+    timeout_seconds=3_600,
+    job_minutes=70,
 )
 LINES = {line.name: line for line in (FULL, SHORT)}
 SHAPES: dict[str, Shape] = {FULL.name: FULL_SHAPE, SHORT.name: SHORT_SHAPE}
